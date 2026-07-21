@@ -10,3 +10,7 @@ scipy>=1.10  # scikit-learn dependency
 # Optional, only needed if you use --provider databento (recommended for real
 # backtest verification -- see mnq_system/data/providers.py docstring):
 databento>=0.30
+
+# Optional, only needed for the LIVE shadow run with --feed ibkr
+# (live_validation.feeds.IBKRLiveFeed via TWS / IB Gateway):
+ib_async>=1.0

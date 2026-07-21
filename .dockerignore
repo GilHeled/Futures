@@ -1,0 +1,14 @@
+# keep the build context small and free of host-only / sensitive material
+.git/
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.claude/
+cache/
+bundles/
+out/
+*.jsonl
+.DS_Store
+.gitignore

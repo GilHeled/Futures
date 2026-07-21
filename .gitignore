@@ -20,3 +20,6 @@ bundles/
 # --- runtime shadow logs ---
 *.jsonl
 shadow_*.jsonl
+
+# --- local secrets (Databento key for docker compose) ---
+.env

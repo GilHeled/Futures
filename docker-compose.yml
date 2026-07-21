@@ -1,0 +1,73 @@
+# Run the platform via: docker compose run --rm <service>
+#
+#   docker compose run --rm tests           # full pytest suite
+#   docker compose run --rm replay          # replay shadow run on cached data -> out/
+#   docker compose run --rm build-bundles   # freeze model bundles -> bundles/
+#   docker compose run --rm shadow          # LIVE Databento shadow run (needs key)
+#   docker compose run --rm analyze         # Go/No-Go on a shadow log
+#
+# cache/ (licensed Databento data) and bundles/ (model artifacts) are
+# bind-mounted from the host, so they stay out of the image. The live run
+# reads DATABENTO_API_KEY from the environment (export it, or put it in a
+# local .env file that is git-ignored -- never commit it).
+
+x-common: &common
+  build: .
+  working_dir: /app
+  environment:
+    DATABENTO_API_KEY: ${DATABENTO_API_KEY:-}
+    IB_HOST: ${IB_HOST:-host.docker.internal}   # reach TWS/IB Gateway on the host
+    IB_PORT: ${IB_PORT:-7497}                    # 7497 paper TWS / 4002 paper Gateway
+  # lets the container reach TWS/IB Gateway running on the host machine
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  volumes:
+    - ./cache:/app/cache        # licensed market-data cache (host-owned)
+    - ./bundles:/app/bundles    # frozen model bundles
+    - ./out:/app/out            # shadow logs / outputs
+
+services:
+  tests:
+    <<: *common
+    command: ["python", "-m", "pytest", "-q"]
+
+  # Replay the frozen model over cached history through the identical live
+  # code path (no key needed). Adjust dates/symbols as desired.
+  replay:
+    <<: *common
+    command: >
+      python -m live_validation.run_shadow --replay
+      --symbols MYM M2K MES
+      --start 2024-01-01 --end 2024-04-01 --train-end 2023-12-31
+      --out /app/out/shadow_replay.jsonl
+
+  # Freeze production bundles on all cached history to the given cutoff.
+  build-bundles:
+    <<: *common
+    command: >
+      python -m live_validation.build_bundles
+      --symbols MYM M2K MES --train-end 2026-07-09 --out /app/bundles
+
+  # LIVE shadow validation via Interactive Brokers (default). Requires TWS
+  # or IB Gateway running on the HOST with the API enabled and a CME
+  # real-time data subscription. Long-running; runs until stopped.
+  shadow:
+    <<: *common
+    command: >
+      python -m live_validation.run_shadow --live --feed ibkr
+      --symbols MYM M2K MES --bundles /app/bundles
+      --ib-host host.docker.internal --ib-port 7497
+      --out /app/out/shadow_live.jsonl
+
+  # Same, but via Databento live (needs DATABENTO_API_KEY + live entitlement).
+  shadow-databento:
+    <<: *common
+    command: >
+      python -m live_validation.run_shadow --live --feed databento
+      --symbols MYM M2K MES --bundles /app/bundles
+      --out /app/out/shadow_live.jsonl
+
+  # Go/No-Go analysis on a completed shadow log.
+  analyze:
+    <<: *common
+    command: ["python", "-m", "live_validation.analyze_log", "/app/out/shadow_live.jsonl"]

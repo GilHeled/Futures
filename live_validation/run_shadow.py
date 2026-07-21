@@ -8,38 +8,35 @@ Shadow-log runner. Two modes, ONE code path (engine.push -> book.on_bar):
     so crossing_fill falls back to expected_fill (slippage ~= assumption) --
     a sanity path, not a slippage measurement.
 
-  live: connect to Databento live (top-of-book + 5m bars) for MYM/M2K/MES,
-    run forward in real time, log expected vs. crossing fills. Requires a
-    Databento LIVE entitlement and DATABENTO_API_KEY in the environment.
-    (Cannot be exercised offline; the replay path + parity test are what is
-    verifiable in-repo.)
+  live: connect to a pluggable LiveFeed (Interactive Brokers by default, or
+    Databento) for top-of-book + 5m bars, run forward in real time, and log
+    expected vs. crossing fills. The consumer is vendor-agnostic; each vendor
+    is one adapter in live_validation.feeds. (Cannot be exercised offline;
+    the replay path + parity test are what is verifiable in-repo.)
 
 Usage:
   python -m live_validation.run_shadow --replay --symbols MYM M2K MES \
       --start 2024-01-01 --end 2024-04-01 --train-end 2023-12-31 --out shadow_replay.jsonl
-  python -m live_validation.run_shadow --live --symbols MYM M2K MES \
-      --bundles ./bundles --out shadow_live.jsonl
+  python -m live_validation.run_shadow --live --feed ibkr --symbols MYM M2K MES \
+      --bundles ./bundles --out shadow_live.jsonl        # needs TWS/IB Gateway
+  python -m live_validation.run_shadow --live --feed databento --symbols MYM M2K MES \
+      --bundles ./bundles --out shadow_live.jsonl        # needs DATABENTO_API_KEY
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
 from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
 
 from live_validation.bundle import DEFAULT_HORIZON, build_bundle, FrozenBundle
-from live_validation.inference import ATR_PERIOD
 from live_validation.signal_engine import StreamingSignalEngine
 from live_validation.shadow_book import ShadowBook
 from mnq_system.cli import _resolve_contract_spec
 from mnq_system.config import DEFAULT_ACCOUNT_CONFIG
 from mnq_system.data.providers import build_provider
-from mnq_system.indicators import atr
-
-CONTINUOUS = {"MYM": "MYM.c.0", "M2K": "M2K.c.0", "MES": "MES.c.0"}  # Databento continuous front-month
 
 
 class JsonlLogger:
@@ -108,14 +105,13 @@ def run_replay(symbols, start, end, train_end, out, horizon=DEFAULT_HORIZON):
     print(f"replay complete -> {out}")
 
 
-def run_live(symbols, bundles_dir, out, horizon=DEFAULT_HORIZON):
-    """Databento live shadow run. Requires DATABENTO_API_KEY + a live
-    entitlement. Loads pre-built frozen bundles (build via build_bundles.py)."""
-    import databento as db  # local import: only needed for live
-
-    key = os.environ.get("DATABENTO_API_KEY")
-    if not key:
-        raise SystemExit("DATABENTO_API_KEY not set in environment.")
+def run_live(symbols, bundles_dir, out, feed_name="ibkr", horizon=DEFAULT_HORIZON, **feed_kwargs):
+    """Live shadow run over a pluggable LiveFeed (see live_validation.feeds).
+    Loads pre-built frozen bundles (build via build_bundles.py). The consumer
+    below is VENDOR-AGNOSTIC -- it only sees normalized Mapping/Quote/Bar
+    events -- so switching data vendors is entirely contained in the feed
+    adapter and never touches the validated engine/book/logging."""
+    from live_validation.feeds import BarEvent, MappingEvent, QuoteEvent, build_feed
 
     engines, books = {}, {}
     logger = JsonlLogger(out)
@@ -127,70 +123,37 @@ def run_live(symbols, bundles_dir, out, horizon=DEFAULT_HORIZON):
         books[symbol] = ShadowBook(symbol, bundle)
         logger.write({"record_type": "bundle_meta", "symbol": symbol, **bundle.meta})
 
-    cont_to_sym = {CONTINUOUS[s]: s for s in symbols}
-    # instrument_id -> (my_symbol, raw_contract). Maintained from Databento
-    # SymbolMappingMsgs so every bar/quote is tied to the EXACT underlying
-    # contract, and rollovers (instrument_id changes) are tracked explicitly.
-    id_to_symbol: dict = {}
-    id_to_raw: dict = {}
-    scale = 1e9
-
-    client = db.Live(key=key)
-    client.subscribe(dataset="GLBX.MDP3", schema="mbp-1", stype_in="continuous", symbols=[CONTINUOUS[s] for s in symbols])
-    client.subscribe(dataset="GLBX.MDP3", schema="ohlcv-5m", stype_in="continuous", symbols=[CONTINUOUS[s] for s in symbols])
-    print(f"live shadow run started for {symbols} -> {out}  (Ctrl-C to stop)")
-    for record in client:
-        # symbol-mapping: resolve continuous -> instrument_id -> raw contract
-        if hasattr(record, "stype_out_symbol") and hasattr(record, "instrument_id"):
-            iid = record.instrument_id
-            cont = getattr(record, "stype_in_symbol", None)
-            sym = cont_to_sym.get(cont)
-            if sym is not None:
-                id_to_symbol[iid] = sym
-                id_to_raw[iid] = getattr(record, "stype_out_symbol", None)
-                logger.write({"record_type": "symbol_mapping", "symbol": sym,
-                              "instrument_id": iid, "raw_symbol": id_to_raw[iid], "ts": str(pd.Timestamp.utcnow())})
-            continue
-
-        iid = getattr(record, "instrument_id", None)
-        symbol = id_to_symbol.get(iid)
-        if symbol is None:
-            continue  # not yet mapped / not one of ours
-        raw_symbol = id_to_raw.get(iid)
-
-        # top-of-book update -- tag the quote with its own contract id
-        if hasattr(record, "levels") and record.levels:
-            lvl = record.levels[0]
-            quotes[symbol] = {"bid": lvl.bid_px / scale, "ask": lvl.ask_px / scale,
-                              "instrument_id": iid, "raw_symbol": raw_symbol}
-        # completed 5m bar
-        elif all(hasattr(record, f) for f in ("open", "high", "low", "close")):
-            ts = pd.Timestamp(record.ts_event, unit="ns", tz="UTC")
-            # Gate-0 capture: persist every live bar from the first tick, with
-            # its resolved contract identity, regardless of whether it trades.
-            logger.write({"record_type": "bar", "symbol": symbol, "raw_symbol": raw_symbol,
-                          "instrument_id": iid, "ts": str(ts),
-                          "open": record.open / scale, "high": record.high / scale,
-                          "low": record.low / scale, "close": record.close / scale,
-                          "volume": getattr(record, "volume", 0)})
-            # CONTRACT-CONSISTENCY: only use the quote for the fill if it is
+    feed = build_feed(feed_name, symbols, **feed_kwargs)
+    print(f"live shadow run started ({feed_name}) for {symbols} -> {out}  (Ctrl-C to stop)")
+    for ev in feed.stream():
+        if isinstance(ev, MappingEvent):
+            logger.write({"record_type": "symbol_mapping", "symbol": ev.symbol,
+                          "instrument_id": ev.instrument_id, "raw_symbol": ev.raw_symbol,
+                          "ts": str(pd.Timestamp.utcnow())})
+        elif isinstance(ev, QuoteEvent):
+            # tag each quote with the exact contract it came from
+            quotes[ev.symbol] = {"bid": ev.bid, "ask": ev.ask,
+                                 "instrument_id": ev.instrument_id, "raw_symbol": ev.raw_symbol}
+        elif isinstance(ev, BarEvent):
+            # Gate-0 capture: persist every live bar from the first tick.
+            logger.write({"record_type": "bar", "symbol": ev.symbol, "raw_symbol": ev.raw_symbol,
+                          "instrument_id": ev.instrument_id, "ts": str(ev.ts),
+                          "open": ev.open, "high": ev.high, "low": ev.low, "close": ev.close, "volume": ev.volume})
+            # CONTRACT-CONSISTENCY: use the quote for the fill only if it is
             # from the SAME contract as this bar; a mismatch (typically around
-            # rollover) would masquerade as slippage, so drop it and flag it.
-            q = quotes.get(symbol)
+            # rollover) is flagged and the observation marked invalid -- the
+            # crossing fill is NOT fabricated (excluded from execution stats).
+            q = quotes.get(ev.symbol)
             quote_valid = True
-            if q is not None and q.get("instrument_id") != iid:
-                logger.write({"record_type": "contract_mismatch", "symbol": symbol, "ts": str(ts),
-                              "bar_instrument_id": iid, "bar_raw_symbol": raw_symbol,
+            if q is not None and q.get("instrument_id") != ev.instrument_id:
+                logger.write({"record_type": "contract_mismatch", "symbol": ev.symbol, "ts": str(ev.ts),
+                              "bar_instrument_id": ev.instrument_id, "bar_raw_symbol": ev.raw_symbol,
                               "quote_instrument_id": q.get("instrument_id"), "quote_raw_symbol": q.get("raw_symbol")})
-                # contract mismatch -> the crossing observation is unreliable;
-                # mark it invalid (excluded from execution stats), do NOT
-                # fabricate an expected-fill crossing.
                 q = None
                 quote_valid = False
-            _drive_bar(symbol, engines[symbol], books[symbol], logger, ts,
-                       record.open / scale, record.high / scale, record.low / scale, record.close / scale,
-                       getattr(record, "volume", 0), quote=q, raw_symbol=raw_symbol, instrument_id=iid,
-                       quote_valid=quote_valid)
+            _drive_bar(ev.symbol, engines[ev.symbol], books[ev.symbol], logger, ev.ts,
+                       ev.open, ev.high, ev.low, ev.close, ev.volume,
+                       quote=q, raw_symbol=ev.raw_symbol, instrument_id=ev.instrument_id, quote_valid=quote_valid)
     logger.close()
 
 
@@ -203,11 +166,23 @@ def main():
     ap.add_argument("--bundles", default="./bundles")
     ap.add_argument("--out", default="shadow_log.jsonl")
     ap.add_argument("--horizon", type=int, default=DEFAULT_HORIZON)
+    ap.add_argument("--feed", choices=["ibkr", "databento"], default="ibkr",
+                    help="live data source (default: ibkr)")
+    ap.add_argument("--ib-host", default=None, help="IB Gateway/TWS host (Docker: host.docker.internal)")
+    ap.add_argument("--ib-port", type=int, default=None, help="IB API port (7497 paper TWS / 4002 paper Gateway)")
+    ap.add_argument("--ib-client-id", type=int, default=None)
     args = ap.parse_args()
     if args.replay:
         run_replay(args.symbols, args.start, args.end, args.train_end, args.out, args.horizon)
     elif args.live:
-        run_live(args.symbols, args.bundles, args.out, args.horizon)
+        feed_kwargs = {}
+        if args.ib_host is not None:
+            feed_kwargs["ib_host"] = args.ib_host
+        if args.ib_port is not None:
+            feed_kwargs["ib_port"] = args.ib_port
+        if args.ib_client_id is not None:
+            feed_kwargs["ib_client_id"] = args.ib_client_id
+        run_live(args.symbols, args.bundles, args.out, feed_name=args.feed, horizon=args.horizon, **feed_kwargs)
     else:
         ap.error("choose --replay or --live")
 

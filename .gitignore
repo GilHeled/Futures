@@ -1,0 +1,22 @@
+# --- environments / caches / OS junk ---
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+out/
+*.egg-info/
+.DS_Store
+
+# --- Claude Code local settings: contains machine-local secrets (API keys) ---
+.claude/
+
+# --- licensed Databento market data: do NOT publish (license + size) ---
+cache/
+
+# --- generated model artifacts (derived from licensed data; rebuild via
+#     live_validation/build_bundles.py) ---
+bundles/
+
+# --- runtime shadow logs ---
+*.jsonl
+shadow_*.jsonl

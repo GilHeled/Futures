@@ -1,0 +1,12 @@
+pandas>=2.0
+numpy>=1.24
+yfinance>=0.2.40
+pytz>=2024.1
+requests>=2.31
+pyarrow>=14.0  # Parquet support for mnq_system.data.cache.CachingProvider
+scikit-learn>=1.4  # mnq_system.modeling: logistic regression, log-loss, DummyClassifier baseline
+scipy>=1.10  # scikit-learn dependency
+
+# Optional, only needed if you use --provider databento (recommended for real
+# backtest verification -- see mnq_system/data/providers.py docstring):
+databento>=0.30

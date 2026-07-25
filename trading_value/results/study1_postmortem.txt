@@ -1,0 +1,39 @@
+==============================================================================
+STUDY 1 — REGIME POST-MORTEM (dev-only, exploratory), MES
+matched per-trade PnL difference (forecast − HAR), $ ; t = mean/(sd/√n)
+==============================================================================
+pooled n=9627  overall mean=+0.134$  t=0.69
+
+--- by forecast–HAR disagreement magnitude (tercile) ---
+      low: n= 3210  mean= +0.042$  t=+0.17
+      mid: n= 3210  mean= +0.497$  t=+1.61
+     high: n= 3207  mean= -0.138$  t=-0.32
+
+--- by forecast-volatility level (tercile) ---
+      low: n= 3210  mean= -0.519$  t=-1.90
+      mid: n= 3210  mean= +0.383$  t=+1.35
+     high: n= 3207  mean= +0.539$  t=+1.25
+
+--- by realized-volatility level (tercile) ---
+      low: n= 3156  mean= -0.157$  t=-0.63
+      mid: n= 3156  mean= +0.156$  t=+0.54
+     high: n= 3153  mean= +0.676$  t=+1.61
+
+--- trend vs range day (efficiency-ratio median split) ---
+    trend: n= 4803  mean= +0.488$  t=+1.93
+    range: n= 4824  mean= -0.218$  t=-0.74
+
+--- opening hour (10:00–11:00 ET) vs rest of session ---
+    open: n=0 — the forecast is UNAVAILABLE before ~11:30 ET (market_state 24-bar
+          feature warmup), so no eligible trades exist in the opening hour. Dimension vacuous.
+    rest: n= 9627  mean= +0.134$  t=+0.69
+
+------------------------------------------------------------------------------
+largest |t| across the ~13 regime buckets = 1.93
+(Bonferroni note: ~|t|>=3.0 needed for 0.05 family-wise over this many buckets.)
+VERDICT: the forecast−HAR PnL difference is centered on ZERO in EVERY regime tested.
+No condition shows a systematic edge. Evidence that the forecast is economically
+REDUNDANT with HAR for stop management is now strong. No Study 2 is justified on this
+basis; closing the trading-value line would be the disciplined conclusion.
+The hold-out remains LOCKED.
+==============================================================================

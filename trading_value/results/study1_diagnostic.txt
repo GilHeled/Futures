@@ -1,0 +1,19 @@
+==========================================================================
+STUDY 1 — §13 DIAGNOSTIC (why the null?), MES dev
+==========================================================================
+corr( forecast D(t) , HAR D(t) ) on eligible bars = 0.9542
+corr( sqrt V_forecast , sqrt V_HAR )              = 0.9601
+mean |forecast−HAR| / HAR   (relative gap)        = 11.65%
+fraction of matched trades whose EXIT differs      = 89.51%
+per-trade PnL diff (forecast−naive): mean=+0.134$  std=19.066$  p5=-15.30  p95=+17.14
+--------------------------------------------------------------------------
+per-trade PnL diff t-stat (illustrative) = 0.69  (n=9627)
+--------------------------------------------------------------------------
+INTERPRETATION: the forecast changes the exit on 90% of trades (arms are NOT
+identical), but the per-trade differences are DIRECTIONLESS NOISE (mean approx 0 vs large
+std, t approx 0). The forecast reshuffles which trades win/lose without a SYSTEMATIC edge
+over HAR: its small (+2.3% QLIKE) informational advantage does not translate into economic
+value through stop/target adaptation.
+Also: the base strategies are themselves unprofitable (all arms negative Sharpe), so there
+is little positive edge for the forecast to modulate. The hold-out remains LOCKED.
+==========================================================================

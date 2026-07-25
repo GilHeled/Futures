@@ -1,0 +1,29 @@
+======================================================================
+HOLD-OUT CONFIRMATION (SINGLE, FINAL) — Target A v2, MES
+Hold-out: 2025-01-01 → 2026-07-09  (trained on full dev)
+======================================================================
+observations=17901  days=384
+selected baseline (on dev) = har  α=100.0  s_f=1.5230
+
+--- QLIKE (lower is better) ---
+model=0.453846  selected-baseline=0.464520  time-of-day=1.156810
+QLIKE reduction vs baseline     = +2.30%
+QLIKE reduction vs time-of-day  = +60.77%
+
+--- significance (day-level block bootstrap on paired QLIKE improvement) ---
+mean daily improvement=1.612976e-02  P(improvement<=0)=0.0006  95% CI=[7.21e-03,2.54e-02]
+
+--- secondary (reported) ---
+incremental log-RV R² vs baseline = +0.0076
+Mincer-Zarnowitz: slope=1.002 intercept=-0.077 r2=0.586
+per-year QLIKE reduction vs baseline:
+    2025: +1.35%
+    2026: +4.17%
+LMP AUC (model μ̂) = 0.5011   (report-only)
+
+--- HOLD-OUT DECISION (§6/§13: reduction > 0 AND bootstrap P ≤ 0.05) ---
+  QLIKE reduction > 0        : PASS
+  bootstrap P ≤ 0.05         : PASS
+
+RESULT: GO (hold-out confirms)
+======================================================================

@@ -1,0 +1,44 @@
+======================================================================
+PHASE 1 — Target A (Expected Realized Volatility), MES DEV
+======================================================================
+observations=55239  days=1181  folds=6
+selected baselines per fold: ['ewma', 'ewma', 'ewma', 'ewma', 'ewma']
+chosen alphas per fold:      [10.0, 0.01, 0.01, 0.01, 0.01]
+
+--- QLIKE (lower is better) ---
+model=0.517907  selected-baseline=0.480204  time-of-day=1.410036
+QLIKE reduction vs baseline = -7.85%  (margin 5.0%)
+QLIKE reduction vs time-of-day = +63.27%
+
+--- secondary ---
+incremental log-RV R² vs baseline = +0.1680
+R² of log-RV about mean           = +0.5807
+Mincer-Zarnowitz: slope=0.954 intercept=-0.608 r2=0.582   (band [0.9,1.1])
+log-RV MSE=0.7047  MAE=0.6465
+
+--- temporal stability (per-year QLIKE reduction vs baseline) ---
+  2020: -0.30%
+  2021: -2.21%
+  2022: -12.88%
+  2023: -9.49%
+  2024: -11.57%
+years positive = 0 / 5  drop-best-year mean = -9.04%
+
+--- significance (day-level block bootstrap on paired QLIKE improvement) ---
+mean daily improvement=-4.394184e-02  P(improvement<=0)=1.0000  95% CI=[-6.15e-02,-2.85e-02]
+
+--- LMP diagnostic (report-only, not a gate) ---
+AUC(model forecast -> LMP event)   = 0.5202
+AUC(baseline forecast -> LMP event)= 0.4923
+
+--- GO / NO-GO ---
+  [FAIL] qlike_reduction>=margin
+  [FAIL] bootstrap_p<=0.05
+  [PASS] incremental_log_rv_r2>0
+  [PASS] mz_slope_in_band
+  [FAIL] years_positive>=4
+  [FAIL] drop_best_year>0
+  [PASS] beats_time_of_day
+
+RESULT: NO-GO
+======================================================================

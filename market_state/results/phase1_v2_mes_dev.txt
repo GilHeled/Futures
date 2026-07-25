@@ -1,0 +1,46 @@
+======================================================================
+PHASE 1 v2 — Target A (Expected Realized Volatility), MES DEV
+Duan smearing retransformation (SMEARING_SCOPE=all_qlike)
+======================================================================
+observations=55239  days=1181  folds=6
+selected baselines per fold: ['har', 'har', 'har', 'har', 'har']
+chosen alphas per fold:      [100.0, 0.01, 0.01, 0.01, 0.01]
+model smearing factors s_f:  [1.6898, 1.6188, 1.6015, 1.6496, 1.5749]
+
+--- QLIKE (lower is better) ---
+model=0.418030  selected-baseline=0.445160  time-of-day=1.395761
+QLIKE reduction vs baseline = +6.09%  (margin 5.0%)
+QLIKE reduction vs time-of-day = +70.05%
+
+--- secondary ---
+incremental log-RV R² vs baseline = +0.0750
+R² of log-RV about mean           = +0.5807
+Mincer-Zarnowitz: slope=0.954 intercept=-0.600 r2=0.582   (band [0.9,1.1])
+log-RV MSE=0.7047  MAE=0.6466
+
+--- temporal stability (per-year QLIKE reduction vs baseline) ---
+  2020: +13.28%
+  2021: +7.32%
+  2022: +3.87%
+  2023: +3.85%
+  2024: +4.61%
+years positive = 5 / 5  drop-best-year mean = +4.91%
+
+--- significance (day-level block bootstrap on paired QLIKE improvement) ---
+mean daily improvement=2.851807e-02  P(improvement<=0)=0.0000  95% CI=[2.06e-02,3.56e-02]
+
+--- LMP diagnostic (report-only, not a gate; score = μ̂, pre-retransform) ---
+AUC(model μ̂ -> LMP event)          = 0.5202
+AUC(baseline μ̂ -> LMP event)       = 0.4957
+
+--- GO / NO-GO ---
+  [PASS] qlike_reduction>=margin
+  [PASS] bootstrap_p<=0.05
+  [PASS] incremental_log_rv_r2>0
+  [PASS] mz_slope_in_band
+  [PASS] years_positive>=4
+  [PASS] drop_best_year>0
+  [PASS] beats_time_of_day
+
+RESULT: GO
+======================================================================

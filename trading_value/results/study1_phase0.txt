@@ -1,0 +1,20 @@
+==========================================================================
+STUDY 1 — PHASE-0 VERIFICATION (MES dev)
+==========================================================================
+  [PASS] 4. stop updates active only on the following bar
+  [PASS] 5. stops tighten only, never loosen
+  [PASS] 6. take-profit fixed from entry
+  [PASS] 7. same-bar stop/target resolves stop-first
+  [PASS] 8. gap fills at open; slippage per spec
+  [PASS] 1. forecast/HAR artifacts causal & aligned to bar timestamps
+          n=55239 span=2020-05-08 18:30:00+00:00..2024-12-31 20:25:00+00:00 aligned=True positive=True
+  [PASS] 2. development/hold-out boundaries enforced
+          streams<=DEV_END=True  holdout_guard_raises=True
+  [PASS] 3. average-distance normalization uses dev only (c_naive=1, means matched)
+          c_forecast=1.0100 means={'none': 8.32, 'naive': 8.32, 'forecast': 8.32}
+  [PASS] 9. entries identical across volatility-source arms
+          n_entries=1384 identical=True
+  [PASS] 10. results deterministic under fixed seeds
+--------------------------------------------------------------------------
+ALL PASS: True
+==========================================================================

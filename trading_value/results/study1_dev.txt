@@ -1,0 +1,29 @@
+==============================================================================
+STUDY 1 (DEV) — Volatility-Forecast Stop/Target Adaptation, MES
+Primary: net daily Sharpe improvement forecast vs HAR; corrected across 6 configs
+==============================================================================
+normalization c_source (dev-only): none=0.0019 naive=1.0000 forecast=1.0100
+per-config corrected significance level = 0.0083 (0.05/6)
+
+strat     cfg   Sh_none Sh_naive  Sh_fcst   dShrp  boot_p   PnL_fc$   nTr DDok qual
+ema_cross C1     -1.862   -2.103   -2.267  -0.164  0.7942     -7696  1384    Y     
+ema_cross C2     -1.341   -1.611   -1.635  -0.024  0.5298     -6521  1384    Y     
+ema_cross C3     -1.783   -1.469   -1.379   0.090  0.2982     -5680  1384    Y     
+vwap_fade C1     -3.294   -3.144   -3.188  -0.044  0.5610    -11838  1825    Y     
+vwap_fade C2     -3.074   -2.738   -2.937  -0.199  0.8366    -11681  1825    Y     
+vwap_fade C3     -3.144   -3.119   -2.801   0.318  0.0920    -13287  1825    Y     
+
+--- concentration check (qualifying candidates only) ---
+
+--- DSR (forecast arm, best of 6): dsr=0.0000  sr_hat(daily)=-0.0869  sr*=0.0603 ---
+
+--- supporting (NOT gates) ---
+  configs with Sharpe_forecast > Sharpe_naive: 2/6
+  configs with Sharpe_forecast > Sharpe_none : 4/6
+  mean dSharpe (forecast−naive) across 6      : -0.004
+
+--- DEV GATE (§11) ---
+  qualifying configs (all conditions): 0
+
+RESULT: NO-GO (dev gate not passed) — hold-out stays locked
+==============================================================================

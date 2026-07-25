@@ -1,0 +1,26 @@
+======================================================================
+PHASE 1 v2 — §12 DEV ROBUSTNESS (confirmation only), MES DEV
+======================================================================
+
+--- 1. Alternative RV proxy (Garman–Klass) ---
+selected baselines per fold: ['har', 'har', 'har', 'har', 'har']
+QLIKE reduction vs baseline = +7.58% (main squared-return run: +6.09%)
+bootstrap P(improvement<=0) = 0.0000
+years positive = 5/5  drop-best-year = +5.82%
+  per-year QLIKE reduction:
+    2020: +16.75%
+    2021: +10.41%
+    2022: +2.62%
+    2023: +5.51%
+    2024: +4.73%
+  sign consistent with main result: True
+
+--- 2. Regime stability (terciles of trailing-session RV; main run) ---
+   low vol regime (n= 18432): QLIKE reduction vs baseline = +5.00%
+   mid vol regime (n= 18411): QLIKE reduction vs baseline = +7.13%
+  high vol regime (n= 18396): QLIKE reduction vs baseline = +6.43%
+  improvement positive in ALL regimes: True
+
+--- consistency verdict ---
+All §12 dev robustness checks consistent with the main v2 result: True
+======================================================================

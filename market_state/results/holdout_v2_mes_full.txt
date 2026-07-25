@@ -1,0 +1,74 @@
+======================================================================
+HOLD-OUT CONFIRMATION (SINGLE, FINAL) — Target A v2, MES
+Hold-out: 2025-01-01 → 2026-07-09  (trained on full dev)
+======================================================================
+observations=17901  days=384
+selected baseline (on dev) = har  α=100.0  s_f=1.5230
+
+--- QLIKE (lower is better) ---
+model=0.453846  selected-baseline=0.464520  time-of-day=1.156810
+QLIKE reduction vs baseline     = +2.30%
+QLIKE reduction vs time-of-day  = +60.77%
+
+--- baseline selection (chosen on DEV train QLIKE; fixed for hold-out) ---
+  candidate       dev-train QLIKE   smearing s   selected
+  persistence          0.863475      1.0000
+  ewma                 0.482688      1.0000
+  har                  0.441511      1.5575  <-- selected
+  time_of_day          1.144653      2.4038
+
+--- smearing factors (Duan retransformation h = s·exp(μ̂)) ---
+  model s_f (OOF on dev)            = 1.5230
+  baseline 'har' s_b (OOF on dev) = 1.5575
+  baseline 'time_of_day' s_b (OOF on dev) = 2.4038
+  persistence / ewma               = 1.0 (variance-space; no retransform)
+
+--- significance (day-level block bootstrap on paired QLIKE improvement) ---
+config: block_days=5  resamples=5000  seed=20260724  unit=per-day paired (baseline−model) QLIKE contribution
+mean daily improvement=1.612976e-02  P(improvement<=0)=0.0006  95% CI=[7.21e-03,2.54e-02]  n_days=384
+
+--- secondary (reported) ---
+incremental log-RV R² vs baseline = +0.0076
+R² of log-RV about mean           = +0.5797
+log-RV MSE=0.7755  MAE=0.6844
+Mincer-Zarnowitz: slope=1.0025  intercept=-0.0770  r2=0.5862
+LMP AUC (model μ̂) = 0.5011   baseline μ̂ = 0.4894  (report-only)
+
+--- annual QLIKE reduction vs baseline ---
+    2025: +1.35%
+    2026: +4.17%
+
+--- monthly QLIKE reduction vs baseline ---
+    2025-01 (n=  972): +2.76%
+    2025-02 (n=  924): +4.06%
+    2025-03 (n=  960): +5.71%
+    2025-04 (n= 1008): -1.26%
+    2025-05 (n= 1020): -3.10%
+    2025-06 (n=  924): +7.94%
+    2025-07 (n= 1035): +2.26%
+    2025-08 (n= 1008): +2.53%
+    2025-09 (n=  972): +0.56%
+    2025-10 (n= 1104): +0.37%
+    2025-11 (n=  891): -2.86%
+    2025-12 (n=  975): -0.53%
+    2026-01 (n=  972): +3.07%
+    2026-02 (n=  924): +6.58%
+    2026-03 (n= 1008): +4.87%
+    2026-04 (n= 1008): +1.13%
+    2026-05 (n=  972): +0.91%
+    2026-06 (n=  972): +5.79%
+    2026-07 (n=  252): +16.89%
+
+--- dev-only calibration guarantee (asserted in code) ---
+  training/calibration rows        = 66287 (all in dev)
+  latest calibration timestamp     = 2024-12-31 20:25:00+00:00  (<= dev end 2024-12-31)
+  hold-out scored window           = 2025-01-02 16:30:00+00:00 .. 2026-07-08 19:25:00+00:00
+  model α, s_f and every baseline s_b estimated on dev rows ONLY;
+  NO hold-out observation entered α-selection, smearing, or baseline fitting.
+
+--- HOLD-OUT DECISION (§6/§13: reduction > 0 AND bootstrap P ≤ 0.05) ---
+  QLIKE reduction > 0        : PASS
+  bootstrap P ≤ 0.05         : PASS
+
+RESULT: GO (hold-out confirms)
+======================================================================

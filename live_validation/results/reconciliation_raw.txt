@@ -1,0 +1,28 @@
+CURRENT mnq_system code provenance: git = 304fc35467608231…
+
+===== MYM =====
+  saved bundle: version=1.1.0/ev_logreg_h10 train=2019-05-05..2026-07-09 n_train=359259 provenance=source_tree_sha256:15ba39b5a45e
+  fresh  bundle: n_train=359259 provenance=git:304fc3546760
+  MATCHES?  code_provenance=False  feature_config=True  feature_cols=True  class_return_vec=True  classifier_coef=True
+  OOS window: 2023-01-01 .. 2026-07-09   cache: 2019-05-05 22:20:00+00:00 .. 2026-07-08 23:55:00+00:00
+  off-hours signal UNIVERSE (full calendar): saved=944  fresh=944
+  sequential shadow-book trades: saved n=731 avgR@3t=+0.7836 | fresh n=731 avgR@3t=+0.7836
+  trade-set divergence: only-in-saved=0  only-in-fresh=0
+
+===== M2K =====
+  saved bundle: version=1.1.0/ev_logreg_h10 train=2019-05-05..2026-07-09 n_train=357791 provenance=source_tree_sha256:15ba39b5a45e
+  fresh  bundle: n_train=357791 provenance=git:304fc3546760
+  MATCHES?  code_provenance=False  feature_config=True  feature_cols=True  class_return_vec=True  classifier_coef=True
+  OOS window: 2023-01-01 .. 2026-07-09   cache: 2019-05-05 22:00:00+00:00 .. 2026-07-08 23:55:00+00:00
+  off-hours signal UNIVERSE (full calendar): saved=607  fresh=607
+  sequential shadow-book trades: saved n=466 avgR@3t=+0.8207 | fresh n=466 avgR@3t=+0.8207
+  trade-set divergence: only-in-saved=0  only-in-fresh=0
+
+===== MES =====
+  saved bundle: version=1.1.0/ev_logreg_h10 train=2019-05-05..2026-07-09 n_train=360490 provenance=source_tree_sha256:15ba39b5a45e
+  fresh  bundle: n_train=360490 provenance=git:304fc3546760
+  MATCHES?  code_provenance=False  feature_config=True  feature_cols=True  class_return_vec=True  classifier_coef=True
+  OOS window: 2023-01-01 .. 2026-07-09   cache: 2019-05-05 22:00:00+00:00 .. 2026-07-08 23:55:00+00:00
+  off-hours signal UNIVERSE (full calendar): saved=518  fresh=518
+  sequential shadow-book trades: saved n=375 avgR@3t=+1.3752 | fresh n=375 avgR@3t=+1.3752
+  trade-set divergence: only-in-saved=0  only-in-fresh=0

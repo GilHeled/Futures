@@ -1,0 +1,30 @@
+==========================================================================
+OVERNIGHT EDGE — EXECUTION SENSITIVITY (frozen model, OOS 2023–2026)
+net avg R per trade vs per-side fill slippage (ticks); entries fixed
+==========================================================================
+
+MYM  (n=817 trades, tick=1.0, $/pt=0.5)
+  slip(t):      0      1      2      3      4      5      6      7      8
+  avg R  :  +1.04  +0.92  +0.81  +0.72  +0.63  +0.56  +0.48  +0.42  +0.36
+    @ 3t: avg R +0.719, bootstrap P(mean<=0)=0.0000
+    @ 5t: avg R +0.556, bootstrap P(mean<=0)=0.0000
+  >>> BREAKEVEN slippage ~ inf ticks/side (edge disappears beyond this)
+  adverse missed-fill tolerance @3t: edge survives dropping the best ~5% of trades
+
+M2K  (n=579 trades, tick=0.1, $/pt=5.0)
+  slip(t):      0      1      2      3      4      5      6      7      8
+  avg R  :  +1.13  +1.00  +0.89  +0.79  +0.70  +0.62  +0.55  +0.48  +0.41
+    @ 3t: avg R +0.793, bootstrap P(mean<=0)=0.0000
+    @ 5t: avg R +0.622, bootstrap P(mean<=0)=0.0000
+  >>> BREAKEVEN slippage ~ inf ticks/side (edge disappears beyond this)
+  adverse missed-fill tolerance @3t: edge survives dropping the best ~6% of trades
+
+MES  (n=320 trades, tick=0.25, $/pt=5.0)
+  slip(t):      0      1      2      3      4      5      6      7      8
+  avg R  :  +1.45  +1.29  +1.14  +1.01  +0.90  +0.80  +0.71  +0.62  +0.54
+    @ 3t: avg R +1.014, bootstrap P(mean<=0)=0.0002
+    @ 5t: avg R +0.798, bootstrap P(mean<=0)=0.0006
+  >>> BREAKEVEN slippage ~ inf ticks/side (edge disappears beyond this)
+  adverse missed-fill tolerance @3t: edge survives dropping the best ~6% of trades
+
+==========================================================================

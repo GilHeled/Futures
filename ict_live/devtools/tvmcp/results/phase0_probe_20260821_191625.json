@@ -1,0 +1,265 @@
+{
+  "generated": "2026-08-21T19:16:14.572847",
+  "symbol": "MNQ1!",
+  "timeframe": "60",
+  "replay_date": "2026-08-14",
+  "reachable": true,
+  "cli_surface": {
+    "--help": {
+      "ok": true,
+      "stdout": "Usage: tv <command> [options]\n\nCommands:\n  status      Check CDP connection to TradingView\n  launch      Launch TradingView with CDP enabled\n  update      Update to the latest version (git fast-forward + npm ci if deps changed)\n  state       Get current chart state (symbol, TF, studies)\n  symbol      Get or set the chart symbol\n  timeframe   Get or set the chart timeframe\n  type        Get or set the chart type (Candles, Line, etc.)\n  info        Get detailed symbol metadata\n  search      Search for symbols by name or keyword\n  range       Get or set the visible chart range\n  scroll      Scroll the chart to a specific date\n  discover    Report which TradingView API paths are available\n  ui-state    Get current UI state (panels, buttons)\n  quote       Get real-time price quote\n  ohlcv       Get OHLCV bar data\n  values      Get current indicator values from data window\n  data        Advanced data tools (lines, labels, tables, boxes, strategy, trades, equity, depth)  [lines, labels, tables, boxes, strategy, trades, equity, depth, indicator]\n  pine        Pine Script tools  [get, set, compile, raw-compile, analyze, check, save, new, open, list, errors, console]\n  screenshot  Take a screenshot of the chart\n  replay      Replay mode controls  [start, step, stop, status, autoplay, trade]\n  draw        Drawing tools (shape, list, get, remove, clear)  [shape, list, get, remove, clear]\n  alert       Alert tools (list, create, delete)  [list, create, delete]\n  watchlist   Watchlist tools (get, add, add-bulk, remove)  [get, add, add-bulk, remove]\n  layout      Layout tools (list, switch)  [list, switch]\n  indicator   Indicator tools (add, remove, toggle, set, get)  [add, remove, toggle, set, get]\n  ui          UI automation tools (click, keyboard, hover, scroll, find, eval, type, panel, fullscreen, mouse)  [click, keyboard, hover, scroll, find, eval, type, panel, fullscreen, mouse]\n  pane        Chart pane/layout tools (list, layout, focus, symbol)  [list, layout, focus, symbol]\n  tab         Tab management (list, new, close, switch)  [list, new, close, switch]\n  stream      Monitor your local TradingView chart for changes (JSONL output)  [quote, bars, values, lines, labels, tables, all]\n\nRun \"tv <command> --help\" for command-specific options.\n\nDISCLAIMER\n  Not affiliated with TradingView Inc. or Anthropic, PBC.\n  Use subject to TradingView's Terms of Use: tradingview.com/policies\n",
+      "stderr": "",
+      "error": null
+    },
+    "ohlcv --help": {
+      "ok": true,
+      "stdout": "Usage: tv ohlcv [options]\n\nGet OHLCV bar data\n\nOptions:\n  -n, --count         Number of bars (default 100, max 500)\n  -s, --summary       Return summary stats instead of all bars\n",
+      "stderr": "",
+      "error": null
+    },
+    "draw --help": {
+      "ok": true,
+      "stdout": "Usage: tv draw <subcommand> [options]\n\nSubcommands:\n  shape       Draw a shape on the chart\n  list        List all drawings on the chart\n  get         Get properties of a drawing\n  remove      Remove a drawing by entity ID\n  clear       Remove all drawings\n",
+      "stderr": "",
+      "error": null
+    },
+    "replay --help": {
+      "ok": true,
+      "stdout": "Usage: tv replay <subcommand> [options]\n\nSubcommands:\n  start       Start replay mode\n  step        Advance one bar in replay\n  stop        Stop replay and return to realtime\n  status      Get current replay state\n  autoplay    Toggle autoplay in replay mode\n  trade       Execute a trade in replay mode (buy, sell, close)\n",
+      "stderr": "",
+      "error": null
+    },
+    "screenshot --help": {
+      "ok": true,
+      "stdout": "Usage: tv screenshot [options]\n\nTake a screenshot of the chart\n\nOptions:\n  -r, --region        Region: full, chart, strategy_tester\n  -o, --output        Custom filename (without .png)\n",
+      "stderr": "",
+      "error": null
+    },
+    "data --help": {
+      "ok": true,
+      "stdout": "Usage: tv data <subcommand> [options]\n\nSubcommands:\n  lines       Get Pine Script line.new() price levels\n  labels      Get Pine Script label.new() annotations\n  tables      Get Pine Script table.new() data\n  boxes       Get Pine Script box.new() price zones\n  strategy    Get strategy performance metrics\n  trades      Get strategy trade list\n  equity      Get strategy equity curve\n  depth       Get order book / DOM data\n  indicator   Get indicator info and inputs by entity ID\n",
+      "stderr": "",
+      "error": null
+    }
+  },
+  "draw_anchoring": {
+    "help": "Usage: tv draw <subcommand> [options]\n\nSubcommands:\n  shape       Draw a shape on the chart\n  list        List all drawings on the chart\n  get         Get properties of a drawing\n  remove      Remove a drawing by entity ID\n  clear       Remove all drawings\n",
+    "attempts": [
+      {
+        "attempt": "rect time+price",
+        "args": [
+          "draw",
+          "shape",
+          "-t",
+          "rectangle",
+          "-p",
+          "29413.25",
+          "--time",
+          "1787313600",
+          "--price2",
+          "29442.663249999998",
+          "--time2",
+          "1787328000"
+        ],
+        "ok": true,
+        "data": {
+          "success": true,
+          "shape": "rectangle",
+          "entity_id": "EP78L9"
+        },
+        "stdout": "{\n  \"success\": true,\n  \"shape\": \"rectangle\",\n  \"entity_id\": \"EP78L9\"\n}\n",
+        "stderr": "",
+        "error": null
+      },
+      {
+        "attempt": "text time+price",
+        "args": [
+          "draw",
+          "shape",
+          "-t",
+          "text",
+          "--time",
+          "1787313600",
+          "-p",
+          "29413.25",
+          "--text",
+          "probe"
+        ],
+        "ok": true,
+        "data": {
+          "success": true,
+          "shape": "text",
+          "entity_id": "T8Mv46"
+        },
+        "stdout": "{\n  \"success\": true,\n  \"shape\": \"text\",\n  \"entity_id\": \"T8Mv46\"\n}\n",
+        "stderr": "",
+        "error": null
+      },
+      {
+        "attempt": "hline price only",
+        "args": [
+          "draw",
+          "shape",
+          "-t",
+          "horizontal_line",
+          "-p",
+          "29413.25"
+        ],
+        "ok": false,
+        "data": null,
+        "stdout": "",
+        "stderr": "{\n  \"success\": false,\n  \"error\": \"point.time must be a finite number, got: NaN\"\n}\n",
+        "error": null
+      }
+    ],
+    "draw_list_after": {
+      "success": true,
+      "count": 2,
+      "shapes": [
+        {
+          "id": "EP78L9",
+          "name": "rectangle"
+        },
+        {
+          "id": "T8Mv46",
+          "name": "text"
+        }
+      ]
+    },
+    "timestamps_in_list": [],
+    "verdict": "TIME+PRICE?",
+    "note": "time-anchored draw accepted but draw list did not echo timestamps to confirm; verify via screenshot"
+  },
+  "ohlcv_format": {
+    "ok": true,
+    "error": null,
+    "raw_head": "{\"success\": true, \"bar_count\": 100, \"total_available\": 300, \"source\": \"direct_bars\", \"bars\": [{\"time\": 1786957200, \"open\": 30298, \"high\": 30303, \"low\": 30267, \"close\": 30281, \"volume\": 20387}, {\"time\": 1786960800, \"open\": 30281.25, \"high\": 30339.75, \"low\": 30273.75, \"close\": 30315, \"volume\": 31442}, {\"time\": 1786964400, \"open\": 30315, \"high\": 30325.25, \"low\": 30284, \"close\": 30286, \"volume\": 26713}, {\"time\": 1786968000, \"open\": 30286.75, \"high\": 30288.75, \"low\": 30180, \"close\": 30202, \"volume\": ",
+    "n_timestamps": 100,
+    "sample_paths": [
+      "$.bars[0].time",
+      "$.bars[1].time",
+      "$.bars[2].time",
+      "$.bars[3].time",
+      "$.bars[4].time",
+      "$.bars[5].time"
+    ],
+    "time_field_candidates": [
+      [
+        "$.bars[0].time",
+        1786957200.0
+      ],
+      [
+        "$.bars[1].time",
+        1786960800.0
+      ],
+      [
+        "$.bars[2].time",
+        1786964400.0
+      ],
+      [
+        "$.bars[3].time",
+        1786968000.0
+      ],
+      [
+        "$.bars[4].time",
+        1786971600.0
+      ]
+    ],
+    "earliest": "2026-08-17T09:00:00+00:00",
+    "latest": "2026-08-21T16:00:00+00:00",
+    "ordering": "ascending",
+    "note": "Timezone CANNOT be inferred from the feed alone \u2014 cross-check the latest bar's time against our ET raw store during a live capture before trusting."
+  },
+  "replay_cursor": {
+    "replay_start_ok": true,
+    "start_raw": "{\"success\": true, \"replay_started\": true, \"date\": \"2026-08-14\", \"current_date\": 1786665599}",
+    "observations": [
+      {
+        "step": 0,
+        "cursor": "2026-08-13T23:59:59+00:00",
+        "ohlcv_latest": "2026-08-13T23:00:00+00:00",
+        "verdict": "SAFE",
+        "note": "latest datum 2026-08-13T23:00:00+00:00 <= cursor 2026-08-13T23:59:59+00:00 (+-3599s)",
+        "status_raw": "{\"success\": true, \"is_replay_available\": true, \"is_replay_started\": true, \"is_autoplay_started\": false, \"replay_mode\": \"AllCharts\", \"current_date\": 1786665599, \"autoplay_delay\": 100, \"position\": null, \"realized_pnl\": null}"
+      },
+      {
+        "step": 1,
+        "cursor": "2026-08-14T00:59:59+00:00",
+        "ohlcv_latest": "2026-08-14T00:00:00+00:00",
+        "verdict": "SAFE",
+        "note": "latest datum 2026-08-14T00:00:00+00:00 <= cursor 2026-08-14T00:59:59+00:00 (+-3599s)",
+        "status_raw": "{\"success\": true, \"is_replay_available\": true, \"is_replay_started\": true, \"is_autoplay_started\": false, \"replay_mode\": \"AllCharts\", \"current_date\": 1786669199, \"autoplay_delay\": 100, \"position\": null, \"realized_pnl\": null}"
+      },
+      {
+        "step": 2,
+        "cursor": "2026-08-14T01:59:59+00:00",
+        "ohlcv_latest": "2026-08-14T01:00:00+00:00",
+        "verdict": "SAFE",
+        "note": "latest datum 2026-08-14T01:00:00+00:00 <= cursor 2026-08-14T01:59:59+00:00 (+-3599s)",
+        "status_raw": "{\"success\": true, \"is_replay_available\": true, \"is_replay_started\": true, \"is_autoplay_started\": false, \"replay_mode\": \"AllCharts\", \"current_date\": 1786672799, \"autoplay_delay\": 100, \"position\": null, \"realized_pnl\": null}"
+      },
+      {
+        "step": 3,
+        "cursor": "2026-08-14T02:59:59+00:00",
+        "ohlcv_latest": "2026-08-14T02:00:00+00:00",
+        "verdict": "SAFE",
+        "note": "latest datum 2026-08-14T02:00:00+00:00 <= cursor 2026-08-14T02:59:59+00:00 (+-3599s)",
+        "status_raw": "{\"success\": true, \"is_replay_available\": true, \"is_replay_started\": true, \"is_autoplay_started\": false, \"replay_mode\": \"AllCharts\", \"current_date\": 1786676399, \"autoplay_delay\": 100, \"position\": null, \"realized_pnl\": null}"
+      }
+    ],
+    "verdict": "SAFE"
+  },
+  "general_leak": {
+    "cursor": "2026-08-13T23:59:59+00:00",
+    "per_tool": {
+      "ohlcv": {
+        "ok": true,
+        "error": null,
+        "latest": "2026-08-13T23:00:00+00:00",
+        "verdict": "SAFE",
+        "note": "latest datum 2026-08-13T23:00:00+00:00 <= cursor 2026-08-13T23:59:59+00:00 (+-3599s)"
+      },
+      "quote": {
+        "ok": true,
+        "error": null,
+        "latest": "2026-08-13T23:00:00+00:00",
+        "verdict": "SAFE",
+        "note": "latest datum 2026-08-13T23:00:00+00:00 <= cursor 2026-08-13T23:59:59+00:00 (+-3599s)"
+      },
+      "study_values": {
+        "ok": true,
+        "error": null,
+        "latest": null,
+        "verdict": "UNKNOWN",
+        "note": "tool returned no parseable timestamps"
+      },
+      "pine_lines": {
+        "ok": true,
+        "error": null,
+        "latest": null,
+        "verdict": "UNKNOWN",
+        "note": "tool returned no parseable timestamps"
+      },
+      "pine_labels": {
+        "ok": true,
+        "error": null,
+        "latest": null,
+        "verdict": "UNKNOWN",
+        "note": "tool returned no parseable timestamps"
+      },
+      "pine_boxes": {
+        "ok": true,
+        "error": null,
+        "latest": null,
+        "verdict": "UNKNOWN",
+        "note": "tool returned no parseable timestamps"
+      },
+      "screenshot": {
+        "ok": true,
+        "error": null,
+        "verdict": "CONDITIONAL",
+        "note": "pixels can't be timestamp-checked; SAFE only if replay hides bars right of the cursor AND the report crops to the cursor \u2014 verify visually once."
+      }
+    }
+  }
+}

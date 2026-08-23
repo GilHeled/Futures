@@ -28,7 +28,7 @@ from ict_live.live.runner import LiveRunner
 def create_app(ingestor: Optional[Ingestor] = None, runner: Optional[LiveRunner] = None,
                store_dir: Optional[str] = None):
     from fastapi import FastAPI, Header, Query, Request
-    from fastapi.responses import HTMLResponse
+    from fastapi.responses import HTMLResponse, RedirectResponse
 
     if runner is not None:
         ing = runner.ingestor
@@ -62,6 +62,10 @@ def create_app(ingestor: Optional[Ingestor] = None, runner: Optional[LiveRunner]
     @app.get("/status")
     async def status():
         return ing.status()
+
+    @app.get("/")
+    async def root():
+        return RedirectResponse(url="/report.html")           # convenience: land on the monitor
 
     @app.get("/health")
     async def health():

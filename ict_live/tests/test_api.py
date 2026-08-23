@@ -31,6 +31,12 @@ def test_health_and_status():
     assert "symbols" in c.get("/status").json()
 
 
+def test_root_redirects_to_report():
+    c = _client()
+    r = c.get("/", follow_redirects=False)
+    assert r.status_code in (307, 308) and r.headers["location"] == "/report.html"
+
+
 def test_webhook_accepts_and_auth():
     c = _client(token="tok")
     p = _payload(datetime(2026, 6, 1, 20, 0, tzinfo=ET))

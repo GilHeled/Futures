@@ -84,47 +84,92 @@ def _fetch_live(live_url: str, timeout: float = 2.0) -> dict:
 
 # --------------------------------------------------------------------------- HTTP front-end
 
-_PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — operational dashboard</title>
+_PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashboard</title>
+<meta name=viewport content="width=device-width, initial-scale=1">
 <style>
- :root{color-scheme:light dark}
- body{font-family:system-ui,sans-serif;margin:0;color:#111;background:#fafafa}
- header{background:#0b6;color:#fff;padding:12px 20px;display:flex;gap:20px;align-items:baseline}
- header h1{font-size:16px;margin:0} header a{color:#fff;text-decoration:none;opacity:.85;cursor:pointer}
- header a.on{opacity:1;font-weight:700;text-decoration:underline}
- main{max-width:1200px;margin:0 auto;padding:18px 20px}
- section{display:none} section.on{display:block}
- h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:#666;margin:22px 0 6px}
- .card{border:1px solid #e3e3e3;border-radius:12px;padding:12px 14px;margin:10px 0;background:#fff}
- table{border-collapse:collapse;font-size:12.5px;width:100%} td,th{border:1px solid #e0e0e0;padding:4px 8px;text-align:right;white-space:nowrap}
- th:first-child,td:first-child{text-align:left} .scroll{overflow-x:auto}
- .kpi{display:flex;gap:22px;flex-wrap:wrap;font-size:13px} .kpi b{font-size:19px;display:block}
- .row{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end;margin:12px 0}
- label.fld{display:flex;flex-direction:column;font-size:12px;color:#666;gap:4px}
- input,select,button{font:inherit;padding:6px 8px;border:1px solid #ccc;border-radius:8px;background:#fff;color:#111}
- button{background:#0b6;border-color:#0b6;color:#fff;font-weight:600;cursor:pointer;padding:8px 16px}
- button:disabled{opacity:.5;cursor:default} .sym{margin-right:12px;font-size:14px}
- .prog{height:8px;background:#eee;border-radius:6px;overflow:hidden;width:200px;display:inline-block;vertical-align:middle}
- .prog>i{display:block;height:100%;background:#0b6;width:0} a.dl{color:#0b6;font-weight:600}
- .mut{color:#888;font-size:12px} .pill{padding:1px 7px;border-radius:999px;font-size:11px;font-weight:700}
- .TAKE{background:#0b6;color:#fff} .SKIP{background:#e8a100;color:#fff} .NO_SETUP{background:#bbb;color:#fff}
- .pos{color:#0a7} .neg{color:#c33}
- @media(prefers-color-scheme:dark){body{background:#0f0f0f;color:#eee}.card{background:#161616;border-color:#2a2a2a}
-  td,th{border-color:#2a2a2a}input,select{background:#1b1b1b;color:#eee;border-color:#333}h2{color:#aaa}.mut{color:#999}}
+ :root{
+   --bg:#f4f5f7; --panel:#ffffff; --panel2:#fafbfc; --line:#e4e7ec; --ink:#111827; --mut:#6b7280;
+   --chrome:#0f172a; --chrome-ink:#e5e7eb; --accent:#4f46e5;
+   --long:#059669; --long-bg:#ecfdf5; --short:#dc2626; --short-bg:#fef2f2;
+   --warn:#b45309; --warn-bg:#fffbeb; --info:#2563eb; --info-bg:#eff6ff;
+   color-scheme:light dark;
+ }
+ @media(prefers-color-scheme:dark){:root{
+   --bg:#0b0e14; --panel:#131722; --panel2:#0f131b; --line:#242a37; --ink:#e6e9ef; --mut:#8b93a7;
+   --chrome:#0a0d13; --chrome-ink:#e6e9ef; --accent:#8b8cf7;
+   --long:#22c55e; --long-bg:#0c2018; --short:#f04747; --short-bg:#241014;
+   --warn:#eab308; --warn-bg:#231d09; --info:#60a5fa; --info-bg:#0e1a2e;
+ }}
+ *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);
+   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;font-size:14px}
+ .num{font-variant-numeric:tabular-nums;font-family:"SF Mono",ui-monospace,Menlo,monospace}
+ header{position:sticky;top:0;z-index:5;background:var(--chrome);color:var(--chrome-ink);
+   display:flex;align-items:center;gap:14px;padding:10px 20px;border-bottom:1px solid #0006}
+ header .brand{font-weight:800;letter-spacing:.02em} header .sub{color:#9aa3b2;font-size:12px}
+ nav{display:flex;gap:6px;margin-left:14px}
+ nav a{color:#c7cdd9;cursor:pointer;padding:6px 14px;border-radius:999px;font-weight:600;font-size:13px}
+ nav a.on{background:var(--accent);color:#fff}
+ .conn{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;color:#9aa3b2}
+ .dot{width:9px;height:9px;border-radius:50%;background:#6b7280} .dot.ok{background:#22c55e} .dot.no{background:#ef4444}
+ main{max-width:1180px;margin:0 auto;padding:20px} section{display:none} section.on{display:block}
+ h2{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:var(--mut);margin:26px 0 10px;font-weight:700}
+ .strip{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+ .chip{background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:4px 12px;font-size:12px;color:var(--mut)}
+ .chip b{color:var(--ink)}
+ .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin:10px 0}
+ /* ---- actionable trade tickets (the hero) ---- */
+ .tickets{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
+ .ticket{background:var(--panel);border:1px solid var(--line);border-left:6px solid var(--mut);
+   border-radius:14px;padding:16px 18px;box-shadow:0 1px 3px #0000000d}
+ .ticket.long{border-left-color:var(--long)} .ticket.short{border-left-color:var(--short)}
+ .ticket .thead{display:flex;align-items:center;gap:10px;margin-bottom:4px}
+ .badge{font-weight:800;font-size:18px;letter-spacing:.03em;padding:2px 10px;border-radius:8px}
+ .badge.long{color:var(--long);background:var(--long-bg)} .badge.short{color:var(--short);background:var(--short-bg)}
+ .thead .sym{font-weight:700;font-size:16px} .thead .tf{color:var(--mut);font-size:12px}
+ .pill{padding:2px 9px;border-radius:999px;font-size:11px;font-weight:800;letter-spacing:.03em}
+ .pill.place{background:var(--warn-bg);color:var(--warn)} .pill.in{background:var(--info-bg);color:var(--info)}
+ .instr{color:var(--mut);font-size:12.5px;margin:10px 0 8px}
+ .levels{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:6px 0 10px}
+ .lvl{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 10px;text-align:center}
+ .lvl span{display:block;font-size:10.5px;letter-spacing:.08em;color:var(--mut);text-transform:uppercase;margin-bottom:3px}
+ .lvl b{font-size:20px} .lvl.stop b{color:var(--short)} .lvl.tgt b{color:var(--long)}
+ .ticket .meta{font-size:12px;color:var(--mut)} .ticket .meta b{color:var(--ink)}
+ .empty{border-left-color:var(--line);color:var(--mut);text-align:center;padding:26px}
+ /* ---- kpis ---- */
+ .kpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px}
+ .kpi{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+ .kpi span{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em}
+ .kpi b{display:block;font-size:22px;margin-top:4px} .pos{color:var(--long)} .neg{color:var(--short)}
+ /* ---- tables ---- */
+ .scroll{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+ table{border-collapse:collapse;width:100%;font-size:12.5px} th,td{padding:7px 10px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line)}
+ th{color:var(--mut);font-weight:600;text-transform:uppercase;font-size:10.5px;letter-spacing:.05em;background:var(--panel2)}
+ th:first-child,td:first-child{text-align:left} tr:last-child td{border-bottom:none}
+ .tag{padding:1px 8px;border-radius:6px;font-size:11px;font-weight:700}
+ .tag.TAKE{background:var(--long-bg);color:var(--long)} .tag.SKIP{background:var(--warn-bg);color:var(--warn)}
+ .tag.NO_SETUP{background:var(--panel2);color:var(--mut)}
+ .legend{color:var(--mut);font-size:12px;margin:6px 2px}
+ /* ---- controls (replay) ---- */
+ .row{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end;margin:10px 0}
+ label.fld{display:flex;flex-direction:column;font-size:12px;color:var(--mut);gap:5px}
+ input,select{font:inherit;padding:7px 10px;border:1px solid var(--line);border-radius:9px;background:var(--panel);color:var(--ink)}
+ .sym{font-size:14px;margin-right:14px} button{font:inherit;padding:9px 18px;border:none;border-radius:9px;
+   background:var(--accent);color:#fff;font-weight:700;cursor:pointer} button:disabled{opacity:.5;cursor:default}
+ .prog{height:8px;background:var(--line);border-radius:6px;overflow:hidden;width:200px;display:inline-block;vertical-align:middle}
+ .prog>i{display:block;height:100%;background:var(--accent)} a.dl{color:var(--accent);font-weight:700;text-decoration:none}
+ .mut{color:var(--mut);font-size:12px}
 </style>
 <header>
-  <h1>ict_live</h1>
-  <a id=nav-live class=on onclick="show('live')">LIVE</a>
-  <a id=nav-replay onclick="show('replay')">REPLAY</a>
-  <span class=mut id=livestate style="margin-left:auto;color:#eaffef"></span>
+  <span class=brand>ict&nbsp;live</span><span class=sub>trading dashboard</span>
+  <nav><a id=nav-live class=on onclick="show('live')">LIVE</a>
+       <a id=nav-replay onclick="show('replay')">REPLAY</a></nav>
+  <span class=conn><span id=cdot class=dot></span><span id=livestate>connecting…</span></span>
 </header>
 <main>
-<section id=live class=on>
-  <div id=live-body><p class=mut>connecting to live service…</p></div>
-</section>
-
+<section id=live class=on><div id=live-body><p class=mut>connecting to live service…</p></div></section>
 <section id=replay>
   <div class=card>
-    <h2>simulation</h2>
+    <h2 style="margin-top:0">run a simulation</h2>
     <div class=row id=syms>__OPTS__</div>
     <div class=row>
       <label class=fld>from<input type=date id=from value="2025-01-01"></label>
@@ -141,87 +186,108 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — operational d
 <script>
 const $=s=>document.querySelector(s);
 function show(t){for(const s of ['live','replay']){$('#'+s).classList.toggle('on',s===t);$('#nav-'+s).classList.toggle('on',s===t);}}
-function fmt(v){return (v===null||v===undefined||v==='')?'':v;}
-function num(v){return (v===null||v===undefined)?'':v;}
+function fmt(v){return (v===null||v===undefined||v==='')?'—':v;}
+function num(v){return (v===null||v===undefined)?'—':v;}
 function cls(v){return (typeof v==='number')?(v>0?'pos':(v<0?'neg':'')):'';}
 
-// ---------- LIVE ----------
+// ---------------- LIVE ----------------
+function tickets(rep){
+  const opens=rep.open_trades||[]; const byId={}; (rep.recent_signals||[]).forEach(s=>byId[s.ticket_id]=s);
+  if(!opens.length) return '<div class="ticket empty">No active trade right now — the engine is waiting for the next valid setup.<br><span class=mut>A ticket appears here the moment a TAKE signal fires.</span></div>';
+  return '<div class=tickets>'+opens.map(o=>{
+    const sig=byId[o.ticket_id]||{}; const long=o.direction==='long'; const dir=long?'LONG':'SHORT';
+    const risk=Math.abs(o.entry-o.stop);
+    const status=o.status==='OPEN'?'<span class="pill in">IN TRADE</span>':'<span class="pill place">PLACE ORDER</span>';
+    const how=o.status==='OPEN'?'You should be in this position:':'Place a limit order on Topstep:';
+    return `<div class="ticket ${o.direction}">
+      <div class=thead><span class="badge ${o.direction}">${dir}</span><span class=sym>${o.symbol}</span>${status}</div>
+      <div class=instr>${how}</div>
+      <div class=levels>
+        <div class=lvl><span>Entry</span><b class=num>${num(o.entry)}</b></div>
+        <div class="lvl stop"><span>Stop</span><b class=num>${num(o.stop)}</b></div>
+        <div class="lvl tgt"><span>Target +2R</span><b class=num>${num(o.exit_target)}</b></div>
+      </div>
+      <div class=meta>risk <b class=num>${risk.toFixed(2)}</b> pts (1R) · reward +2R · struct target <span class=num>${num(o.structural_target)}</span>
+        · exec score <span class=num>${num(o.execution_score!=null?o.execution_score:sig.confidence)}</span> · weakest ${fmt(o.weakest_factor||sig.weakest_factor)}</div>
+    </div>`;}).join('')+'</div>';
+}
+function kpis(s,opens){
+  const t=[['trades',num(s.scored)],['win rate',num(s.win_rate)],['expectancy R',num(s.expectancy_R)],
+    ['total R',num(s.total_R)],['profit factor',num(s.profit_factor)],['max DD R',num(s.max_drawdown_R)],
+    ['open',opens]];
+  return '<div class=kpis>'+t.map(([k,v])=>`<div class=kpi><span>${k}</span><b class="${cls(typeof v==='number'?v:0)}">${v}</b></div>`).join('')+'</div>';
+}
 function liveTables(rep){
   const s=rep.closed_summary||{}, h=rep.health||{};
-  const kpi=`<div class=card><div class=kpi>
-    <div>trades<b>${num(s.scored)}</b></div><div>wins<b>${num(s.wins)}</b></div>
-    <div>win rate<b>${num(s.win_rate)}</b></div><div>expectancy R<b>${num(s.expectancy_R)}</b></div>
-    <div>total R<b class="${cls(s.total_R)}">${num(s.total_R)}</b></div>
-    <div>profit factor<b>${num(s.profit_factor)}</b></div><div>max DD R<b>${num(s.max_drawdown_R)}</b></div>
-    <div>open<b>${(rep.open_trades||[]).length}</b></div></div></div>`;
-  const health=`<div class=card class=mut>engine: signal ${fmt(h.signal_tf)} / entry ${fmt(h.entry_tf)}
-    · last bar ${JSON.stringify(h.last_signal_bar||{})} · open ${JSON.stringify(h.open_trades||{})}
-    · closed ${JSON.stringify(h.closed_trades||{})}</div>`;
-  const openR=(rep.open_trades||[]).map(o=>`<tr><td>${o.symbol}</td><td>${o.direction}</td><td>${o.status}</td>
-    <td>${num(o.entry)}</td><td>${num(o.stop)}</td><td>${num(o.exit_target)}</td><td>${num(o.structural_target)}</td>
-    <td>${fmt(o.fill_time)}</td></tr>`).join('')||'<tr><td>—</td><td>no open trade</td><td colspan=6></td></tr>';
-  const openT=`<h2>open trades</h2><div class=card scroll><table>
-    <tr><th>symbol<th>dir<th>status<th>entry<th>stop<th>+2R<th>struct tgt<th>fill</tr>${openR}</table></div>`;
+  const strip=`<div class=strip>
+    <span class=chip>signal <b>${fmt(h.signal_tf)}</b></span><span class=chip>entry <b>${fmt(h.entry_tf)}</b></span>
+    <span class=chip>last bar <b>${fmt(Object.values(h.last_signal_bar||{})[0])}</b></span>
+    <span class=chip>open <b>${(rep.open_trades||[]).length}</b></span>
+    <span class=chip>closed <b>${(s.scored!=null?s.scored:0)}</b></span></div>`;
   const closedR=(rep.closed_trades||[]).map(c=>`<tr><td>${fmt(c.close_time)}</td><td>${c.symbol}</td>
-    <td>${c.direction}</td><td>${c.result}</td><td class="${cls(c.result_R)}">${num(c.result_R)}</td>
-    <td>${num(c.mfe_R)}</td><td>${num(c.mae_R)}</td><td>${num(c.bars_held)}</td></tr>`).join('')
-    ||'<tr><td>—</td><td>none yet</td><td colspan=6></td></tr>';
-  const closedT=`<h2>closed trades</h2><div class=card scroll><table>
-    <tr><th>closed<th>symbol<th>dir<th>result<th>R<th>MFE<th>MAE<th>bars</tr>${closedR}</table></div>`;
-  const sigR=(rep.recent_signals||[]).map(s=>{const r=s.reasoning||{};return `<tr>
-    <td>${fmt(s.time)}</td><td>${s.symbol}</td><td><span class="pill ${s.action}">${s.action}</span></td>
-    <td>${fmt(s.structural)}</td><td>${num(s.entry)}</td><td>${num(s.stop)}</td><td>${num(s.exit_target)}</td>
-    <td>${num(s.structural_target)}</td><td>${num(s.confidence)}</td><td>${fmt(s.weakest_factor)}</td>
+    <td>${c.direction}</td><td>${c.result}</td><td class="num ${cls(c.result_R)}">${num(c.result_R)}</td>
+    <td class=num>${num(c.mfe_R)}</td><td class=num>${num(c.mae_R)}</td><td class=num>${num(c.bars_held)}</td></tr>`).join('')
+    ||'<tr><td colspan=8 class=mut>no closed trades yet</td></tr>';
+  const sigR=(rep.recent_signals||[]).map(x=>{const r=x.reasoning||{};return `<tr>
+    <td>${fmt(x.time)}</td><td>${x.symbol}</td><td><span class="tag ${x.action}">${x.action}</span></td>
+    <td>${fmt(x.structural)}</td><td class=num>${num(x.entry)}</td><td class=num>${num(x.stop)}</td>
+    <td class=num>${num(x.exit_target)}</td><td class=num>${num(x.confidence)}</td><td>${fmt(x.weakest_factor)}</td>
     <td>${fmt(r.manipulation)}</td><td>${fmt(r.mss)}</td><td>${fmt(r.fvg)}</td><td>${fmt(r.dealing_range)}</td></tr>`;}).join('')
-    ||'<tr><td>—</td><td>no signals yet</td><td colspan=12></td></tr>';
-  const sigT=`<h2>live signals (incl. SKIP / NO_SETUP)</h2><div class=card scroll><table>
-    <tr><th>time<th>sym<th>action<th>dir<th>entry<th>stop<th>+2R<th>struct tgt<th>score<th>weakest
-    <th>manipulation<th>MSS<th>FVG<th>dealing range</tr>${sigR}</table></div>`;
-  return kpi+openT+closedT+sigT+health;
+    ||'<tr><td colspan=13 class=mut>no signals yet</td></tr>';
+  return `<h2>Actionable now</h2>${tickets(rep)}
+    <h2>Performance (closed trades)</h2>${kpis(s,(rep.open_trades||[]).length)}
+    <h2>Closed trades</h2><div class=scroll><table>
+      <tr><th>closed<th>symbol<th>dir<th>result<th>R<th>MFE<th>MAE<th>bars</tr>${closedR}</table></div>
+    <h2>Signal log</h2>
+    <div class=legend><span class="tag TAKE">TAKE</span> = a trade ticket (shown above).
+      <span class="tag SKIP">SKIP</span> = valid setup the execution filter rejected.
+      <span class="tag NO_SETUP">NO_SETUP</span> = no valid setup this bar. Only TAKE is actionable.</div>
+    <div class=scroll><table>
+      <tr><th>time<th>sym<th>action<th>dir<th>entry<th>stop<th>+2R<th>score<th>weakest<th>manipulation<th>MSS<th>FVG<th>dealing range</tr>
+      ${sigR}</table></div>
+    <div class=strip style="margin-top:14px"><span class=chip>engine 1H·15m · last ${fmt(Object.values(h.last_signal_bar||{})[0])}</span></div>`;
 }
 async function pollLive(){
   try{
     const d=await (await fetch('/live')).json();
-    if(!d.connected){$('#livestate').textContent='live service not connected';
-      $('#live-body').innerHTML=`<div class=card><p>Live service not connected.</p>
-      <p class=mut>Start it with <code>python -m ict_live.live.serve</code>, then it appears here.
-      Error: ${fmt(d.error)}</p></div>`; return;}
-    $('#livestate').textContent='live: connected';
+    if(!d.connected){$('#cdot').className='dot no';$('#livestate').textContent='live service offline';
+      $('#live-body').innerHTML=`<div class="card"><h2 style=margin-top:0>Live service not connected</h2>
+      <p class=mut>Start it with <code>python -m ict_live.live.serve</code> and (for data) the feed bridge,
+      then this fills in automatically.<br>${fmt(d.error)}</p></div>`;return;}
+    $('#cdot').className='dot ok';$('#livestate').textContent='live · connected';
     $('#live-body').innerHTML=liveTables(d.report);
-  }catch(e){$('#livestate').textContent='live poll error';}
+  }catch(e){$('#cdot').className='dot no';$('#livestate').textContent='poll error';}
 }
-setInterval(pollLive,4000); pollLive();
+setInterval(pollLive,4000);pollLive();
 
-// ---------- REPLAY ----------
+// ---------------- REPLAY ----------------
 const COLS=[["scored","trades"],["win_rate","win%"],["expectancy_R","exp R"],["profit_factor","PF"],
  ["max_drawdown_R","maxDD"],["total_R","totR"],["longest_win_streak","Wstk"],["longest_loss_streak","Lstk"],
  ["avg_hold_min","avgHold"],["median_hold_min","medHold"]];
 function statTable(agg){
   let h="<tr><th>period</th>"+COLS.map(c=>"<th>"+c[1]+"</th>").join("")+"</tr>";
-  let rows="<tr><td>OVERALL</td>"+COLS.map(c=>"<td>"+fmt(agg.overall[c[0]])+"</td>").join("")+"</tr>";
+  let rows="<tr><td>OVERALL</td>"+COLS.map(c=>'<td class=num>'+fmt(agg.overall[c[0]])+'</td>').join("")+"</tr>";
   for(const k of Object.keys(agg.periods||{}))
-    rows+="<tr><td>"+k+"</td>"+COLS.map(c=>"<td>"+fmt(agg.periods[k][c[0]])+"</td>").join("")+"</tr>";
-  return "<div class=card scroll><table>"+h+rows+"</table></div>";
+    rows+="<tr><td>"+k+"</td>"+COLS.map(c=>'<td class=num>'+fmt(agg.periods[k][c[0]])+'</td>').join("")+"</tr>";
+  return "<div class=scroll><table>"+h+rows+"</table></div>";
 }
 function renderReplay(job){
   let html="";
-  if(job.state==="error")html+="<div class=card style='border-color:#c33'><b>Error:</b> "+fmt(job.error)+"</div>";
+  if(job.state==="error")html+='<div class=card style="border-color:var(--short)"><b>Error:</b> '+fmt(job.error)+'</div>';
   for(const sym of job.symbols){
     const p=job.progress[sym]||{}, pct=p.total?Math.round(100*p.done/p.total):0;
     const r=job.results[sym], csv=job.csv[sym];
-    html+="<div class=card><h2>"+sym+"</h2>";
-    if(!r)html+="<div class=prog><i style=width:"+pct+"%></i></div> <span class=mut>"+pct+"%</span>";
-    else{html+="<div class=mut>"+r.bars_5m+" 5m bars · "+r.signals+" signals · "+(csv?csv.trades:0)+" trades</div>"
-      +statTable(r);
+    html+='<div class=card><h2 style=margin-top:0>'+sym+'</h2>';
+    if(!r)html+='<div class=prog><i style=width:'+pct+'%></i></div> <span class=mut>'+pct+'%</span>';
+    else{html+='<div class=mut>'+r.bars_5m+' 5m bars · '+r.signals+' signals · '+(csv?csv.trades:0)+' trades</div>'+statTable(r);
       if(csv)html+="<p><a class=dl href='/download?job="+job.id+"&symbol="+encodeURIComponent(sym)+"'>⬇ download trades CSV</a></p>";}
-    html+="</div>";
+    html+='</div>';
   }
   $("#replay-out").innerHTML=html;
 }
 let timer=null;
 async function pollReplay(id){
-  const job=await (await fetch("/status?job="+id)).json();
-  renderReplay(job);
+  const job=await (await fetch("/status?job="+id)).json();renderReplay(job);
   if(job.state==="running")return;
   clearInterval(timer);timer=null;$("#run").disabled=false;$("#msg").textContent=job.state;
 }

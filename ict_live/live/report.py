@@ -68,7 +68,10 @@ def build_report(runner) -> dict:
         for o in tr.open.values():
             open_trades.append({"symbol": sym, **{k: getattr(o, k) for k in
                                ("ticket_id", "direction", "entry", "stop", "exit_target",
-                                "structural_target", "status", "fill_time", "bars_since_fill")}})
+                                "structural_target", "status", "fill_time", "bars_since_fill")},
+                                "reasoning": o.reasoning,
+                                "execution_score": o.reasoning.get("execution_score"),
+                                "weakest_factor": o.reasoning.get("weakest_factor")})
         closed += [c.to_dict() for c in tr.closed]
     closed_sorted = sorted(closed, key=lambda c: c.get("close_time") or "")
     return {

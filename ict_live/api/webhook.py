@@ -3,26 +3,41 @@ maps HTTP <-> IngestResult. FastAPI is imported lazily so importing the engine (
 its tests) needs no web dependency.
 
 Endpoints:
-  POST /webhook/tradingview   ingest one `ict_live.bar.v1` payload (bearer or ?token=)
+  POST /webhook/tradingview   ingest one `ict_live.bar.v1` payload -> run the frozen engine on a
+                              closed signal-TF bar and track any TAKE (bearer or ?token=)
   GET  /status                per-symbol bar counts + forming state + event count
   GET  /health                liveness
+  GET  /report                JSON monitor (open trade, last signals, closed trades, win/expectancy)
+  GET  /report.html           the same as one plain HTML page
+  GET  /signals               recent trade tickets
+  GET  /trades                closed trades
 
-Run: uvicorn ict_live.api.webhook:app  (set ICT_LIVE_TOKEN to require auth)
+Run: uvicorn ict_live.api.webhook:app  (set ICT_LIVE_TOKEN to require auth, ICT_LIVE_STORE for a
+persisted store dir)
 """
 # NOTE: no `from __future__ import annotations` — FastAPI must resolve the real Request/Header
 # types for dependency injection; stringized annotations break it.
 import os
 from typing import Optional
 
-from ict_live.feeds.ingestor import ACCEPTED, DUPLICATE, Ingestor
+from ict_live.feeds.ingestor import ACCEPTED, Ingestor
+from ict_live.live import report as REPORT
+from ict_live.live.runner import LiveRunner
 
 
-def create_app(ingestor: Optional[Ingestor] = None):
+def create_app(ingestor: Optional[Ingestor] = None, runner: Optional[LiveRunner] = None,
+               store_dir: Optional[str] = None):
     from fastapi import FastAPI, Header, Query, Request
+    from fastapi.responses import HTMLResponse
 
-    ing = ingestor or Ingestor(token=os.environ.get("ICT_LIVE_TOKEN") or None)
-    app = FastAPI(title="ict_live ingestion", version="1")
+    if runner is not None:
+        ing = runner.ingestor
+    else:
+        ing = ingestor or Ingestor(token=os.environ.get("ICT_LIVE_TOKEN") or None)
+        runner = LiveRunner(ing, store_dir=store_dir or os.environ.get("ICT_LIVE_STORE") or None)
+    app = FastAPI(title="ict_live", version="1")
     app.state.ingestor = ing
+    app.state.runner = runner
 
     def _token(authorization: Optional[str], token_q: Optional[str]) -> Optional[str]:
         if authorization and authorization.lower().startswith("bearer "):
@@ -37,9 +52,12 @@ def create_app(ingestor: Optional[Ingestor] = None):
             payload = await request.json()
         except Exception:
             payload = None
-        res = ing.ingest(payload if isinstance(payload, dict) else {}, token=_token(authorization, token))
-        return {"status": res.status, "reason": res.reason, "symbol": res.symbol,
-                "closed_htf": [b.timeframe for b in res.closed_htf], "gap_minutes": res.gap_minutes}
+        out = runner.feed(payload if isinstance(payload, dict) else {},
+                          token=_token(authorization, token))
+        ticket = out.get("ticket")
+        return {"status": out.get("status"), "reason": out.get("reason"), "symbol": out.get("symbol"),
+                "action": (ticket.action if ticket else None),
+                "closed_trades": len(out.get("closed_trades", []))}
 
     @app.get("/status")
     async def status():
@@ -48,6 +66,23 @@ def create_app(ingestor: Optional[Ingestor] = None):
     @app.get("/health")
     async def health():
         return {"ok": True}
+
+    @app.get("/report")
+    async def report():
+        return REPORT.build_report(runner)
+
+    @app.get("/report.html", response_class=HTMLResponse)
+    async def report_html():
+        return REPORT.render_html(REPORT.build_report(runner))
+
+    @app.get("/signals")
+    async def signals():
+        return {"recent": runner.recent_signals[-REPORT.RECENT:][::-1]}
+
+    @app.get("/trades")
+    async def trades():
+        rep = REPORT.build_report(runner)
+        return {"closed": rep["closed_trades"], "summary": rep["closed_summary"]}
 
     return app
 

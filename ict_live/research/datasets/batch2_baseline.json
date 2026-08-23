@@ -1,0 +1,10 @@
+{
+ "batch": "queue_batch2",
+ "queue": "ict_live/research/datasets/queue_batch2.jsonl",
+ "engine_version": {
+  "commit": "db80c31",
+  "engine_hash": "70f49887977f"
+ },
+ "pinned_at": "2026-08-22T13:08:23.487796+03:00",
+ "note": "execution-selectivity batch; RECOMMENDATION logic unchanged vs batch-1 (db80c31) \u2014 engine_hash differs only due to annotation-schema/feature/display edits, not decision code"
+}

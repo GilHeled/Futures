@@ -76,6 +76,10 @@ ORG_REBALANCE_NOTE_PCT = 70
 
 # ---------------------------------------------------------------- targets / entry (B4/B8)
 MIN_RR = 3.0                                      # COURSE/RES (B4): reject < 3R; keep >3R target
+# Execution-sanity floor (NOT a fidelity/PnL heuristic, NOT stop-widening): reject only clearly
+# degenerate stops unrealistically small vs tick size / execution noise. Provisional; revisit with
+# real tick+noise analysis. Distinct from the deferred STOP_BUFFER (which would widen stops).
+MIN_STOP_TICKS = 8                                # [NEC:exec] reject risk < 8 ticks as degenerate
 ENTRY_MODE = "CE"                                 # B8 production; {"proximal","CE","distal"}
 ENTRY_MODES = ("proximal", "CE", "distal")        # configurable + recorded per candidate
 FIXED_3R_RESEARCH_MODE = False                    # B4: alternate research mode only

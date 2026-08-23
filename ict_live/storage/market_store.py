@@ -9,6 +9,7 @@ dedupe/ordering/gap DECISIONS live in the Ingestor; this layer only refuses to m
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -26,6 +27,25 @@ class MarketStore:
         self._path = Path(path) if path else None
         if self._path:
             self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._load()
+
+    def _load(self) -> None:
+        """Rebuild the in-memory 1m book from the append-only JSONL (restart recovery). Bars are
+        reconstructed as tz-aware UTC (same instant); resample/calendar convert as needed."""
+        if not self._path or not self._path.exists():
+            return
+        for line in self._path.read_text().splitlines():
+            if not line.strip():
+                continue
+            d = json.loads(line)
+            ot = datetime.fromtimestamp(d["open_ms"] / 1000, tz=timezone.utc)
+            ct = datetime.fromtimestamp(d["close_ms"] / 1000, tz=timezone.utc)
+            bar = Bar("1m", ot, ct, d["o"], d["h"], d["l"], d["c"], d["v"])
+            book = self._bars.setdefault(d["symbol"], {})
+            k = d["open_ms"]
+            book[k] = bar
+            if k > self._last_ms.get(d["symbol"], -1):
+                self._last_ms[d["symbol"]] = k
 
     def get(self, symbol: str, open_ms: int) -> Optional[Bar]:
         return self._bars.get(symbol, {}).get(open_ms)

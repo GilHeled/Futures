@@ -41,6 +41,8 @@ class Setup:
     reject_reason: str        # "" if actionable
     reason: str = ""
     depends_on: tuple[str, ...] = field(default_factory=tuple)
+    structure_tf: str = ""    # TF the sweep/MSS/structure live on
+    entry_tf: str = ""        # TF the entry FVG was refined on (== structure_tf if not refined)
 
 
 @dataclass(frozen=True)
@@ -52,7 +54,8 @@ class Recommendation:
 
 
 def build_setups(fvgs: list[FVG], disp_by_id: dict, sweep_by_id: dict,
-                 active_erl: list[SwingPool], dr_id: Optional[str]) -> list[Setup]:
+                 active_erl: list[SwingPool], dr_id: Optional[str],
+                 structure_tf: str = "", min_stop: Optional[float] = None) -> list[Setup]:
     out: list[Setup] = []
     for f in fvgs:
         d = disp_by_id.get(f.depends_on[0])
@@ -76,7 +79,9 @@ def build_setups(fvgs: list[FVG], disp_by_id: dict, sweep_by_id: dict,
         rr = round(reward / risk, 2) if risk > 0 else 0.0
 
         reject = ""
-        if f.status == "mitigated":
+        if min_stop is not None and risk < min_stop:
+            reject = f"degenerate stop — risk {round(risk,2)} < execution floor {min_stop:g} (unrealistic)"
+        elif f.status == "mitigated":
             reject = "FVG mitigated (invalidated) — no valid entry"
         elif direction == "short" and not entry < stop:
             reject = "geometry: entry not below manipulation extreme (A8)"
@@ -97,8 +102,11 @@ def build_setups(fvgs: list[FVG], disp_by_id: dict, sweep_by_id: dict,
         if target_pool is not None:
             deps.append(ids.pool_id(target_pool))
 
-        why = (f"{direction.upper()} from {f.direction} FVG CE {entry:g} (B8); stop at manipulation "
-               f"extreme {stop:g} (A8); "
+        entry_tf = f.tf or structure_tf
+        tf_note = (f" [structure {structure_tf} · entry refined on {entry_tf}]"
+                   if entry_tf and entry_tf != structure_tf else f" [{structure_tf}]" if structure_tf else "")
+        why = (f"{direction.upper()} from {f.direction} FVG CE {entry:g} (B8){tf_note}; stop at "
+               f"manipulation extreme {stop:g} (A8); "
                + (f"target next opposing liquidity {target:g}; RR {rr} to real liquidity"
                   if target is not None else "no opposing liquidity target")
                + (". ACTIONABLE." if actionable else f". REJECTED: {reject}."))
@@ -106,7 +114,7 @@ def build_setups(fvgs: list[FVG], disp_by_id: dict, sweep_by_id: dict,
             id=ids.setup_id(f.id), direction=direction, entry=float(entry), stop=float(stop),
             target=(float(target) if target is not None else None), rr=rr, risk=round(risk, 2),
             reward=round(reward, 2), actionable=actionable, reject_reason=reject, reason=why,
-            depends_on=tuple(deps),
+            depends_on=tuple(deps), structure_tf=structure_tf, entry_tf=entry_tf,
         ))
     return out
 

@@ -34,6 +34,7 @@ class FVG:
     first_touch_index: Optional[int]
     reason: str = ""
     depends_on: tuple[str, ...] = field(default_factory=tuple)
+    tf: str = ""              # timeframe this FVG lives on (= structure TF, or the entry-refine TF)
 
 
 def _disp_map(displacements: list[Displacement]) -> dict[str, Displacement]:
@@ -89,6 +90,72 @@ def detect_fvgs(mss_list: list[MSS], displacements: list[Displacement],
                 id=fid, direction=d.direction, top=float(top), bottom=float(bottom), ce=float(ce),
                 mid_index=i, formed_index=formed, formed_time=bars[formed].open_time,
                 status=status, first_touch_index=first_touch, reason=why,
-                depends_on=(d.id, m.id),
+                depends_on=(d.id, m.id), tf=(bars[i].timeframe if bars else ""),
             ))
+    return out
+
+
+def _scan_gap(a, c, direction):
+    """A1 geometry helper: returns (top, bottom) if a same-direction gap exists, else None."""
+    if direction == "bullish" and a.high < c.low:
+        return c.low, a.high
+    if direction == "bearish" and a.low > c.high:
+        return a.low, c.high
+    return None
+
+
+def detect_fvgs_mtf(mss_list: list[MSS], htf_disp_by_id: dict, htf_bars: list[Bar],
+                    refine_bars: list[Bar]) -> list[FVG]:
+    """MTF entry refinement (general mechanism): the HTF sweep/displacement/MSS are fixed; for each
+    HTF MSS we open a LOWER-TF window (causal — from the HTF displacement start onward) and detect
+    the entry FVG THERE, in the HTF direction. The LTF only refines the ENTRY; it never redefines
+    the HTF manipulation/ERL/MSS. Each LTF FVG depends on the same HTF displacement + MSS.
+    """
+    if not refine_bars:
+        return []
+    etf = refine_bars[0].timeframe
+    out: list[FVG] = []
+    seen: set[str] = set()
+    for m in mss_list:
+        d = htf_disp_by_id.get(m.depends_on[0] if m.depends_on else None)
+        if d is None or d.start_index >= len(htf_bars):
+            continue
+        window_open = htf_bars[d.start_index].open_time          # entry window opens post-manip (causal)
+        idxs = [j for j, b in enumerate(refine_bars) if b.open_time >= window_open]
+        for j in idxs:
+            if j - 1 < idxs[0] or j + 1 >= len(refine_bars):
+                continue
+            geo = _scan_gap(refine_bars[j - 1], refine_bars[j + 1], d.direction)
+            if geo is None:
+                continue
+            top, bottom = geo
+            fid = f"{ids.fvg_id(j, d.direction)}@{etf}"
+            if fid in seen:
+                continue
+            seen.add(fid)
+            ce = (top + bottom) / 2.0
+            formed = j + 1
+            first_touch, mitigated = None, False
+            for k in range(formed + 1, len(refine_bars)):
+                b = refine_bars[k]
+                if d.direction == "bearish":
+                    if first_touch is None and b.high >= ce:
+                        first_touch = k
+                    if b.close > top:
+                        mitigated = True
+                        break
+                else:
+                    if first_touch is None and b.low <= ce:
+                        first_touch = k
+                    if b.close < bottom:
+                        mitigated = True
+                        break
+            status = "mitigated" if mitigated else ("touched" if first_touch is not None else "unfilled")
+            why = (f"{d.direction} entry FVG [{bottom:g}, {top:g}] (CE {ce:g}) refined on {etf} inside "
+                   f"HTF displacement {d.id}; status={status}. Entry refinement only — HTF "
+                   f"manipulation/MSS unchanged. Depends on displacement {d.id} and MSS {m.id}.")
+            out.append(FVG(id=fid, direction=d.direction, top=float(top), bottom=float(bottom),
+                           ce=float(ce), mid_index=j, formed_index=formed,
+                           formed_time=refine_bars[formed].open_time, status=status,
+                           first_touch_index=first_touch, reason=why, depends_on=(d.id, m.id), tf=etf))
     return out

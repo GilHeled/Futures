@@ -62,6 +62,25 @@ def test_reject_mitigated_fvg():
     assert not s.actionable and "mitigated" in s.reject_reason
 
 
+def test_degenerate_stop_rejected_as_execution_unrealistic():
+    # short entry 100, stop 100.5 -> risk 0.5; min_stop 2.0 -> rejected as degenerate (not RR/PnL)
+    fvg = _fvg("bearish", 100.0)
+    s = build_setups([fvg], {"D": _disp("bearish", "S")}, {"S": _sweep(100.5)},
+                     [_pool("low", 90.0, 2)], None, min_stop=2.0)[0]
+    assert not s.actionable and "degenerate stop" in s.reject_reason
+    # same setup with no floor is not degenerate-rejected
+    s2 = build_setups([fvg], {"D": _disp("bearish", "S")}, {"S": _sweep(100.5)},
+                      [_pool("low", 90.0, 2)], None)[0]
+    assert "degenerate" not in s2.reject_reason
+
+
+def test_setup_records_structure_and_entry_tf():
+    fvg = _fvg("bearish", 100.0)
+    s = build_setups([fvg], {"D": _disp("bearish", "S")}, {"S": _sweep(102.0)},
+                     [_pool("low", 92.0, 2)], None, structure_tf="1H")[0]
+    assert s.structure_tf == "1H"        # entry_tf falls back to structure_tf when FVG.tf empty
+
+
 def test_reject_no_target():
     fvg = _fvg("bearish", 100.0)
     s = build_setups([fvg], {"D": _disp("bearish", "S")}, {"S": _sweep(102.0)}, [], None)[0]

@@ -1,0 +1,335 @@
+<title>MNQ Reasoning Graph</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root {
+  --bg:#eef1f4; --surface:#ffffff; --surface2:#f5f8fb; --ink:#0f1720; --muted:#5b6b7a;
+  --line:#d5dee7; --link:#0e7490; --ok:#15803d; --no:#b91c1c; --warn:#b45309; --teal:#0891b2;
+  --okbg:#dcfce7; --nobg:#fee2e2; --warnbg:#fef3c7; --tealbg:#cffafe; --mutbg:#e8edf2;
+}
+:root:not([data-theme="light"]) { }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:#0b1015; --surface:#131c25; --surface2:#0f1720; --ink:#e7eef5; --muted:#8ea0b0;
+    --line:#233140; --link:#22d3ee; --ok:#4ade80; --no:#f87171; --warn:#fbbf24; --teal:#38bdf8;
+    --okbg:#0f2a1a; --nobg:#2a1315; --warnbg:#2a2110; --tealbg:#0c2530; --mutbg:#1a2430;
+  }
+}
+:root[data-theme="dark"] {
+  --bg:#0b1015; --surface:#131c25; --surface2:#0f1720; --ink:#e7eef5; --muted:#8ea0b0;
+  --line:#233140; --link:#22d3ee; --ok:#4ade80; --no:#f87171; --warn:#fbbf24; --teal:#38bdf8;
+  --okbg:#0f2a1a; --nobg:#2a1315; --warnbg:#2a2110; --tealbg:#0c2530; --mutbg:#1a2430;
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink);
+  font-family:"IBM Plex Sans",system-ui,sans-serif; line-height:1.5;
+  font-variant-numeric:tabular-nums; }
+.wrap { max-width:1000px; margin:0 auto; padding:32px 20px 80px; }
+code, .facs, .num { font-family:"IBM Plex Mono",ui-monospace,monospace; }
+h1 { font-size:15px; font-weight:600; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--muted); margin:0 0 4px; }
+.scene { font-family:"IBM Plex Mono",monospace; color:var(--muted); font-size:13px; margin-bottom:20px; }
+.banner { background:var(--surface); border:1px solid var(--line); border-radius:14px;
+  padding:22px 24px; display:flex; gap:22px; align-items:center; flex-wrap:wrap;
+  border-left:6px solid var(--dec-accent); }
+.banner.ok { --dec-accent:var(--ok); } .banner.no { --dec-accent:var(--no); }
+.banner.mut { --dec-accent:var(--muted); }
+.decision { font-size:40px; font-weight:700; letter-spacing:-.02em; color:var(--dec-accent);
+  line-height:1; }
+.rr { font-family:"IBM Plex Mono",monospace; font-size:22px; font-weight:600; }
+.rr small { color:var(--muted); font-size:12px; font-weight:500; display:block; letter-spacing:.1em;
+  text-transform:uppercase; }
+.rec-reason { flex:1 1 320px; color:var(--muted); font-size:13.5px; }
+.counts { margin:10px 0 30px; color:var(--muted); font-size:12.5px; font-family:"IBM Plex Mono",monospace; }
+h2 { font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted);
+  margin:34px 0 14px; padding-bottom:8px; border-bottom:1px solid var(--line); }
+.spine { display:flex; flex-direction:column; align-items:stretch; gap:0; }
+.spine-conn { width:2px; height:18px; background:var(--line); margin:0 auto; }
+.card { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+.card.win { border-color:var(--link); box-shadow:0 0 0 1px var(--link) inset; }
+.card-h { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:6px; }
+.kind { font-size:11px; letter-spacing:.12em; text-transform:uppercase; font-weight:600; color:var(--link); }
+.rk { font-family:"IBM Plex Mono",monospace; font-weight:600; font-size:13px; }
+.id { font-size:12px; color:var(--muted); }
+.why { font-size:13px; color:var(--ink); }
+.facs { display:flex; flex-wrap:wrap; gap:6px 12px; margin-top:8px; }
+.fac { font-size:11.5px; color:var(--muted); } .fac b { color:var(--ink); font-weight:600; margin-right:4px; }
+.rej { margin-top:6px; font-size:12px; color:var(--no); }
+.pill { font-size:10.5px; font-weight:600; padding:2px 8px; border-radius:999px; letter-spacing:.04em;
+  text-transform:uppercase; }
+.pill.ok { background:var(--okbg); color:var(--ok); } .pill.no { background:var(--nobg); color:var(--no); }
+.pill.warn { background:var(--warnbg); color:var(--warn); } .pill.teal { background:var(--tealbg); color:var(--teal); }
+.pill.mut { background:var(--mutbg); color:var(--muted); }
+.layer { margin-bottom:26px; }
+.layer h3 { font-size:14px; font-weight:600; margin:0 0 10px; display:flex; gap:10px; align-items:baseline; }
+.cnt { font-size:11px; color:var(--muted); font-weight:500; font-family:"IBM Plex Mono",monospace; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+.layer { overflow-x:auto; }
+th { text-align:left; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted);
+  font-weight:600; padding:6px 10px; border-bottom:1px solid var(--line); }
+td { padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+tr.win td { background:color-mix(in srgb, var(--link) 8%, transparent); }
+td.num { font-family:"IBM Plex Mono",monospace; font-weight:600; white-space:nowrap; }
+td.lost { color:var(--muted); font-size:12px; }
+details { background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:10px 14px; margin-bottom:10px; }
+summary { cursor:pointer; font-weight:600; font-size:13px; }
+ul.inv { list-style:none; padding:0; margin:12px 0 0; display:flex; flex-direction:column; gap:12px; }
+ul.inv .dep { font-size:11px; color:var(--muted); margin-left:8px; }
+.empty { color:var(--muted); background:var(--surface2); border:1px dashed var(--line);
+  border-radius:12px; padding:18px; text-align:center; }
+</style>
+<div class="wrap">
+  <h1>ICT Engine · Reasoning Graph</h1>
+  <div class="scene">MNQ · MNQH24 · 1H · 2024-01-08T09:00:00-05:00 · window 108 bars</div>
+  <div class="banner ok">
+    <div class="decision">LONG</div>
+    <div class="rr">4.02<small>reward : risk</small></div>
+    <div class="rec-reason">Top actionable setup #1: LONG from bullish FVG CE 16448.2 (B8); stop at manipulation extreme 16378.2 (A8); target next opposing liquidity 16729.5; RR 4.02 to real liquidity. ACTIONABLE.</div>
+  </div>
+  <div class="counts">22 structural · 6 active ERL · 3 sweeps · 3 MSS · 2 FVG · 2 setups</div>
+
+  <h2>Winning reasoning spine</h2>
+  <div class="spine"><div class="card win">
+      <div class="card-h"><span class="kind">setup</span><span class="rk">#1</span>
+        <code class="id">SETUP:FVG104U</code><span class="pill ok">actionable</span></div>
+      <div class="why">LONG from bullish FVG CE 16448.2 (B8); stop at manipulation extreme 16378.2 (A8); target next opposing liquidity 16729.5; RR 4.02 to real liquidity. ACTIONABLE.</div>
+      <div class="facs"><span class="fac"><b>actionable</b>1</span> <span class="fac"><b>rr</b>4.02</span> <span class="fac"><b>tight_risk</b>-70</span></div>
+    </div><div class="spine-conn"></div><div class="card win">
+      <div class="card-h"><span class="kind">fvg</span><span class="rk">#1</span>
+        <code class="id">FVG104U</code><span class="pill teal">unfilled</span></div>
+      <div class="why">bullish FVG [16444.2, 16452.2] (CE 16448.2) formed at bar 105 inside displacement DISP102-107U; status=unfilled. Depends on displacement DISP102-107U and MSS MSS102x94U.</div>
+      <div class="facs"><span class="fac"><b>status</b>2</span> <span class="fac"><b>size</b>8</span> <span class="fac"><b>recency</b>105</span></div>
+    </div><div class="spine-conn"></div><div class="card win">
+      <div class="card-h"><span class="kind">mss</span><span class="rk">#1</span>
+        <code class="id">MSS102x94U</code><span class="pill ok">confirmed</span></div>
+      <div class="why">bullish MSS: pre-manipulation structural high 16500 (bar 94) is the structure being reversed; body close 16628.5 beyond it at bar 107 (acceptance 128.5) → structure shifted bullish. Depends on displacement DISP102-107U.</div>
+      <div class="facs"><span class="fac"><b>state</b>2</span> <span class="fac"><b>broken_dominant</b>0</span> <span class="fac"><b>acceptance</b>128.5</span> <span class="fac"><b>recency</b>94</span></div>
+    </div><div class="spine-conn"></div><div class="card win">
+      <div class="card-h"><span class="kind">displacement</span><span class="rk">#1</span>
+        <code class="id">DISP102-107U</code><span class="pill warn">in_progress</span></div>
+      <div class="why">bullish displacement from manipulation extreme 16378.2 (bar 102) to 16633.5 (bar 107); net 255.25 over 5 bars; still in progress at cursor (no counter-pivot yet). Depends on manipulation SWP90L@102.</div>
+      <div class="facs"><span class="fac"><b>net_move</b>255.25</span> <span class="fac"><b>speed</b>51.05</span> <span class="fac"><b>exhausted</b>0</span> <span class="fac"><b>recency</b>102</span></div>
+    </div><div class="spine-conn"></div><div class="card win">
+      <div class="card-h"><span class="kind">manipulation</span><span class="rk">#1</span>
+        <code class="id">SWP90L@102</code><span class="pill ok">bullish</span></div>
+      <div class="why">sell-side (SSL) liquidity at 16403.5 (ERL from structural low) raided — wick to 16378.2 at bar 102 (2024-01-08T04:00:00-05:00), then rejected (close 16419.5 back above 16403.5) → bullish manipulation. Manipulation extreme = 16378.2.</div>
+      <div class="facs"><span class="fac"><b>dominant_pool</b>0</span> <span class="fac"><b>pd_aligned</b>1</span> <span class="fac"><b>rejection_strength</b>0.634</span> <span class="fac"><b>recency</b>102</span></div>
+    </div><div class="spine-conn"></div><div class="card win">
+      <div class="card-h"><span class="kind">erl</span>
+        <code class="id">ERL32H</code><span class="pill teal">active</span></div>
+      <div class="why">structural high; buy-side (BSL) liquidity still resting (unswept as of cursor) → active draw</div>
+      <div class="facs"></div>
+    </div><div class="spine-conn"></div><div class="card win">
+      <div class="card-h"><span class="kind">erl</span>
+        <code class="id">ERL90L</code><span class="pill mut">swept</span></div>
+      <div class="why">structural low; sell-side (SSL) liquidity taken — wick traded through 16403.5 at bar 102 (2024-01-08T04:00:00-05:00)</div>
+      <div class="facs"></div>
+    </div><div class="spine-conn"></div><div class="card win">
+      <div class="card-h"><span class="kind">swing</span>
+        <code class="id">SW94H</code><span class="pill mut">broken</span></div>
+      <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton) · later body close traded beyond it</div>
+      <div class="facs"></div>
+    </div><div class="spine-conn"></div><div class="card win">
+      <div class="card-h"><span class="kind">swing</span>
+        <code class="id">SW32H</code><span class="pill mut">structural</span></div>
+      <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton)</div>
+      <div class="facs"></div>
+    </div><div class="spine-conn"></div><div class="card win">
+      <div class="card-h"><span class="kind">swing</span>
+        <code class="id">SW90L</code><span class="pill mut">structural</span></div>
+      <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton)</div>
+      <div class="facs"></div>
+    </div><div class="spine-conn"></div><div class="card win">
+      <div class="card-h"><span class="kind">dealing_range</span>
+        <code class="id">DR-1H</code><span class="pill mut">down</span></div>
+      <div class="why">[1H] most recent completed structural leg: high→low (16378.2 @ 2024-01-08T04:00:00-05:00 ↔ 16500 @ 2024-01-07T20:00:00-05:00); CE(50%)=16439.1. Premium above CE, Discount below. (Which TF&#x27;s range is relevant is a CONTEXT decision, not made here.)</div>
+      <div class="facs"></div>
+    </div></div>
+
+  <h2>Competing candidates — ranked, not filtered</h2>
+  <section class="layer">
+          <h3>Manipulation — liquidity sweep <span class="cnt">3 candidates</span></h3>
+          <table><thead><tr><th>rank</th><th>object</th><th>ranking factors</th>
+            <th>why it ranked below / rejection</th></tr></thead>
+          <tbody><tr class="win">
+              <td class="num">#1</td>
+              <td><code>SWP90L@102</code> <span class="pill ok">bullish</span></td>
+              <td class="facs"><span class="fac"><b>dominant_pool</b>0</span> <span class="fac"><b>pd_aligned</b>1</span> <span class="fac"><b>rejection_strength</b>0.634</span> <span class="fac"><b>recency</b>102</span></td>
+              <td class="lost">— top —</td>
+            </tr><tr class="">
+              <td class="num">#2</td>
+              <td><code>SWP39L@43</code> <span class="pill ok">bullish</span></td>
+              <td class="facs"><span class="fac"><b>dominant_pool</b>0</span> <span class="fac"><b>pd_aligned</b>0</span> <span class="fac"><b>rejection_strength</b>3.298</span> <span class="fac"><b>recency</b>43</span></td>
+              <td class="lost">dominant_pool equal (0); pd_aligned: 0 &lt; 1 ← decides</td>
+            </tr><tr class="">
+              <td class="num">#3</td>
+              <td><code>SWP61L@67</code> <span class="pill ok">bullish</span></td>
+              <td class="facs"><span class="fac"><b>dominant_pool</b>0</span> <span class="fac"><b>pd_aligned</b>0</span> <span class="fac"><b>rejection_strength</b>0.138</span> <span class="fac"><b>recency</b>67</span></td>
+              <td class="lost">dominant_pool equal (0); pd_aligned equal (0); rejection_strength: 0.138 &lt; 3.298 ← decides</td>
+            </tr></tbody></table>
+        </section><section class="layer">
+          <h3>Displacement <span class="cnt">3 candidates</span></h3>
+          <table><thead><tr><th>rank</th><th>object</th><th>ranking factors</th>
+            <th>why it ranked below / rejection</th></tr></thead>
+          <tbody><tr class="win">
+              <td class="num">#1</td>
+              <td><code>DISP102-107U</code> <span class="pill warn">in_progress</span></td>
+              <td class="facs"><span class="fac"><b>net_move</b>255.25</span> <span class="fac"><b>speed</b>51.05</span> <span class="fac"><b>exhausted</b>0</span> <span class="fac"><b>recency</b>102</span></td>
+              <td class="lost">— top —</td>
+            </tr><tr class="">
+              <td class="num">#2</td>
+              <td><code>DISP43-47U</code> <span class="pill teal">exhausted</span></td>
+              <td class="facs"><span class="fac"><b>net_move</b>34</span> <span class="fac"><b>speed</b>8.5</span> <span class="fac"><b>exhausted</b>1</span> <span class="fac"><b>recency</b>43</span></td>
+              <td class="lost">net_move: 34 &lt; 255.25 ← decides</td>
+            </tr><tr class="">
+              <td class="num">#3</td>
+              <td><code>DISP67-69U</code> <span class="pill teal">exhausted</span></td>
+              <td class="facs"><span class="fac"><b>net_move</b>33.25</span> <span class="fac"><b>speed</b>16.625</span> <span class="fac"><b>exhausted</b>1</span> <span class="fac"><b>recency</b>67</span></td>
+              <td class="lost">net_move: 33.25 &lt; 34 ← decides</td>
+            </tr></tbody></table>
+        </section><section class="layer">
+          <h3>Market Structure Shift <span class="cnt">3 candidates</span></h3>
+          <table><thead><tr><th>rank</th><th>object</th><th>ranking factors</th>
+            <th>why it ranked below / rejection</th></tr></thead>
+          <tbody><tr class="win">
+              <td class="num">#1</td>
+              <td><code>MSS102x94U</code> <span class="pill ok">confirmed</span></td>
+              <td class="facs"><span class="fac"><b>state</b>2</span> <span class="fac"><b>broken_dominant</b>0</span> <span class="fac"><b>acceptance</b>128.5</span> <span class="fac"><b>recency</b>94</span></td>
+              <td class="lost">— top —</td>
+            </tr><tr class="">
+              <td class="num">#2</td>
+              <td><code>MSS67x63U</code> <span class="pill ok">confirmed</span></td>
+              <td class="facs"><span class="fac"><b>state</b>2</span> <span class="fac"><b>broken_dominant</b>0</span> <span class="fac"><b>acceptance</b>44.5</span> <span class="fac"><b>recency</b>63</span></td>
+              <td class="lost">state equal (2); broken_dominant equal (0); acceptance: 44.5 &lt; 128.5 ← decides</td>
+            </tr><tr class="">
+              <td class="num">#3</td>
+              <td><code>MSS43x32U</code> <span class="pill mut">potential</span></td>
+              <td class="facs"><span class="fac"><b>state</b>0</span> <span class="fac"><b>broken_dominant</b>0</span> <span class="fac"><b>acceptance</b>0</span> <span class="fac"><b>recency</b>32</span></td>
+              <td class="lost">state: 0 &lt; 2 ← decides</td>
+            </tr></tbody></table>
+        </section><section class="layer">
+          <h3>Fair Value Gap <span class="cnt">2 candidates</span></h3>
+          <table><thead><tr><th>rank</th><th>object</th><th>ranking factors</th>
+            <th>why it ranked below / rejection</th></tr></thead>
+          <tbody><tr class="win">
+              <td class="num">#1</td>
+              <td><code>FVG104U</code> <span class="pill teal">unfilled</span></td>
+              <td class="facs"><span class="fac"><b>status</b>2</span> <span class="fac"><b>size</b>8</span> <span class="fac"><b>recency</b>105</span></td>
+              <td class="lost">— top —</td>
+            </tr><tr class="">
+              <td class="num">#2</td>
+              <td><code>FVG105U</code> <span class="pill teal">unfilled</span></td>
+              <td class="facs"><span class="fac"><b>status</b>2</span> <span class="fac"><b>size</b>2.5</span> <span class="fac"><b>recency</b>106</span></td>
+              <td class="lost">status equal (2); size: 2.5 &lt; 8 ← decides</td>
+            </tr></tbody></table>
+        </section><section class="layer">
+          <h3>Setup (entry / stop / target) <span class="cnt">2 candidates</span></h3>
+          <table><thead><tr><th>rank</th><th>object</th><th>ranking factors</th>
+            <th>why it ranked below / rejection</th></tr></thead>
+          <tbody><tr class="win">
+              <td class="num">#1</td>
+              <td><code>SETUP:FVG104U</code> <span class="pill ok">actionable</span></td>
+              <td class="facs"><span class="fac"><b>actionable</b>1</span> <span class="fac"><b>rr</b>4.02</span> <span class="fac"><b>tight_risk</b>-70</span></td>
+              <td class="lost">— top —</td>
+            </tr><tr class="">
+              <td class="num">#2</td>
+              <td><code>SETUP:FVG105U</code> <span class="pill no">rejected</span></td>
+              <td class="facs"><span class="fac"><b>actionable</b>0</span> <span class="fac"><b>rr</b>2.9</span> <span class="fac"><b>tight_risk</b>-90</span></td>
+              <td class="lost">actionable: 0 &lt; 1 ← decides<div class="rej">RR 2.9 &lt; MIN_RR 3.0 to real liquidity (B4)</div></td>
+            </tr></tbody></table>
+        </section>
+
+  <h2>Foundation objects</h2>
+  <details><summary>dealing_range <span class="cnt">1</span></summary><ul class="inv"><li><code>DR-1H</code> <span class="pill mut">down</span>
+            <span class="dep">deps 0 · children 2</span>
+            <div class="why">[1H] most recent completed structural leg: high→low (16378.2 @ 2024-01-08T04:00:00-05:00 ↔ 16500 @ 2024-01-07T20:00:00-05:00); CE(50%)=16439.1. Premium above CE, Discount below. (Which TF&#x27;s range is relevant is a CONTEXT decision, not made here.)</div></li></ul></details><details><summary>erl <span class="cnt">22</span></summary><ul class="inv"><li><code>ERL2H</code> <span class="pill teal">active</span>
+            <span class="dep">deps 1 · children 0</span>
+            <div class="why">structural high; buy-side (BSL) liquidity still resting (unswept as of cursor) → active draw</div></li><li><code>ERL3L</code> <span class="pill mut">swept</span>
+            <span class="dep">deps 1 · children 0</span>
+            <div class="why">structural low; sell-side (SSL) liquidity taken — wick traded through 17001 at bar 10 (2024-01-02T04:00:00-05:00)</div></li><li><code>ERL9H</code> <span class="pill teal">active</span>
+            <span class="dep">deps 1 · children 0</span>
+            <div class="why">structural high; buy-side (BSL) liquidity still resting (unswept as of cursor) → active draw</div></li><li><code>ERL21L</code> <span class="pill mut">swept</span>
+            <span class="dep">deps 1 · children 0</span>
+            <div class="why">structural low; sell-side (SSL) liquidity taken — wick traded through 16622 at bar 36 (2024-01-03T07:00:00-05:00)</div></li><li><code>ERL23H</code> <span class="pill teal">active</span>
+            <span class="dep">deps 1 · children 0</span>
+            <div class="why">structural high; buy-side (BSL) liquidity still resting (unswept as of cursor) → active draw</div></li><li><code>ERL29L</code> <span class="pill mut">swept</span>
+            <span class="dep">deps 1 · children 0</span>
+            <div class="why">structural low; sell-side (SSL) liquidity taken — wick traded through 16688.5 at bar 32 (2024-01-03T03:00:00-05:00)</div></li><li><code>ERL32H</code> <span class="pill teal">active</span>
+            <span class="dep">deps 1 · children 2</span>
+            <div class="why">structural high; buy-side (BSL) liquidity still resting (unswept as of cursor) → active draw</div></li><li><code>ERL39L</code> <span class="pill mut">swept</span>
+            <span class="dep">deps 1 · children 1</span>
+            <div class="why">structural low; sell-side (SSL) liquidity taken — wick traded through 16543.5 at bar 43 (2024-01-03T14:00:00-05:00)</div></li><li><code>ERL43H</code> <span class="pill mut">swept</span>
+            <span class="dep">deps 1 · children 0</span>
+            <div class="why">structural high; buy-side (BSL) liquidity taken — wick traded through 16628.5 at bar 107 (2024-01-08T09:00:00-05:00)</div></li><li><code>ERL44L</code> <span class="pill mut">swept</span>
+            <span class="dep">deps 1 · children 0</span>
+            <div class="why">structural low; sell-side (SSL) liquidity taken — wick traded through 16522.2 at bar 59 (2024-01-04T07:00:00-05:00)</div></li><li><code>ERL47H</code> <span class="pill mut">swept</span>
+            <span class="dep">deps 1 · children 0</span>
+            <div class="why">structural high; buy-side (BSL) liquidity taken — wick traded through 16563.2 at bar 53 (2024-01-04T01:00:00-05:00)</div></li><li><code>ERL53L</code> <span class="pill mut">swept</span>
+            <span class="dep">deps 1 · children 0</span>
+            <div class="why">structural low; sell-side (SSL) liquidity taken — wick traded through 16539.8 at bar 58 (2024-01-04T06:00:00-05:00)</div></li><li><code>ERL54H</code> <span class="pill mut">swept</span>
+            <span class="dep">deps 1 · children 0</span>
+            <div class="why">structural high; buy-side (BSL) liquidity taken — wick traded through 16587.2 at bar 107 (2024-01-08T09:00:00-05:00)</div></li><li><code>ERL61L</code> <span class="pill mut">swept</span>
+            <span class="dep">deps 1 · children 1</span>
+            <div class="why">structural low; sell-side (SSL) liquidity taken — wick traded through 16443 at bar 67 (2024-01-04T15:00:00-05:00)</div></li><li><code>ERL63H</code> <span class="pill mut">swept</span>
+            <span class="dep">deps 1 · children 0</span>
+            <div class="why">structural high; buy-side (BSL) liquidity taken — wick traded through 16584 at bar 107 (2024-01-08T09:00:00-05:00)</div></li><li><code>ERL67L</code> <span class="pill mut">swept</span>
+            <span class="dep">deps 1 · children 0</span>
+            <div class="why">structural low; sell-side (SSL) liquidity taken — wick traded through 16435.8 at bar 75 (2024-01-05T00:00:00-05:00)</div></li><li><code>ERL71H</code> <span class="pill mut">swept</span>
+            <span class="dep">deps 1 · children 0</span>
+            <div class="why">structural high; buy-side (BSL) liquidity taken — wick traded through 16469.2 at bar 84 (2024-01-05T09:00:00-05:00)</div></li><li><code>ERL83L</code> <span class="pill teal">active</span>
+            <span class="dep">deps 1 · children 0</span>
+            <div class="why">structural low; sell-side (SSL) liquidity still resting (unswept as of cursor) → active draw</div></li><li><code>ERL86H</code> <span class="pill mut">swept</span>
+            <span class="dep">deps 1 · children 0</span>
+            <div class="why">structural high; buy-side (BSL) liquidity taken — wick traded through 16577 at bar 107 (2024-01-08T09:00:00-05:00)</div></li><li><code>ERL90L</code> <span class="pill mut">swept</span>
+            <span class="dep">deps 1 · children 1</span>
+            <div class="why">structural low; sell-side (SSL) liquidity taken — wick traded through 16403.5 at bar 102 (2024-01-08T04:00:00-05:00)</div></li><li><code>ERL94H</code> <span class="pill mut">swept</span>
+            <span class="dep">deps 1 · children 0</span>
+            <div class="why">structural high; buy-side (BSL) liquidity taken — wick traded through 16500 at bar 107 (2024-01-08T09:00:00-05:00)</div></li><li><code>ERL102L</code> <span class="pill teal">active</span>
+            <span class="dep">deps 1 · children 0</span>
+            <div class="why">structural low; sell-side (SSL) liquidity still resting (unswept as of cursor) → active draw</div></li></ul></details><details><summary>swing <span class="cnt">22</span></summary><ul class="inv"><li><code>SW2H</code> <span class="pill mut">dominant</span>
+            <span class="dep">deps 0 · children 1</span>
+            <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton) · dominant: degree-2 extreme (beyond adjacent same-kind structural swings)</div></li><li><code>SW3L</code> <span class="pill mut">broken</span>
+            <span class="dep">deps 0 · children 1</span>
+            <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton) · later body close traded beyond it</div></li><li><code>SW9H</code> <span class="pill mut">structural</span>
+            <span class="dep">deps 0 · children 1</span>
+            <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton)</div></li><li><code>SW21L</code> <span class="pill mut">dominant/broken</span>
+            <span class="dep">deps 0 · children 1</span>
+            <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton) · dominant: degree-2 extreme (beyond adjacent same-kind structural swings) · later body close traded beyond it</div></li><li><code>SW23H</code> <span class="pill mut">structural</span>
+            <span class="dep">deps 0 · children 1</span>
+            <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton)</div></li><li><code>SW29L</code> <span class="pill mut">broken</span>
+            <span class="dep">deps 0 · children 1</span>
+            <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton) · later body close traded beyond it</div></li><li><code>SW32H</code> <span class="pill mut">structural</span>
+            <span class="dep">deps 0 · children 2</span>
+            <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton)</div></li><li><code>SW39L</code> <span class="pill mut">broken</span>
+            <span class="dep">deps 0 · children 1</span>
+            <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton) · later body close traded beyond it</div></li><li><code>SW43H</code> <span class="pill mut">protected</span>
+            <span class="dep">deps 0 · children 1</span>
+            <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton) · protected: current standing unbroken extreme of its side</div></li><li><code>SW44L</code> <span class="pill mut">dominant/broken</span>
+            <span class="dep">deps 0 · children 1</span>
+            <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton) · dominant: degree-2 extreme (beyond adjacent same-kind structural swings) · later body close traded beyond it</div></li><li><code>SW47H</code> <span class="pill mut">broken</span>
+            <span class="dep">deps 0 · children 1</span>
+            <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton) · later body close traded beyond it</div></li><li><code>SW53L</code> <span class="pill mut">broken</span>
+            <span class="dep">deps 0 · children 1</span>
+            <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton) · later body close traded beyond it</div></li><li><code>SW54H</code> <span class="pill mut">dominant/broken</span>
+            <span class="dep">deps 0 · children 1</span>
+            <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton) · dominant: degree-2 extreme (beyond adjacent same-kind structural swings) · later body close traded beyond it</div></li><li><code>SW61L</code> <span class="pill mut">broken</span>
+            <span class="dep">deps 0 · children 1</span>
+            <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton) · later body close traded beyond it</div></li><li><code>SW63H</code> <span class="pill mut">broken</span>
+            <span class="dep">deps 0 · children 2</span>
+            <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton) · later body close traded beyond it</div></li><li><code>SW67L</code> <span class="pill mut">broken</span>
+            <span class="dep">deps 0 · children 1</span>
+            <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton) · later body close traded beyond it</div></li><li><code>SW71H</code> <span class="pill mut">broken</span>
+            <span class="dep">deps 0 · children 1</span>
+            <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton) · later body close traded beyond it</div></li><li><code>SW83L</code> <span class="pill mut">dominant</span>
+            <span class="dep">deps 0 · children 1</span>
+            <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton) · dominant: degree-2 extreme (beyond adjacent same-kind structural swings)</div></li><li><code>SW86H</code> <span class="pill mut">dominant/broken</span>
+            <span class="dep">deps 0 · children 1</span>
+            <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton) · dominant: degree-2 extreme (beyond adjacent same-kind structural swings) · later body close traded beyond it</div></li><li><code>SW90L</code> <span class="pill mut">structural</span>
+            <span class="dep">deps 0 · children 1</span>
+            <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton)</div></li><li><code>SW94H</code> <span class="pill mut">broken</span>
+            <span class="dep">deps 0 · children 2</span>
+            <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton) · later body close traded beyond it</div></li><li><code>SW102L</code> <span class="pill mut">dominant/protected</span>
+            <span class="dep">deps 0 · children 1</span>
+            <div class="why">alternating structural pivot (HH/HL/LH/LL skeleton) · dominant: degree-2 extreme (beyond adjacent same-kind structural swings) · protected: current standing unbroken extreme of its side</div></li></ul></details>
+</div>

@@ -1,0 +1,10 @@
+{
+ "batch": "queue_batch1",
+ "queue": "ict_live/research/datasets/queue_batch1.jsonl",
+ "engine_version": {
+  "commit": "db80c31",
+  "engine_hash": "0ef8e5ed81ce"
+ },
+ "pinned_at": "2026-08-22T11:39:43.898459+03:00",
+ "note": "all 60 annotations must reference this deterministic baseline; no methodology changes mid-batch"
+}

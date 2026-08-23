@@ -24,16 +24,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-from ict_live import config as C
 from ict_live.devtools.tvmcp import overlay
 from ict_live.devtools.tvmcp.client import TvClient
 from ict_live.devtools.tvmcp.probe import latest_ts, to_epoch
+from ict_live.engine import pipeline
 from ict_live.market.bar import Bar
 from ict_live.market.calendar import ET
-from ict_live.structure import (dealing_range, displacement, fvg as fvg_mod, ids, manipulation,
-                                 mss as mss_mod, ranking, setup as setup_mod, significance,
-                                 swing_liquidity)
-from ict_live.structure.swings import SwingDetector
+from ict_live.structure import ids, swing_liquidity
 
 RESULTS = Path(__file__).with_name("results")
 
@@ -136,144 +133,6 @@ def _compare_to_course(eng_swings, course: list[dict], tf_minutes: int) -> dict:
             "extras": extras}
 
 
-def _sweep_evaluators(classified, ranges, bars):
-    """Independent, modular factor evaluators for sweeps (priority = list order). Each returns a
-    FactorValue(name, value, explanation); the ranker knows nothing about ICT. Displacement/MSS
-    evaluators will be appended here (B3) without touching the ranking engine."""
-    dominant = {(cs.swing.kind, cs.swing.index) for cs in classified if cs.dominant}
-    ce = ranges[0].ce if ranges else None
-
-    def dominant_pool(sw):
-        pk = "high" if sw.direction == "bearish" else "low"
-        v = 1 if (pk, sw.pool_index) in dominant else 0
-        return ranking.FactorValue("dominant_pool", v,
-                                   "raided a DOMINANT structural swing" if v else
-                                   "raided a non-dominant structural swing")
-
-    def pd_aligned(sw):
-        if ce is None:
-            return ranking.FactorValue("pd_aligned", 0, "no dealing range → no P/D context")
-        if sw.direction == "bearish":
-            v = 1 if sw.pool_price > ce else 0
-            e = f"buy-side raid {'in Premium' if v else 'not in Premium'} (CE {ce:g})"
-        else:
-            v = 1 if sw.pool_price < ce else 0
-            e = f"sell-side raid {'in Discount' if v else 'not in Discount'} (CE {ce:g})"
-        return ranking.FactorValue("pd_aligned", v, e)
-
-    def rejection_strength(sw):
-        wick = abs(sw.extreme - sw.pool_price) + 1e-9
-        reclaim = (sw.pool_price - sw.close) if sw.direction == "bearish" else (sw.close - sw.pool_price)
-        v = round(max(reclaim, 0.0) / wick, 3)
-        return ranking.FactorValue("rejection_strength", v,
-                                   f"close reclaimed {v}× the wick beyond the level")
-
-    def recency(sw):
-        return ranking.FactorValue("recency", sw.bar_index, f"raid at bar {sw.bar_index} (fresher = higher)")
-
-    return [dominant_pool, pd_aligned, rejection_strength, recency]
-
-
-def _rank_sweeps(sweeps, classified, ranges, bars):
-    """Rank (never filter) sweeps via the domain-agnostic engine + modular evaluators."""
-    return ranking.rank(sweeps, _sweep_evaluators(classified, ranges, bars))
-
-
-def _displacement_evaluators():
-    """Modular factor evaluators for displacement legs (priority order). Same engine as sweeps."""
-    def net_move(d):
-        return ranking.FactorValue("net_move", round(d.net, 2), f"impulse magnitude {d.net:g}")
-
-    def speed(d):
-        v = round(d.net / max(d.span, 1), 3)
-        return ranking.FactorValue("speed", v, f"{v} price/bar over {d.span} bars (energetic=higher)")
-
-    def exhausted(d):
-        return ranking.FactorValue("exhausted", 1 if d.exhausted else 0,
-                                   "impulse completed at a counter-pivot" if d.exhausted
-                                   else "still in progress at cursor")
-
-    def recency(d):
-        return ranking.FactorValue("recency", d.start_index, f"impulse starts at bar {d.start_index}")
-
-    return [net_move, speed, exhausted, recency]
-
-
-def _rank_displacements(sweeps, bars):
-    disps = displacement.detect_displacements(sweeps, bars)
-    return ranking.rank(disps, _displacement_evaluators())
-
-
-def _mss_evaluators(classified):
-    dominant = {(cs.swing.kind, cs.swing.index) for cs in classified if cs.dominant}
-    _state_rank = {"confirmed": 2, "candidate": 1, "potential": 0}
-
-    def state(m):
-        return ranking.FactorValue("state", _state_rank[m.state], f"MSS state = {m.state}")
-
-    def broken_dominant(m):
-        kind = "low" if m.direction == "bearish" else "high"
-        v = 1 if (kind, m.broken_index) in dominant else 0
-        return ranking.FactorValue("broken_dominant", v,
-                                   "broke a DOMINANT structural swing" if v else
-                                   "broke a non-dominant structural swing")
-
-    def acceptance(m):
-        return ranking.FactorValue("acceptance", m.acceptance,
-                                   f"close {m.acceptance:g} beyond the swing")
-
-    def recency(m):
-        return ranking.FactorValue("recency", m.broken_index, f"broken swing at bar {m.broken_index}")
-
-    return [state, broken_dominant, acceptance, recency]
-
-
-def _rank_mss(displacements, structural, classified, bars):
-    items = mss_mod.detect_mss(displacements, structural, bars)
-    return ranking.rank(items, _mss_evaluators(classified))
-
-
-def _fvg_evaluators():
-    _st = {"unfilled": 2, "touched": 1, "mitigated": 0}
-
-    def status(f):
-        return ranking.FactorValue("status", _st[f.status], f"FVG status={f.status}")
-
-    def size(f):
-        v = round(f.top - f.bottom, 2)
-        return ranking.FactorValue("size", v, f"gap size {v}")
-
-    def recency(f):
-        return ranking.FactorValue("recency", f.formed_index, f"formed at bar {f.formed_index}")
-
-    return [status, size, recency]
-
-
-def _rank_fvgs(mss_items, displacements, bars):
-    items = fvg_mod.detect_fvgs(mss_items, displacements, bars)
-    return ranking.rank(items, _fvg_evaluators())
-
-
-def _setup_evaluators():
-    def actionable(s):
-        return ranking.FactorValue("actionable", 1 if s.actionable else 0,
-                                   "actionable" if s.actionable else f"rejected: {s.reject_reason}")
-
-    def rr(s):
-        return ranking.FactorValue("rr", s.rr, f"reward:risk {s.rr} to real liquidity")
-
-    def risk_tight(s):
-        # smaller risk ranks higher (tighter invalidation) -> use negative risk as the value
-        return ranking.FactorValue("tight_risk", round(-s.risk, 2), f"risk {s.risk}")
-
-    return [actionable, rr, risk_tight]
-
-
-def _rank_setups(fvgs, disp_by_id, sweep_by_id, active_erl, dr_id):
-    items = setup_mod.build_setups(fvgs, disp_by_id, sweep_by_id, active_erl, dr_id)
-    return ranking.rank(items, _setup_evaluators())
-
-
 def visual_audit(tv: TvClient, symbol: str, date: str, *, timeframe: str = "60",
                  steps: int = 0, out_name: Optional[str] = None,
                  annotations_path: Optional[str] = None, show_rejected: bool = True,
@@ -294,33 +153,13 @@ def visual_audit(tv: TvClient, symbol: str, date: str, *, timeframe: str = "60",
     if cursor is not None:
         bars = [b for b in bars if b.open_time.timestamp() <= cursor + 1]
 
-    width = C.FRACTAL_WIDTH.get(our_tf, 2)
-    det = SwingDetector(width=width)
-    for b in bars:
-        det.add(b)
-    swings = det.confirmed()
-    classified = significance.classify(swings, bars)
-    tier_counts = significance.counts(classified)
-    structural = significance.structural_swings(classified)
-    pools = swing_liquidity.swing_liquidity(structural, bars)
-    liq_counts = {"active": len(swing_liquidity.active(pools)),
-                  "swept": len(swing_liquidity.swept(pools))}
-    # dealing-range DETECTOR discovers the objective range per structural TF (here, the one TF
-    # this audit ran on). Multi-TF hierarchy fills in when the live engine (all TFs) or a multi-TF
-    # audit feeds structural_by_tf; context — not this detector — will pick which range is relevant.
-    ranges = dealing_range.dealing_ranges({our_tf: structural})
-    sweeps = manipulation.detect_sweeps(pools, bars)
-    ranked_sweeps = _rank_sweeps(sweeps, classified, ranges, bars)
-    ranked_disp = _rank_displacements(sweeps, bars)
-    ranked_mss = _rank_mss([r.item for r in ranked_disp], structural, classified, bars)
-    ranked_fvg = _rank_fvgs([r.item for r in ranked_mss], [r.item for r in ranked_disp], bars)
-    disp_by_id = {r.item.id: r.item for r in ranked_disp}
-    sweep_by_id = {r.item.id: r.item for r in ranked_sweeps}
-    active_erl = swing_liquidity.active(pools)
-    dr_ident = ids.dr_id(ranges[0]) if ranges else None
-    ranked_setups = _rank_setups([r.item for r in ranked_fvg], disp_by_id, sweep_by_id,
-                                 active_erl, dr_ident)
-    recommendation = setup_mod.recommend(ranked_setups)
+    # single shared engine (same pipeline as replay/live) — no detection logic in the microscope
+    ms = pipeline.analyze(bars, our_tf)
+    classified, structural, pools = ms.classified, ms.structural, ms.pools
+    tier_counts, liq_counts, ranges = ms.tier_counts, ms.liq_counts, ms.ranges
+    ranked_sweeps, ranked_disp = ms.ranked_sweeps, ms.ranked_displacements
+    ranked_mss, ranked_fvg, ranked_setups = ms.ranked_mss, ms.ranked_fvgs, ms.ranked_setups
+    recommendation = ms.recommendation
 
     course = _load_course(annotations_path)
     comparison = _compare_to_course(structural, course,
@@ -395,7 +234,7 @@ def visual_audit(tv: TvClient, symbol: str, date: str, *, timeframe: str = "60",
     result = {
         "symbol": symbol, "date": date, "timeframe": timeframe, "our_tf": our_tf,
         "cursor": (datetime.fromtimestamp(cursor, tz=ET).isoformat() if cursor else None),
-        "fractal_width": width, "n_bars": len(bars), "n_rows_raw": len(rows),
+        "fractal_width": ms.fractal_width, "n_bars": len(bars), "n_rows_raw": len(rows),
         "tier_counts": tier_counts, "liq_counts": liq_counts,
         "active_erl": [{"kind": p.kind, "time": p.time.isoformat(), "price": p.price}
                        for p in swing_liquidity.active(pools)],

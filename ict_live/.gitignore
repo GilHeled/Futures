@@ -1,2 +1,15 @@
 __pycache__/
 *.pyc
+
+# generated datasets (reproducible; not committed)
+results/dataset_*.jsonl
+research/datasets/dev/
+research/datasets/_slice*/
+research/datasets/*.bak_*
+research/datasets/*_records.jsonl
+research/datasets/factor_rows.json
+research/datasets/validate_v1_rows.json
+
+# live/replay runtime state (persisted at run time, not source)
+../ict_live_data/
+../scratch_live_data/

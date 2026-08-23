@@ -1,0 +1,56 @@
+{
+ "version": "v0",
+ "model": {
+  "coef": {
+   "pd_location": 0.446,
+   "ce_distance": -0.469,
+   "rr_realism": -0.924,
+   "confirmation": 1.519,
+   "fvg_location": 0.365
+  },
+  "intercept": -0.382,
+  "threshold": 0.5
+ },
+ "calibration": {
+  "n": 60,
+  "trade": 55,
+  "pass": 5,
+  "separation": {
+   "pd_location": {
+    "trade_mean": 0.294,
+    "pass_mean": 0.21
+   },
+   "ce_distance": {
+    "trade_mean": 0.591,
+    "pass_mean": 0.69
+   },
+   "rr_realism": {
+    "trade_mean": 0.778,
+    "pass_mean": 0.922
+   },
+   "confirmation": {
+    "trade_mean": 0.808,
+    "pass_mean": 0.608
+   },
+   "fvg_location": {
+    "trade_mean": 0.765,
+    "pass_mean": 0.767
+   }
+  },
+  "logistic_coef": {
+   "pd_location": 0.446,
+   "ce_distance": -0.469,
+   "rr_realism": -0.924,
+   "confirmation": 1.519,
+   "fvg_location": 0.365
+  },
+  "status": "calibrated (logistic; v0 MVP \u2014 provisional, refine with Batch-2)",
+  "loo_cv_confusion": {
+   "trade_pred_trade": 35,
+   "pass_pred_pass": 3,
+   "pass_pred_trade": 2,
+   "trade_pred_pass": 20
+  },
+  "loo_pass_recall": 0.6
+ }
+}

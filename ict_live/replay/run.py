@@ -72,14 +72,26 @@ def build_runner(*, signal_tf: str = "1H", entry_tf: str = "15m",
     return LiveRunner(ing, **kw)
 
 
-def feed_bars(runner: LiveRunner, bars, symbol: str) -> int:
-    """Feed a chronological list of bars through the live pipeline as 1m webhook payloads."""
-    n = 0
-    for b in bars:
+def feed_bars(runner: LiveRunner, bars, symbol: str, *, progress=None, every: int = 100) -> int:
+    """Feed a chronological list of bars through the live pipeline as 1m webhook payloads.
+
+    `progress`, if given, is called as progress(bars_done, bars_total) roughly every `every` bars —
+    a NO-OP instrumentation hook (default None) that never affects what is fed or produced."""
+    n, total = 0, len(bars)
+    for i, b in enumerate(bars):
         for p in to_1m_payloads(b, symbol):
             runner.feed(p)
             n += 1
+        if progress and (i % every == 0 or i == total - 1):
+            progress(i + 1, total)
     return n
+
+
+def available_symbols() -> list[str]:
+    """Data keys with a cached 5m file on disk (what replay can actually run)."""
+    from ict_live.research.data import CACHE
+    out = sorted(p.stem.split("_")[1] for p in CACHE.glob("databento_*_5m.parquet"))
+    return out
 
 
 def tv_symbol(data_symbol: str) -> str:
@@ -163,12 +175,12 @@ def by_period(closed: list[dict], mode: str) -> dict:
 
 
 def replay(symbol: str, start: str, end: str, *, signal_tf: str = "1H", entry_tf: str = "15m",
-           data_dir: Optional[str] = None, period: str = "none") -> dict:
+           data_dir: Optional[str] = None, period: str = "none", progress=None) -> dict:
     from ict_live.research import data as data_mod          # lazy: pandas only needed here
     bars5 = data_mod.load_5m(symbol, start=start, end=end)
     runner = build_runner(signal_tf=signal_tf, entry_tf=entry_tf, data_dir=data_dir)
     feed_sym = tv_symbol(symbol)
-    fed = feed_bars(runner, bars5, feed_sym)
+    fed = feed_bars(runner, bars5, feed_sym, progress=progress)
     closed = all_closed(runner)
     return {"symbol": symbol, "feed_symbol": feed_sym, "from": start, "to": end,
             "bars_5m": len(bars5), "bars_1m_fed": fed, "runner": runner,

@@ -69,6 +69,16 @@ expectancy, profit factor, max drawdown R, win/loss streaks, hold times); `--exp
 writes **every completed trade** (times, prices, R, win, bars held, MFE/MAE, execution score, weakest
 factor, and the reasoning snapshot) so any analysis can be done externally without changing the
 system. These are reporting outputs; they never affect the frozen trading decisions.
+
+### Replay dashboard (browser front-end)
+```bash
+.venv/bin/python -m ict_live.replay.dashboard      # open the printed http://127.0.0.1:PORT
+```
+A browser UI over the **same** replay runner: pick one or more symbols and a date range, choose the
+aggregation, start the run, watch progress, see per-symbol summary stats side by side, and download
+each trade CSV. It is a front-end only — it drives `replay.run.replay` unchanged and adds no trading
+logic (the progress readout is a no-op instrumentation hook). Runs under the research venv (pandas),
+stdlib HTTP — no web framework.
 (Replay runs under the research venv, which has pandas to load history; the live service runs under
 the FastAPI env. Both execute the same trading code.)
 

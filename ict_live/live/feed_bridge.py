@@ -45,6 +45,15 @@ def fetch_1m(root: str, period: str = "2d"):
     return out
 
 
+def _reachable(url: str, timeout: float = 3.0) -> bool:
+    """True if the live service answers /health at `url`."""
+    try:
+        with urllib.request.urlopen(url.rstrip("/") + "/health", timeout=timeout) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
 def _post(url: str, payload: dict, token: str | None):
     data = json.dumps(payload).encode()
     headers = {"Content-Type": "application/json"}
@@ -79,6 +88,9 @@ def run(url, symbols, *, token=None, backfill="2d", poll_period="1d", interval=6
     roots = [s.upper() for s in symbols if s.upper() in inst]
     if not roots:
         raise SystemExit(f"no known symbols in {symbols}; known: {sorted(inst)}")
+    if not _reachable(url):
+        raise SystemExit(f"live service not reachable at {url} — start it first (in another "
+                         f"terminal):\n  python3 -m ict_live.live.serve")
     last_ms: dict[str, int] = {}
     # initial backfill so LIVE populates immediately from real recent bars
     total = 0

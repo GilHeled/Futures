@@ -42,7 +42,16 @@ def test_push_new_only_new_and_closed(monkeypatch):
 
 
 def test_run_once_backfills(monkeypatch):
+    monkeypatch.setattr(FB, "_reachable", lambda url, timeout=3.0: True)
     monkeypatch.setattr(FB, "fetch_1m", lambda root, period="2d": [_bar(0, 100), _bar(1, 101)])
     monkeypatch.setattr(FB, "_post", lambda url, payload, token: {"status": "accepted"})
     rep = FB.run("http://x", ["MES", "MNQ", "UNKNOWN"], once=True, log=lambda *a: None)
     assert rep["symbols"] == ["MES", "MNQ"] and rep["posted"] == 4    # 2 bars x 2 known symbols
+
+
+def test_run_errors_clearly_when_service_down(monkeypatch):
+    import pytest
+    monkeypatch.setattr(FB, "_reachable", lambda url, timeout=3.0: False)
+    with pytest.raises(SystemExit) as e:
+        FB.run("http://127.0.0.1:8000", ["MES"], once=True, log=lambda *a: None)
+    assert "not reachable" in str(e.value)

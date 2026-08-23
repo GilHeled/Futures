@@ -77,6 +77,48 @@ def test_render_period_table_smoke():
     assert "OVERALL" in table and "2025-Q1" in table and "PF" in table
 
 
+def test_export_trades_csv(tmp_path):
+    import csv as _csv
+
+    class _Tr:                       # minimal stand-in exposing .closed with .to_dict()
+        def __init__(self, trades):
+            self.closed = trades
+
+    class _CT:
+        def __init__(self, d):
+            self._d = d
+
+        def to_dict(self):
+            return self._d
+
+    trade = {
+        "ticket_id": "MNQ:1H:t", "symbol": "CME_MINI:MNQ1!", "direction": "long",
+        "entry": 20000.0, "stop": 19996.0, "exit_target": 20008.0, "structural_target": 20050.0,
+        "result": "TARGET", "result_R": 2.0, "win": True, "bars_held": 3,
+        "mfe_R": 2.4, "mae_R": 0.6, "filled": True,
+        "fill_time": "2025-01-02T10:00:00-05:00", "close_time": "2025-01-02T13:00:00-05:00",
+        "reasoning": {"execution_score": 0.52, "weakest_factor": "ce_distance",
+                      "manipulation": "bullish sweep of 19995.0", "mss": "confirmed bullish @ 20010",
+                      "fvg": "bullish unfilled CE 20000 [1H]", "dealing_range": "1H 19980-20020 (up)"},
+    }
+
+    class _Runner:
+        trackers = {"CME_MINI:MNQ1!": _Tr([_CT(trade)])}
+    path = tmp_path / "trades.csv"
+    n = REPLAY.export_trades_csv(_Runner(), str(path))
+    assert n == 1
+    rows = list(_csv.DictReader(open(path)))
+    assert list(rows[0].keys()) == REPLAY.TRADE_CSV_COLS
+    r = rows[0]
+    assert r["direction"] == "long" and r["result_R"] == "2.0" and r["win"] == "True"
+    assert r["mfe_R"] == "2.4" and r["mae_R"] == "0.6"
+    assert r["target"] == "20008.0"
+    assert r["exit_price"] == "20008.0"              # +2R = entry + 2*risk (risk 4) = 20008
+    assert r["execution_score"] == "0.52" and r["execution_confidence"] == "0.52"
+    assert r["weakest_factor"] == "ce_distance" and "sweep" in r["manipulation"]
+    assert r["fvg"].startswith("bullish") and r["dealing_range"].startswith("1H")
+
+
 def test_feed_bars_through_pipeline_produces_report():
     runner = REPLAY.build_runner(signal_tf="1H", entry_tf="15m")
     fed = REPLAY.feed_bars(runner, _h1(60, 6), "CME_MINI:MNQ1!")

@@ -35,6 +35,8 @@ class OpenTrade:
     fill_time: Optional[str] = None
     bars_seen: int = 0
     bars_since_fill: int = 0
+    mfe_R: float = 0.0                       # measurement only (excursion); not a decision input
+    mae_R: float = 0.0
     horizon: int = DEFAULT_HORIZON
 
 
@@ -59,6 +61,8 @@ class ClosedTrade:
     close_time: Optional[str]
     # expected (ex-ante)
     expected_R: float                       # the mechanical target in R (+EXIT_TARGET_R)
+    mfe_R: float = 0.0                       # max favorable / adverse excursion (measurement only)
+    mae_R: float = 0.0
     structural_target: Optional[float] = None
     reasoning: dict = field(default_factory=dict)
 
@@ -116,6 +120,10 @@ class TradeTracker:
             if ot.status == "OPEN":
                 if not just_filled:                            # the fill bar itself is bar 0
                     ot.bars_since_fill += 1
+                fav = ((bar.high - ot.entry) if long else (ot.entry - bar.low)) / ot.risk
+                adv = ((ot.entry - bar.low) if long else (bar.high - ot.entry)) / ot.risk
+                ot.mfe_R = max(ot.mfe_R, fav)                  # measurement only — no decision effect
+                ot.mae_R = max(ot.mae_R, adv)
                 s, t = _hit_stop(bar, ot.stop, long), _hit(bar, ot.exit_target, long)
                 if s and t:
                     closed_now.append(self._close(ot, "AMBIGUOUS", -1.0, ot.bars_since_fill, bar))
@@ -137,8 +145,8 @@ class TradeTracker:
             opened_time=ot.opened_time, filled=filled, fill_time=ot.fill_time, result=result,
             result_R=result_R, win=(result_R is not None and result_R > 0) if filled else None,
             bars_held=bars_held, close_time=bar.open_time.isoformat(),
-            expected_R=EQ.EXIT_TARGET_R, structural_target=ot.structural_target,
-            reasoning=ot.reasoning)
+            expected_R=EQ.EXIT_TARGET_R, mfe_R=round(ot.mfe_R, 3), mae_R=round(ot.mae_R, 3),
+            structural_target=ot.structural_target, reasoning=ot.reasoning)
         self.closed.append(ct)
         return ct
 

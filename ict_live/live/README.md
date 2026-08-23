@@ -64,6 +64,11 @@ would have. There is no separate backtester.
 .venv/bin/python -m ict_live.replay.run --symbol MES --from 2025-01-01 --to 2025-03-31
 .venv/bin/python -m ict_live.replay.run --symbol MNQ --from 2026-01-01 --to 2026-06-30 --out report.html
 ```
+Options: `--period {none,month,quarter}` prints an OVERALL + per-period breakdown (win rate,
+expectancy, profit factor, max drawdown R, win/loss streaks, hold times); `--export-trades FILE.csv`
+writes **every completed trade** (times, prices, R, win, bars held, MFE/MAE, execution score, weakest
+factor, and the reasoning snapshot) so any analysis can be done externally without changing the
+system. These are reporting outputs; they never affect the frozen trading decisions.
 (Replay runs under the research venv, which has pandas to load history; the live service runs under
 the FastAPI env. Both execute the same trading code.)
 

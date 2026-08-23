@@ -35,7 +35,19 @@ def test_target_hit_records_plus_2R():
     c = closed[0]
     assert c.result == "TARGET" and c.result_R == 2.0 and c.win is True and c.filled
     assert c.expected_R == 2.0 and c.bars_held == 1
+    # excursion (measurement only): high 102.5 -> +2.5R MFE; low never below entry -> 0 MAE
+    assert c.mfe_R == 2.5 and c.mae_R == 0.0
     assert not tr.open
+
+
+def test_excursion_measures_adverse_before_target():
+    tr = TradeTracker()
+    tr.open_from_ticket(_ticket())
+    tr.update(_b(1, 100, 100, 100, 100))            # fill
+    tr.update(_b(2, 100, 100.5, 99.5, 100))         # dips to 99.5 (−0.5R) but not stop
+    closed = tr.update(_b(3, 100, 102.2, 100, 102)) # then +2R
+    c = closed[0]
+    assert c.result == "TARGET" and c.mae_R == 0.5 and c.mfe_R >= 2.0
 
 
 def test_stop_hit_records_minus_1R():

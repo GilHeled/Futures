@@ -16,6 +16,7 @@ loader lazily so `to_1m_payloads` stays importable in the FastAPI env used by th
 """
 from __future__ import annotations
 
+import csv
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -96,6 +97,55 @@ def all_closed(runner) -> list[dict]:
     return [c.to_dict() for tr in runner.trackers.values() for c in tr.closed]
 
 
+TRADE_CSV_COLS = [
+    "entry_time", "exit_time", "symbol", "direction", "entry", "stop", "target", "exit_price",
+    "result_R", "win", "bars_held", "mfe_R", "mae_R", "execution_score", "execution_confidence",
+    "weakest_factor", "manipulation", "mss", "fvg", "dealing_range",
+    "structural_target", "result", "filled",
+]
+
+
+def _exit_price(t: dict):
+    """Reconstruct the exit price from result_R (TARGET→+2R, STOP→−1R, HORIZON→mark): the tracker
+    resolves in R, so exit_price = entry ± result_R·risk in the trade direction."""
+    if t.get("result_R") is None:
+        return ""
+    risk = abs(t["entry"] - t["stop"])
+    sign = 1.0 if t["direction"] == "long" else -1.0
+    return round(t["entry"] + sign * t["result_R"] * risk, 4)
+
+
+def _trade_row(t: dict) -> dict:
+    r = t.get("reasoning") or {}
+    score = r.get("execution_score")
+    return {
+        "entry_time": t.get("fill_time") or "", "exit_time": t.get("close_time") or "",
+        "symbol": t.get("symbol"), "direction": t.get("direction"),
+        "entry": t.get("entry"), "stop": t.get("stop"), "target": t.get("exit_target"),
+        "exit_price": _exit_price(t), "result_R": t.get("result_R"), "win": t.get("win"),
+        "bars_held": t.get("bars_held"), "mfe_R": t.get("mfe_R"), "mae_R": t.get("mae_R"),
+        # in v1 the execution score IS the confidence (one calibrated number); both emitted for tooling
+        "execution_score": score, "execution_confidence": score,
+        "weakest_factor": r.get("weakest_factor"),
+        "manipulation": r.get("manipulation"), "mss": r.get("mss"), "fvg": r.get("fvg"),
+        "dealing_range": r.get("dealing_range"),
+        "structural_target": t.get("structural_target"), "result": t.get("result"),
+        "filled": t.get("filled"),
+    }
+
+
+def export_trades_csv(runner, path: str) -> int:
+    """Write every completed trade (all trackers) to a flat CSV for external analysis."""
+    rows = sorted(all_closed(runner), key=lambda t: t.get("close_time") or "")
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=TRADE_CSV_COLS)
+        w.writeheader()
+        for t in rows:
+            w.writerow(_trade_row(t))
+    return len(rows)
+
+
 def _period_key(iso: str, mode: str) -> str:
     dt = datetime.fromisoformat(iso)
     if mode == "month":
@@ -158,6 +208,8 @@ def main() -> None:
                     help="break the results down by period (default: quarter)")
     ap.add_argument("--data-dir", default=None, help="persist raw 1m + signal/trade logs here")
     ap.add_argument("--out", default=None, help="write the report as HTML (….html) or JSON")
+    ap.add_argument("--export-trades", default=None, metavar="CSV",
+                    help="write every completed trade to this CSV for external analysis")
     ns = ap.parse_args()
     res = replay(ns.symbol, ns.start, ns.end, signal_tf=ns.signal_tf, entry_tf=ns.entry_tf,
                  data_dir=ns.data_dir, period=ns.period)
@@ -171,6 +223,9 @@ def main() -> None:
         p.write_text(REPORT.render_html(res["report"]) if p.suffix == ".html"
                      else json.dumps({"overall": res["overall"], "periods": res["periods"]},
                                      indent=1, default=str))
+    if ns.export_trades:
+        n = export_trades_csv(res["runner"], ns.export_trades)
+        print(f"exported {n} trades -> {ns.export_trades}\n")
     print(f"Replay {ns.symbol} {ns.start} -> {ns.end}  "
           f"({res['bars_5m']} 5m bars, {len(res['runner'].recent_signals)} signals seen)\n")
     print(render_period_table(res["overall"], res["periods"]))

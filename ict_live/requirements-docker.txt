@@ -1,0 +1,7 @@
+# Runtime deps for the ict_live live service + replay + dashboard + feed bridge.
+# (One image gets everything, dissolving the host's two-environment split.)
+fastapi>=0.110        # live webhook API
+uvicorn>=0.29         # ASGI server for the live service
+pandas>=2.0           # replay historical loader / resampling
+pyarrow>=14.0         # read the Databento 5m parquet cache
+yfinance>=0.2.40      # local feed bridge (convenience real-data source)

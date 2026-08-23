@@ -1,0 +1,31 @@
+# ict_live — live intraday ICT decision-support system (frozen v1).
+# One image with ALL runtime deps (FastAPI + pandas + yfinance), so the live
+# service, replay, dashboard, and feed bridge all run from the same container.
+# The licensed Databento cache (cache/) is NOT baked in — it is bind-mounted.
+#
+# This is SEPARATE from the repo-root Dockerfile (which builds mnq_system).
+# Build/run via:  docker compose -f docker-compose.ict_live.yml up --build
+FROM python:3.14-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# build tools kept in case a dep lacks a cp314 wheel; removed in the same layer
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# deps first (layer caching)
+COPY ict_live/requirements-docker.txt ./
+RUN pip install --upgrade pip && pip install -r requirements-docker.txt
+
+# then the package source (cache comes in as a volume, never copied)
+COPY ict_live/ ./ict_live/
+
+EXPOSE 8000 8010
+
+# default target; the compose services each override this
+CMD ["python", "-m", "ict_live.live.serve"]

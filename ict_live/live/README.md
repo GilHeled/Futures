@@ -21,7 +21,20 @@ Everything else is ignored.
 These are locked by tests (`test_execution_quality.py::test_v1_is_frozen` /
 `::test_exit_model_is_frozen`).
 
-## Run
+## Run with Docker (one command, all processes)
+From the repo root — this runs the live service, the yfinance feed bridge, and the dashboard together
+in one image (no more three-terminal / two-environment juggling):
+```bash
+docker compose -f docker-compose.ict_live.yml up --build
+```
+Then open **http://127.0.0.1:8010** (dashboard) — live monitor also at **http://127.0.0.1:8000/report.html**.
+`Ctrl+C` stops everything. Trade state persists in the `ict_live_data` volume; the historical cache is
+bind-mounted read-only for the REPLAY tab. To require auth, set `ICT_LIVE_TOKEN` (and add
+`--token $ICT_LIVE_TOKEN` to the `feed` service command). To use TradingView instead of the yfinance
+feed, remove/stop the `feed` service and point your alert at the exposed `:8000` webhook. This compose
+file is separate from the repo-root one (which builds `mnq_system`).
+
+## Run manually (three terminals)
 
 ```bash
 python -m ict_live.live.serve

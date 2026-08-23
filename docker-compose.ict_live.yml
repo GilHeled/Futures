@@ -1,0 +1,61 @@
+# ict_live — one command runs the whole live stack (service + feed + dashboard).
+#
+#   docker compose -f docker-compose.ict_live.yml up --build
+#
+# Then open the dashboard at http://127.0.0.1:8010  (live monitor: http://127.0.0.1:8000/report.html).
+# Ctrl+C stops everything. Separate from the repo-root docker-compose.yml (mnq_system).
+#
+# Three services share one image:
+#   live      — the frozen FastAPI live service (receives bars, produces signals/trades)
+#   feed      — local yfinance feed bridge, so LIVE has real data with no TradingView/tunnel
+#   dashboard — the LIVE + REPLAY browser UI (proxies `live`, runs replays on the mounted cache)
+
+x-img: &img
+  build:
+    context: .
+    dockerfile: Dockerfile.ict_live
+  restart: unless-stopped
+
+services:
+  live:
+    <<: *img
+    environment:
+      ICT_LIVE_HOST: 0.0.0.0          # must bind 0.0.0.0 inside the container
+      ICT_LIVE_PORT: "8000"
+      ICT_LIVE_DATA_DIR: /data        # persisted raw 1m + signal/trade logs
+      ICT_LIVE_TOKEN: ${ICT_LIVE_TOKEN:-}   # optional; leave empty for local use
+    command: ["python", "-m", "ict_live.live.serve"]
+    ports:
+      - "127.0.0.1:8000:8000"         # localhost only
+    volumes:
+      - ict_live_data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=3).status==200 else sys.exit(1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  feed:
+    <<: *img
+    depends_on:
+      live:
+        condition: service_healthy
+    # feeds real 1m bars from yfinance into the live service (edit --symbols as desired)
+    command: ["python", "-m", "ict_live.live.feed_bridge",
+              "--url", "http://live:8000", "--symbols", "MES", "MNQ"]
+
+  dashboard:
+    <<: *img
+    depends_on:
+      live:
+        condition: service_healthy
+    command: ["python", "-m", "ict_live.replay.dashboard",
+              "--host", "0.0.0.0", "--port", "8010", "--live-url", "http://live:8000"]
+    ports:
+      - "127.0.0.1:8010:8010"
+    volumes:
+      - ./cache:/app/cache:ro         # historical parquet cache -> the REPLAY tab
+
+volumes:
+  ict_live_data:

@@ -1,0 +1,31 @@
+//@version=5
+// ict_live — TradingView 1-minute webhook feed
+//
+// Emits one JSON message per CONFIRMED 1-minute bar close, in the exact `ict_live.bar.v1` shape the
+// live service expects (epoch-millisecond timestamps via Pine's `time` / `time_close`, so no parsing
+// changes are needed on the server).
+//
+// REQUIREMENTS:
+//   * Chart symbol must be one the service knows: CME_MINI:MNQ1!, CME_MINI:MES1!,
+//     CME_MINI:NQ1!, or CME_MINI:ES1!   (syminfo.tickerid must equal one of these).
+//   * Chart timeframe must be 1 minute.
+//   * A TradingView plan that supports webhook alerts (Pro / Pro+ / Premium).
+//
+// USE: Pine Editor -> paste -> "Add to chart". Then create an alert (see README):
+//   Condition = this script, "Any alert() function call", "Once Per Bar Close",
+//   Notifications -> Webhook URL = https://<your-tunnel>/webhook/tradingview?token=<YOUR_TOKEN>
+indicator("ict_live 1m webhook feed", overlay = true)
+
+if barstate.isconfirmed
+    j = '{"schema":"ict_live.bar.v1"' +
+         ',"symbol":"' + syminfo.tickerid + '"' +
+         ',"resolution":"1"' +
+         ',"bar_time_ms":'  + str.tostring(time,       "#") +
+         ',"bar_close_ms":' + str.tostring(time_close, "#") +
+         ',"open":'   + str.tostring(open) +
+         ',"high":'   + str.tostring(high) +
+         ',"low":'    + str.tostring(low) +
+         ',"close":'  + str.tostring(close) +
+         ',"volume":' + str.tostring(volume) +
+         '}'
+    alert(j, alert.freq_once_per_bar_close)

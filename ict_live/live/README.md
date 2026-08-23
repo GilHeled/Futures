@@ -48,10 +48,39 @@ Point a TradingView 1m-bar-close alert at `POST /webhook/tradingview` (payload `
 ## Feeding the live service (making LIVE populate)
 The service only shows signals once it is *receiving* 1-minute bars. Two ways to feed it:
 
-**A. TradingView webhook (authoritative / production).** A TradingView alert (Pro+), fired on a
-1-minute bar close, POSTs the `ict_live.bar.v1` payload to `…/webhook/tradingview`. TradingView must
-reach the service, so expose it with a tunnel (ngrok/cloudflared) or run on a VPS, and set
-`ICT_LIVE_TOKEN`. This is the frozen, authoritative feed.
+**A. TradingView webhook (authoritative / production).** A TradingView alert, fired on each 1-minute
+bar close, POSTs the `ict_live.bar.v1` payload to `…/webhook/tradingview`. Full setup:
+
+1. **Plan:** TradingView Pro / Pro+ / Premium (webhook alerts are not on the free plan).
+2. **Run the service with a token:**
+   ```bash
+   ICT_LIVE_TOKEN=YOUR_SECRET python3 -m ict_live.live.serve
+   ```
+3. **Expose it publicly** (TradingView's servers can't reach `localhost`):
+   ```bash
+   cloudflared tunnel --url http://localhost:8000      # or:  ngrok http 8000
+   ```
+   Note the printed `https://…` host. Your **webhook URL** is:
+   `https://<that-host>/webhook/tradingview?token=YOUR_SECRET`
+   (TradingView can't send custom headers, so the token goes in the query string; the service
+   accepts it there.)
+4. **Add the Pine feed:** open a **1-minute** chart of a known symbol (`CME_MINI:MNQ1!`,
+   `CME_MINI:MES1!`, `CME_MINI:NQ1!`, or `CME_MINI:ES1!`); Pine Editor → paste
+   `tradingview_alert.pine` → **Add to chart**.
+5. **Create the alert:** Condition = "ict_live 1m webhook feed" / **Any alert() function call**;
+   frequency **Once Per Bar Close**; Notifications → **Webhook URL** = the URL from step 3. (The alert
+   message is supplied by the script's `alert()` call, so the dialog's message box is ignored.)
+6. **Repeat per symbol** (one chart + one alert each).
+7. **Verify:** `GET /report.html` shows accepted bars / signals as they arrive.
+
+Sanity-check the endpoint locally before wiring TradingView:
+```bash
+curl -X POST "http://127.0.0.1:8000/webhook/tradingview?token=YOUR_SECRET" \
+  -H 'Content-Type: application/json' \
+  -d '{"schema":"ict_live.bar.v1","symbol":"CME_MINI:MNQ1!","resolution":"1","bar_time_ms":1705329000000,"bar_close_ms":1705329060000,"open":17000,"high":17005,"low":16998,"close":17002,"volume":123}'
+# -> {"status":"accepted", ...}
+```
+This is the frozen, authoritative feed. The service + tunnel must stay running.
 
 **B. Local feed bridge (convenience / evaluation).** Pull real recent 1m bars from yfinance and POST
 them to the webhook — no TradingView account or tunnel:

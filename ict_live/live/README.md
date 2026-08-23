@@ -72,8 +72,10 @@ system. These are reporting outputs; they never affect the frozen trading decisi
 
 ### Replay dashboard (browser front-end)
 ```bash
-.venv/bin/python -m ict_live.replay.dashboard      # open the printed http://127.0.0.1:PORT
+.venv/bin/python -m ict_live.replay.dashboard
 ```
+It prints a line like `Replay Dashboard: http://127.0.0.1:8010 …` — open that URL. If the port is
+busy it auto-picks the next free one; override with `--port 8020`.
 A browser UI over the **same** replay runner: pick one or more symbols and a date range, choose the
 aggregation, start the run, watch progress, see per-symbol summary stats side by side, and download
 each trade CSV. It is a front-end only — it drives `replay.run.replay` unchanged and adds no trading

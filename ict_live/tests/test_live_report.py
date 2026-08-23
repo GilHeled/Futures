@@ -40,6 +40,31 @@ def test_aggregate_closed_math():
     assert a["win_rate"] == round(2 / 3, 3) and a["expectancy_R"] == 1.0 and a["no_fill"] == 1
 
 
+def _t(ct, r, ft=None):
+    return {"filled": True, "result_R": r, "close_time": ct, "fill_time": ft}
+
+
+def test_aggregate_richer_metrics():
+    # chronological equity: +2,-1,-1,+2,-1  -> peak 2, trough after two losses = 0 -> maxDD 2R
+    rows = [_t("2025-01-01T10:00:00+00:00", 2.0, "2025-01-01T09:00:00+00:00"),
+            _t("2025-01-02T10:00:00+00:00", -1.0, "2025-01-02T08:00:00+00:00"),
+            _t("2025-01-03T10:00:00+00:00", -1.0, "2025-01-03T09:00:00+00:00"),
+            _t("2025-01-04T10:00:00+00:00", 2.0, "2025-01-04T08:00:00+00:00"),
+            _t("2025-01-05T10:00:00+00:00", -1.0, "2025-01-05T09:00:00+00:00")]
+    a = REPORT.aggregate_closed(rows)
+    assert a["profit_factor"] == round(4.0 / 3.0, 2)          # gross win 4 / gross loss 3
+    assert a["max_drawdown_R"] == 2.0                         # peak 2 -> down to 0
+    assert a["longest_loss_streak"] == 2 and a["longest_win_streak"] == 1
+    assert a["avg_hold_min"] is not None and a["median_hold_min"] is not None
+    # sorting is by close_time, so an out-of-order input still yields the same streaks/DD
+    assert REPORT.aggregate_closed(list(reversed(rows)))["max_drawdown_R"] == 2.0
+
+
+def test_profit_factor_none_without_losses():
+    a = REPORT.aggregate_closed([_t("2025-01-01T10:00:00+00:00", 2.0)])
+    assert a["profit_factor"] is None                         # no losses -> undefined, reported None
+
+
 def test_build_report_structure():
     rep = REPORT.build_report(_runner_with_state())
     for key in ("health", "open_trades", "recent_signals", "closed_summary", "closed_trades"):

@@ -53,6 +53,30 @@ def _h1(n, seed):
     return bars
 
 
+def test_by_period_buckets_by_quarter_and_month():
+    closed = [
+        {"opened_time": "2025-01-15T10:00:00-05:00", "close_time": "2025-01-15T13:00:00-05:00",
+         "filled": True, "result_R": 2.0},
+        {"opened_time": "2025-02-20T10:00:00-05:00", "close_time": "2025-02-20T12:00:00-05:00",
+         "filled": True, "result_R": -1.0},
+        {"opened_time": "2025-04-10T10:00:00-04:00", "close_time": "2025-04-10T12:00:00-04:00",
+         "filled": True, "result_R": 2.0},
+    ]
+    q = REPLAY.by_period(closed, "quarter")
+    assert set(q) == {"2025-Q1", "2025-Q2"}
+    assert q["2025-Q1"]["scored"] == 2 and q["2025-Q1"]["expectancy_R"] == 0.5
+    assert q["2025-Q2"]["scored"] == 1 and q["2025-Q2"]["win_rate"] == 1.0
+    m = REPLAY.by_period(closed, "month")
+    assert set(m) == {"2025-01", "2025-02", "2025-04"}
+
+
+def test_render_period_table_smoke():
+    overall = REPORT.aggregate_closed([{"filled": True, "result_R": 1.0,
+                                        "close_time": "2025-01-01T10:00:00+00:00"}])
+    table = REPLAY.render_period_table(overall, {"2025-Q1": overall})
+    assert "OVERALL" in table and "2025-Q1" in table and "PF" in table
+
+
 def test_feed_bars_through_pipeline_produces_report():
     runner = REPLAY.build_runner(signal_tf="1H", entry_tf="15m")
     fed = REPLAY.feed_bars(runner, _h1(60, 6), "CME_MINI:MNQ1!")

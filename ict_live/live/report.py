@@ -4,25 +4,62 @@ and engine health (last processed bar). Read-only; computed from the runner's in
 is reconstructable from the append-only store on restart)."""
 from __future__ import annotations
 
+from datetime import datetime
 from html import escape
 from typing import Iterable
 
 RECENT = 20
 
 
+def _median(xs):
+    xs = sorted(xs)
+    n = len(xs)
+    if not n:
+        return None
+    return xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2
+
+
 def aggregate_closed(closed: Iterable[dict]) -> dict:
-    rows = list(closed)
+    # chronological (by close time) so streaks / drawdown / equity are ordered correctly
+    rows = sorted(closed, key=lambda r: r.get("close_time") or "")
     filled = [r for r in rows if r.get("filled")]
     scored = [r for r in filled if r.get("result_R") is not None]
-    wins = [r for r in scored if (r.get("result_R") or 0) > 0]
     rs = [r["result_R"] for r in scored]
+    wins = [x for x in rs if x > 0]
+    losses = [x for x in rs if x < 0]
+    gross_win, gross_loss = sum(wins), -sum(losses)
+
+    cum = peak = maxdd = 0.0                       # equity curve in R, peak-to-trough drawdown
+    for x in rs:
+        cum += x
+        peak = max(peak, cum)
+        maxdd = max(maxdd, peak - cum)
+
+    lw = ll = cw = cl = 0                          # longest winning / losing streaks
+    for x in rs:
+        cw, cl = (cw + 1, 0) if x > 0 else ((0, cl + 1) if x < 0 else (0, 0))
+        lw, ll = max(lw, cw), max(ll, cl)
+
+    holds = []                                     # hold time in minutes, fill -> close
+    for r in scored:
+        ft, ct = r.get("fill_time"), r.get("close_time")
+        if ft and ct:
+            try:
+                holds.append((datetime.fromisoformat(ct) - datetime.fromisoformat(ft)).total_seconds() / 60)
+            except ValueError:
+                pass
     return {"n": len(rows), "filled": len(filled), "scored": len(scored),
             "no_fill": sum(1 for r in rows if r.get("filled") is False),
             "wins": len(wins),
             "win_rate": round(len(wins) / len(scored), 3) if scored else None,
             "expectancy_R": round(sum(rs) / len(rs), 3) if rs else None,
             "avg_R": round(sum(rs) / len(rs), 3) if rs else None,
-            "total_R": round(sum(rs), 2) if rs else None}
+            "total_R": round(sum(rs), 2) if rs else None,
+            "profit_factor": round(gross_win / gross_loss, 2) if gross_loss > 0 else None,
+            "max_drawdown_R": round(maxdd, 2) if rs else None,
+            "longest_win_streak": lw, "longest_loss_streak": ll,
+            "avg_hold_min": round(sum(holds) / len(holds), 1) if holds else None,
+            "median_hold_min": round(_median(holds), 1) if holds else None}
 
 
 def build_report(runner) -> dict:
@@ -72,7 +109,8 @@ def render_html(rep: dict) -> str:
             f"<div class=kpi>"
             f"<div>win rate<b>{s['win_rate']}</b></div>"
             f"<div>expectancy R<b>{s['expectancy_R']}</b></div>"
-            f"<div>avg R<b>{s['avg_R']}</b></div>"
+            f"<div>profit factor<b>{s['profit_factor']}</b></div>"
+            f"<div>max DD R<b>{s['max_drawdown_R']}</b></div>"
             f"<div>closed<b>{s['scored']}</b></div>"
             f"<div>total R<b>{s['total_R']}</b></div>"
             f"<div>open<b>{len(rep['open_trades'])}</b></div></div>"

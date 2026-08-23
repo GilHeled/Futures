@@ -17,7 +17,7 @@ loader lazily so `to_1m_payloads` stays importable in the FastAPI env used by th
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -91,16 +91,59 @@ def tv_symbol(data_symbol: str) -> str:
     return data_symbol
 
 
+def all_closed(runner) -> list[dict]:
+    """Every closed trade across the runner's trackers (build_report only keeps the last N)."""
+    return [c.to_dict() for tr in runner.trackers.values() for c in tr.closed]
+
+
+def _period_key(iso: str, mode: str) -> str:
+    dt = datetime.fromisoformat(iso)
+    if mode == "month":
+        return f"{dt.year}-{dt.month:02d}"
+    return f"{dt.year}-Q{(dt.month - 1) // 3 + 1}"          # quarter (attributed by the trade's start)
+
+
+def by_period(closed: list[dict], mode: str) -> dict:
+    """Group closed trades by the period they were INITIATED in (opened_time) and aggregate each."""
+    groups: dict[str, list] = {}
+    for r in closed:
+        key = _period_key(r.get("opened_time") or r.get("close_time"), mode)
+        groups.setdefault(key, []).append(r)
+    return {k: REPORT.aggregate_closed(groups[k]) for k in sorted(groups)}
+
+
 def replay(symbol: str, start: str, end: str, *, signal_tf: str = "1H", entry_tf: str = "15m",
-           data_dir: Optional[str] = None) -> dict:
+           data_dir: Optional[str] = None, period: str = "none") -> dict:
     from ict_live.research import data as data_mod          # lazy: pandas only needed here
     bars5 = data_mod.load_5m(symbol, start=start, end=end)
     runner = build_runner(signal_tf=signal_tf, entry_tf=entry_tf, data_dir=data_dir)
     feed_sym = tv_symbol(symbol)
     fed = feed_bars(runner, bars5, feed_sym)
-    rep = REPORT.build_report(runner)
+    closed = all_closed(runner)
     return {"symbol": symbol, "feed_symbol": feed_sym, "from": start, "to": end,
-            "bars_5m": len(bars5), "bars_1m_fed": fed, "runner": runner, "report": rep}
+            "bars_5m": len(bars5), "bars_1m_fed": fed, "runner": runner,
+            "report": REPORT.build_report(runner),
+            "overall": REPORT.aggregate_closed(closed),
+            "periods": (by_period(closed, period) if period and period != "none" else {})}
+
+
+_COLS = [("scored", "trades"), ("win_rate", "win%"), ("expectancy_R", "exp R"),
+         ("profit_factor", "PF"), ("max_drawdown_R", "maxDD"), ("total_R", "totR"),
+         ("longest_win_streak", "Wstk"), ("longest_loss_streak", "Lstk"),
+         ("avg_hold_min", "avgHold"), ("median_hold_min", "medHold")]
+
+
+def render_period_table(overall: dict, periods: dict) -> str:
+    head = "period      | " + " | ".join(f"{lbl:>7}" for _, lbl in _COLS)
+    line = "-" * len(head)
+
+    def row(label, a):
+        return f"{label:<11} | " + " | ".join(f"{('' if a.get(k) is None else a[k]):>7}" for k, _ in _COLS)
+    out = [head, line, row("OVERALL", overall)]
+    if periods:
+        out.append(line)
+        out += [row(k, v) for k, v in periods.items()]
+    return "\n".join(out)
 
 
 def main() -> None:
@@ -111,20 +154,26 @@ def main() -> None:
     ap.add_argument("--to", dest="end", required=True)
     ap.add_argument("--signal-tf", default="1H")
     ap.add_argument("--entry-tf", default="15m")
+    ap.add_argument("--period", choices=("none", "month", "quarter"), default="quarter",
+                    help="break the results down by period (default: quarter)")
     ap.add_argument("--data-dir", default=None, help="persist raw 1m + signal/trade logs here")
     ap.add_argument("--out", default=None, help="write the report as HTML (….html) or JSON")
     ns = ap.parse_args()
     res = replay(ns.symbol, ns.start, ns.end, signal_tf=ns.signal_tf, entry_tf=ns.entry_tf,
-                 data_dir=ns.data_dir)
-    rep = res["report"]
+                 data_dir=ns.data_dir, period=ns.period)
+    if res["bars_5m"] == 0:
+        print(f"WARNING: no cached data for {ns.symbol} in {ns.start}..{ns.end} — nothing to replay. "
+              f"The replay reads the local historical cache (not TradingView); check the available "
+              f"date range.")
+        return
     if ns.out:
         p = Path(ns.out)
-        p.write_text(REPORT.render_html(rep) if p.suffix == ".html" else json.dumps(rep, indent=1, default=str))
-    summary = {k: res[k] for k in ("symbol", "from", "to", "bars_5m", "bars_1m_fed")}
-    summary["closed_summary"] = rep["closed_summary"]
-    summary["open_trades"] = len(rep["open_trades"])
-    summary["signals_seen"] = len(res["runner"].recent_signals)
-    print(json.dumps(summary, indent=1, default=str))
+        p.write_text(REPORT.render_html(res["report"]) if p.suffix == ".html"
+                     else json.dumps({"overall": res["overall"], "periods": res["periods"]},
+                                     indent=1, default=str))
+    print(f"Replay {ns.symbol} {ns.start} -> {ns.end}  "
+          f"({res['bars_5m']} 5m bars, {len(res['runner'].recent_signals)} signals seen)\n")
+    print(render_period_table(res["overall"], res["periods"]))
 
 
 if __name__ == "__main__":

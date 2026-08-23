@@ -45,6 +45,25 @@ Point a TradingView 1m-bar-close alert at `POST /webhook/tradingview` (payload `
 - `GET  /report`, `/signals`, `/trades` — the same data as JSON.
 - `GET  /status`, `/health` — ingestion counts and liveness.
 
+## Feeding the live service (making LIVE populate)
+The service only shows signals once it is *receiving* 1-minute bars. Two ways to feed it:
+
+**A. TradingView webhook (authoritative / production).** A TradingView alert (Pro+), fired on a
+1-minute bar close, POSTs the `ict_live.bar.v1` payload to `…/webhook/tradingview`. TradingView must
+reach the service, so expose it with a tunnel (ngrok/cloudflared) or run on a VPS, and set
+`ICT_LIVE_TOKEN`. This is the frozen, authoritative feed.
+
+**B. Local feed bridge (convenience / evaluation).** Pull real recent 1m bars from yfinance and POST
+them to the webhook — no TradingView account or tunnel:
+```bash
+.venv/bin/python -m ict_live.live.feed_bridge --url http://127.0.0.1:8000 --symbols MES MNQ
+```
+It backfills recent bars on start (so LIVE populates immediately) and then streams new bars every
+minute while the market is open. `--once` backfills and exits. This is a **non-authoritative** feed:
+yfinance is a continuous-contract proxy that can differ from TradingView and may be delayed — fine
+for watching the system operate, not a substitute for the real feed in production. Only symbols in
+`config.INSTRUMENTS` (MES/MNQ/ES/NQ) are fed.
+
 ## Reliability
 - **Restart-safe.** Raw 1m is appended to `raw_1m.jsonl` and reloaded on startup; `warmup()` replays
   it through the bar builders to rebuild all timeframe buffers and open/closed trade state — a
@@ -72,7 +91,10 @@ system. These are reporting outputs; they never affect the frozen trading decisi
 
 ### Operational dashboard (browser front-end for LIVE + REPLAY)
 ```bash
-.venv/bin/python -m ict_live.replay.dashboard            # LIVE proxies http://127.0.0.1:8000 by default
+.venv/bin/python -m ict_live.replay.dashboard
+```
+LIVE proxies `http://127.0.0.1:8000` by default; override with `--live-url` and `--port`:
+```bash
 .venv/bin/python -m ict_live.replay.dashboard --live-url http://127.0.0.1:8000 --port 8010
 ```
 It prints `ict_live dashboard: http://127.0.0.1:PORT …` — open that URL (auto-picks a free port).

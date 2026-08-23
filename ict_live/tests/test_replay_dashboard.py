@@ -71,12 +71,21 @@ def test_error_is_captured_not_raised(tmp_path):
     assert job["state"] == "error" and "bad range" in job["error"]
 
 
+def test_fetch_live_unreachable_is_graceful():
+    # a dead port -> connected False, never raises
+    d = DASH._fetch_live("http://127.0.0.1:9", timeout=0.2)
+    assert d["connected"] is False and "error" in d
+
+
 def test_http_handler_run_status_download(tmp_path):
     # drive the handler through an in-process fake socket, no real network
     import io
 
     jm = DASH.JobManager(replay_fn=_fake_replay, out_dir=str(tmp_path))
-    H = DASH.make_handler(jm, ["MES", "MNQ"])
+    fake_report = {"connected": True, "report": {"closed_summary": {"scored": 1},
+                   "recent_signals": [{"action": "SKIP"}], "open_trades": [], "closed_trades": [],
+                   "health": {"signal_tf": "1H"}}}
+    H = DASH.make_handler(jm, ["MES", "MNQ"], live_fetch=lambda: fake_report)
 
     class FakeReq:
         def __init__(self, method, path, body=b""):
@@ -98,8 +107,14 @@ def test_http_handler_run_status_download(tmp_path):
         out = h.wfile.getvalue().decode(errors="replace")
         return out
 
-    # GET / -> HTML page listing symbols
-    assert "Replay Dashboard" in call("GET", "/") and "MES" in call("GET", "/")
+    # GET / -> HTML page with both areas + symbols
+    page = call("GET", "/")
+    assert "ict_live" in page and "LIVE" in page and "REPLAY" in page and "MES" in page
+    # GET /live -> proxied live report (SKIP signal visible)
+    live = call("GET", "/live")
+    body = json.loads(live.split("\r\n\r\n", 1)[1])
+    assert body["connected"] is True
+    assert body["report"]["recent_signals"][0]["action"] == "SKIP"
     # POST /run -> job id
     body = json.dumps({"symbols": ["MES"], "from": "2025-01-01", "to": "2025-03-31",
                        "period": "quarter"}).encode()

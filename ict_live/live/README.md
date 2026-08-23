@@ -70,17 +70,27 @@ writes **every completed trade** (times, prices, R, win, bars held, MFE/MAE, exe
 factor, and the reasoning snapshot) so any analysis can be done externally without changing the
 system. These are reporting outputs; they never affect the frozen trading decisions.
 
-### Replay dashboard (browser front-end)
+### Operational dashboard (browser front-end for LIVE + REPLAY)
 ```bash
-.venv/bin/python -m ict_live.replay.dashboard
+.venv/bin/python -m ict_live.replay.dashboard            # LIVE proxies http://127.0.0.1:8000 by default
+.venv/bin/python -m ict_live.replay.dashboard --live-url http://127.0.0.1:8000 --port 8010
 ```
-It prints a line like `Replay Dashboard: http://127.0.0.1:8010 …` — open that URL. If the port is
-busy it auto-picks the next free one; override with `--port 8020`.
-A browser UI over the **same** replay runner: pick one or more symbols and a date range, choose the
-aggregation, start the run, watch progress, see per-symbol summary stats side by side, and download
-each trade CSV. It is a front-end only — it drives `replay.run.replay` unchanged and adds no trading
-logic (the progress readout is a no-op instrumentation hook). Runs under the research venv (pandas),
-stdlib HTTP — no web framework.
+It prints `ict_live dashboard: http://127.0.0.1:PORT …` — open that URL (auto-picks a free port).
+One page, two areas, both driven by the **existing** frozen system — the dashboard holds no trading
+logic and no second implementation of anything:
+
+- **LIVE** — a read-only, server-side proxy of the running live service's existing `/report` (set
+  `--live-url`): live signals incl. SKIP / NO_SETUP with entry / stop / +2R / structural target /
+  execution score / weakest factor / reasoning snapshot, open trades, closed trades (result R,
+  MFE/MAE), running stats (trades / win rate / expectancy / total R / PF / max DD), and engine health
+  / last processed bar. Refreshes every few seconds; shows "not connected" if the live service is
+  down.
+- **REPLAY** — drives `replay.run.replay` unchanged: pick symbol(s) + date range + aggregation, run,
+  watch progress, see per-symbol stats side by side, download each trade CSV.
+
+Runs under the research venv (pandas, for replay); stdlib HTTP — no web framework. The live service
+itself runs separately under its FastAPI env (`python -m ict_live.live.serve`); the dashboard only
+reads its API.
 (Replay runs under the research venv, which has pandas to load history; the live service runs under
 the FastAPI env. Both execute the same trading code.)
 

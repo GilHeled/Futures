@@ -139,6 +139,22 @@ def create_app(ingestor: Optional[Ingestor] = None, runner: Optional[LiveRunner]
             return {"ok": True, "live_since_ms": runner.live_since_ms, "unchanged": True}
         return {"ok": True, "live_since_ms": runner.mark_live(body.get("ms"))}
 
+    @app.get("/reasoning", response_class=HTMLResponse)
+    async def reasoning_view(symbol: str = ""):
+        """Full reasoning-graph inspector for a symbol's latest live signal (why the engine decided
+        what it did). Rendered from the retained MarketState; read-only, no annotation panel."""
+        import html as _html
+        ms = getattr(runner, "last_state", {}).get(symbol)
+        if ms is None:
+            return HTMLResponse(
+                "<p style='font-family:system-ui;padding:28px;color:#888'>No reasoning yet for "
+                f"<b>{_html.escape(symbol)}</b> — it appears after the next 1H close on a "
+                "streaming symbol.</p>")
+        from ict_live.research.reasoning_html import render as render_reasoning   # lazy: research stays off the hot path
+        scene = {"symbol": symbol, "title": f"{symbol} — reasoning", "annotate": False,
+                 "time": (runner.last_signal.get(symbol) or {}).get("time", "")}
+        return HTMLResponse(render_reasoning(ms, scene))
+
     @app.get("/report.html", response_class=HTMLResponse)
     async def report_html():
         return REPORT.render_html(REPORT.build_report(runner))

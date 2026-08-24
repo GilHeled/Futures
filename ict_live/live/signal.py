@@ -62,6 +62,14 @@ def build_ticket(signal_bars, entry_bars=None, *, symbol: str, signal_tf: str,
     and assemble the ticket. `signal_bars` must be closed, chronological, causal (cursor = last bar).
     `min_stop` defaults to the symbol's own MIN_STOP_TICKS * tick_size (so commodities with non-0.25
     ticks get the correct floor; MES/MNQ stay at 2.0)."""
+    return build_ticket_with_state(signal_bars, entry_bars, symbol=symbol, signal_tf=signal_tf,
+                                   entry_tf=entry_tf, window=window, min_stop=min_stop)[0]
+
+
+def build_ticket_with_state(signal_bars, entry_bars=None, *, symbol: str, signal_tf: str,
+                            entry_tf: str = "", window: int = WINDOW, min_stop: float | None = None):
+    """Same as `build_ticket`, but also returns the underlying MarketState so callers (e.g. the live
+    runner) can render its reasoning graph without re-running the pipeline. Returns (ticket, ms)."""
     if min_stop is None:
         min_stop = C.min_stop_for(symbol)
     bars = signal_bars[-window:] if window else signal_bars
@@ -75,14 +83,15 @@ def build_ticket(signal_bars, entry_bars=None, *, symbol: str, signal_tf: str,
                   execution=ea.execution, confidence=ea.confidence, reasons=ea.reasons,
                   weakest_factor=ea.weakest_factor, reasoning=REC.reasoning_snapshot(ms, ea))
     if win is None:
-        return TradeTicket(action="NO_SETUP", **common)
+        return TradeTicket(action="NO_SETUP", **common), ms
     risk = abs(win.entry - win.stop)
     action = "TAKE" if ea.execution == "TRADE" else "SKIP"
-    return TradeTicket(action=action, entry=win.entry, stop=win.stop, risk=round(risk, 4),
-                       exit_target=round(_exit_target(win.direction, win.entry, risk), 4),
-                       structural_target=win.target,
-                       structural_rr=(round(win.rr, 3) if win.target is not None else None),
-                       **common)
+    ticket = TradeTicket(action=action, entry=win.entry, stop=win.stop, risk=round(risk, 4),
+                         exit_target=round(_exit_target(win.direction, win.entry, risk), 4),
+                         structural_target=win.target,
+                         structural_rr=(round(win.rr, 3) if win.target is not None else None),
+                         **common)
+    return ticket, ms
 
 
 def tick_size(symbol: str) -> float:

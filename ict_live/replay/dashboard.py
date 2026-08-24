@@ -23,7 +23,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from ict_live.replay import run as REPLAY
 
@@ -158,7 +158,16 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .read .why{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}
  .read .why .wc{background:var(--panel2);border:1px solid var(--line);border-radius:7px;
    padding:2px 7px;font-size:10.5px;color:var(--mut)} .read .why .wc b{color:var(--ink);font-weight:600}
- .read .rfoot{margin-top:9px;font-size:10.5px;color:var(--mut)}
+ .read .rfoot{margin-top:9px;font-size:10.5px;color:var(--mut);display:flex;align-items:center;gap:8px}
+ .whybtn{background:var(--panel2);color:var(--accent);border:1px solid var(--line);border-radius:7px;
+   padding:3px 10px;font-size:11px;font-weight:700;cursor:pointer;margin-left:auto} .whybtn:hover{border-color:var(--accent)}
+ .modal{position:fixed;inset:0;background:#000a;display:none;z-index:50;padding:22px}
+ .modal.on{display:flex} .modal-box{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+   margin:auto;width:min(1120px,96vw);height:90vh;display:flex;flex-direction:column;overflow:hidden}
+ .modal-hd{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line)}
+ .modal-hd b{font-size:13px;font-family:"SF Mono",ui-monospace,Menlo,monospace}
+ .modal-hd .x{margin-left:auto;cursor:pointer;font-size:16px;color:var(--mut);background:none;border:none;padding:2px 8px}
+ .modal iframe{flex:1;border:0;width:100%}
  /* ---- actionable trade tickets (the hero) ---- */
  .tickets{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
  .ticket{background:var(--panel);border:1px solid var(--line);border-left:6px solid var(--mut);
@@ -237,6 +246,9 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
   <div id=replay-out></div>
 </section>
 </main>
+<div id=rmodal class=modal><div class=modal-box>
+  <div class=modal-hd><b id=rmodal-title>Reasoning</b><button class=x onclick="closeReasoning()">✕ close</button></div>
+  <iframe id=rmodal-frame title="reasoning inspector"></iframe></div></div>
 <script>
 const $=s=>document.querySelector(s);
 function show(t){for(const s of ['live','replay']){$('#'+s).classList.toggle('on',s===t);$('#nav-'+s).classList.toggle('on',s===t);}}
@@ -281,7 +293,8 @@ function tickets(rep){
     }
     const banner=warn?'<div class=warn>⚠ Resting limit far from price / aging setup — NOT an at-market order. It fills only if price returns to the entry. Verify it still makes sense before placing.</div>':'';
     return `<div class="ticket ${o.direction}${warn?' stale':''}">
-      <div class=thead><span class="badge ${o.direction}">${dir}</span><span class=sym>${o.symbol}</span>${status}</div>
+      <div class=thead><span class="badge ${o.direction}">${dir}</span><span class=sym>${o.symbol}</span>${status}
+        <button class=whybtn onclick="openReasoning('${o.symbol}')">why?</button></div>
       <div class=instr>${how}</div>
       <div class=levels>
         <div class=lvl><span>Entry</span><b class=num>${price(o.entry,o.symbol,rep)}</b></div>
@@ -367,7 +380,8 @@ function currentRead(rep){
         ${execTxt?'<span>'+execTxt+'</span>':''}
         ${c.weakest_factor?'<span>weakest <b>'+fmt(c.weakest_factor)+'</b></span>':''}</div>
       ${why?'<div class=why>'+why+'</div>':''}
-      <div class=rfoot>1H bar ${fmt(c.time)}${age?' · updated '+age:''}</div>
+      <div class=rfoot><span>1H bar ${fmt(c.time)}${age?' · updated '+age:''}</span>
+        <button class=whybtn onclick="openReasoning('${sym}')">why?</button></div>
     </div>`;}).join('');
   return '<div class=reads>'+cards+'</div>';
 }
@@ -414,6 +428,11 @@ async function pollLive(){
     $('#live-body').innerHTML=liveTables(d.report);
   }catch(e){$('#cdot').className='dot no';$('#livestate').textContent='poll error';}
 }
+function openReasoning(sym){$('#rmodal-title').textContent=sym+' — reasoning';
+  $('#rmodal-frame').src='/live/reasoning?symbol='+encodeURIComponent(sym);$('#rmodal').classList.add('on');}
+function closeReasoning(){$('#rmodal').classList.remove('on');$('#rmodal-frame').src='about:blank';}
+$('#rmodal').onclick=e=>{if(e.target.id==='rmodal')closeReasoning();};
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeReasoning();});
 setInterval(pollLive,4000);pollLive();
 
 // ---------------- REPLAY ----------------
@@ -508,6 +527,15 @@ def make_handler(jobs: JobManager, symbols: list[str], live_fetch=None, live_url
                 return self._send(200, _page(symbols), "text/html; charset=utf-8")
             if u.path == "/live":
                 return self._send(200, live_fetch())
+            if u.path == "/live/reasoning":                    # proxy the live service's reasoning inspector
+                if not live_url:
+                    return self._send(503, b"<p>no live url</p>", "text/html; charset=utf-8")
+                try:
+                    url = live_url.rstrip("/") + "/reasoning?symbol=" + quote(q.get("symbol", [""])[0])
+                    with urllib.request.urlopen(url, timeout=6) as r:
+                        return self._send(200, r.read(), "text/html; charset=utf-8")
+                except Exception as e:
+                    return self._send(502, f"<p style='padding:24px;font-family:system-ui'>reasoning unavailable: {type(e).__name__}</p>".encode(), "text/html; charset=utf-8")
             if u.path == "/status":
                 job = jobs.status(q.get("job", [""])[0])
                 return self._send(200 if job else 404, job or {"error": "unknown job"})

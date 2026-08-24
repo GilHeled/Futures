@@ -36,6 +36,7 @@ class LiveRunner:
         self.recent_signals: list[dict] = []
         self.last_signal_bar: dict[str, str] = {}
         self.last_signal: dict[str, dict] = {}          # latest ticket per symbol (for the live "current read")
+        self.last_state: dict = {}                       # latest MarketState per symbol (for the reasoning inspector)
         self.store_dir = Path(store_dir) if store_dir else None
         if self.store_dir:
             self.store_dir.mkdir(parents=True, exist_ok=True)
@@ -110,9 +111,10 @@ class LiveRunner:
             return {"ticket": None, "closed_trades": []}
         tr = self.tracker(symbol)
         closed_trades = tr.update(sig_bar)                          # resolve opens first
-        ticket = SIG.build_ticket(buf[self.signal_tf], buf[self.entry_tf] or None,
-                                  symbol=symbol, signal_tf=self.signal_tf, entry_tf=self.entry_tf,
-                                  window=self.window)
+        ticket, ms = SIG.build_ticket_with_state(buf[self.signal_tf], buf[self.entry_tf] or None,
+                                                  symbol=symbol, signal_tf=self.signal_tf,
+                                                  entry_tf=self.entry_tf, window=self.window)
+        self.last_state[symbol] = ms                    # retained for the reasoning inspector
         if ticket.action == "TAKE":
             opened = tr.open_from_ticket(ticket)
             if opened is not None and self.on_take:        # a genuinely NEW setup — notify once

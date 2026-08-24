@@ -85,3 +85,16 @@ def test_report_endpoints():
     assert "win rate" in c.get("/report.html").text
     assert "closed" in c.get("/trades").json()
     assert "recent" in c.get("/signals").json()
+
+
+def test_reasoning_endpoint_renders_for_a_live_symbol():
+    from starlette.testclient import TestClient
+    from ict_live.api.webhook import create_app
+    runner = _runner_with_state()                       # feeds _h1 bars -> populates last_state["MNQ"]
+    assert "MNQ" in runner.last_state                    # MarketState retained per symbol
+    c = TestClient(create_app(runner=runner))
+    r = c.get("/reasoning", params={"symbol": "MNQ"})
+    assert r.status_code == 200 and "MNQ" in r.text      # full inspector HTML for the symbol
+    # unknown symbol degrades gracefully (no 500), just says none yet
+    r2 = c.get("/reasoning", params={"symbol": "NOPE"})
+    assert r2.status_code == 200 and "No reasoning yet" in r2.text

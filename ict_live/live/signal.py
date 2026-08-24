@@ -57,9 +57,13 @@ def _exit_target(direction: str, entry: float, risk: float) -> float:
 
 
 def build_ticket(signal_bars, entry_bars=None, *, symbol: str, signal_tf: str,
-                 entry_tf: str = "", window: int = WINDOW, min_stop: float = _MIN_STOP) -> TradeTicket:
+                 entry_tf: str = "", window: int = WINDOW, min_stop: float | None = None) -> TradeTicket:
     """Run the frozen pipeline on the closed signal-TF window (+ optional lower-TF entry-refine bars)
-    and assemble the ticket. `signal_bars` must be closed, chronological, causal (cursor = last bar)."""
+    and assemble the ticket. `signal_bars` must be closed, chronological, causal (cursor = last bar).
+    `min_stop` defaults to the symbol's own MIN_STOP_TICKS * tick_size (so commodities with non-0.25
+    ticks get the correct floor; MES/MNQ stay at 2.0)."""
+    if min_stop is None:
+        min_stop = C.min_stop_for(symbol)
     bars = signal_bars[-window:] if window else signal_bars
     ms = pipeline.analyze(bars, signal_tf, refine_bars=entry_bars, min_stop=min_stop)
     ea = EQ.assess(ms)

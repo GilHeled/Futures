@@ -70,12 +70,20 @@ def push_new(tv, url, symbol, *, token, last_ms: dict, log=print) -> int:
 
 
 def _pump(tv, url, sym, *, token, last_ms, load_wait, log) -> int:
-    """Switch the chart to `sym` (1m) and POST its newly-closed bars. Returns count posted."""
+    """Switch the chart to `sym` (1m) and POST its newly-closed bars. Returns count posted.
+
+    Verifies the chart actually switched before reading, so round-robin never posts a stale
+    wrong-symbol bar (set_symbol is async; the chart takes a moment to load)."""
     tv.set_symbol(sym)
     tv.set_timeframe("1")
     if load_wait:
-        time.sleep(load_wait)                                     # let the chart load the new symbol
-    return push_new(tv, url, sym, token=token, last_ms=last_ms, log=log)
+        time.sleep(load_wait)
+    for _ in range(4):                                            # confirm the switch loaded
+        if chart_symbol(tv) == sym:
+            return push_new(tv, url, sym, token=token, last_ms=last_ms, log=log)
+        time.sleep(load_wait or 0.5)
+    log(f"{sym}: chart did not switch in time — skipping this cycle")
+    return 0
 
 
 def run(url, *, symbols=None, token=None, interval=15, once=False, load_wait=1.5,

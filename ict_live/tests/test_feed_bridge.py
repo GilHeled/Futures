@@ -10,6 +10,14 @@ def test_instruments_maps_known_symbols():
     assert inst.get("MES") == "CME_MINI:MES1!" and inst.get("MNQ") == "CME_MINI:MNQ1!"
 
 
+def test_major_commodities_registered():
+    inst = FB._instruments()
+    assert inst.get("GC") == "COMEX:GC1!" and inst.get("CL") == "NYMEX:CL1!"
+    assert inst.get("SI") == "COMEX:SI1!" and inst.get("NG") == "NYMEX:NG1!"
+    # yfinance fetch uses the root as {root}=F
+    assert all(r in inst for r in ("GC", "MGC", "CL", "MCL", "NG", "SI", "HG"))
+
+
 def _bar(minute, price):
     ot = datetime(2026, 8, 21, 10, minute, tzinfo=timezone.utc)
     return (ot, price, price + 1, price - 1, price + 0.5, 100.0)

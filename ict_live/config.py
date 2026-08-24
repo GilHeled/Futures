@@ -116,10 +116,33 @@ class Instrument:
     point_value: float
 
 
-# minimal registry; extend as feeds are added
+# Instrument registry — the symbols the service will accept. Keys are TradingView tickerids
+# (syminfo.tickerid), so the MCP feed matches automatically. Adding a symbol only expands COVERAGE;
+# it does not change any trading logic (the engine is symbol-agnostic).
+#
+# NOTE ON VALIDATION: the frozen v1 engine/filter/exit were validated ONLY on index futures
+# (MES/MNQ). The commodities below are provided for live monitoring / paper use; the strategy's
+# behavior on them is UNVALIDATED — treat any edge there as a separate v2 hypothesis needing its own
+# unseen data. Tick sizes are the real CME/COMEX/NYMEX increments (used for the min-stop floor).
 INSTRUMENTS = {
+    # index futures (validated)
     "CME_MINI:NQ1!": Instrument("CME_MINI:NQ1!", "NQ", 0.25, 20.0),
     "CME_MINI:ES1!": Instrument("CME_MINI:ES1!", "ES", 0.25, 50.0),
     "CME_MINI:MNQ1!": Instrument("CME_MINI:MNQ1!", "MNQ", 0.25, 2.0),
     "CME_MINI:MES1!": Instrument("CME_MINI:MES1!", "MES", 0.25, 5.0),
+    # major commodities (UNVALIDATED for this strategy — monitoring / paper)
+    "COMEX:GC1!": Instrument("COMEX:GC1!", "GC", 0.10, 100.0),       # Gold
+    "COMEX:MGC1!": Instrument("COMEX:MGC1!", "MGC", 0.10, 10.0),     # Micro Gold
+    "COMEX:SI1!": Instrument("COMEX:SI1!", "SI", 0.005, 5000.0),     # Silver
+    "COMEX:HG1!": Instrument("COMEX:HG1!", "HG", 0.0005, 25000.0),   # Copper
+    "NYMEX:CL1!": Instrument("NYMEX:CL1!", "CL", 0.01, 1000.0),      # Crude Oil (WTI)
+    "NYMEX:MCL1!": Instrument("NYMEX:MCL1!", "MCL", 0.01, 100.0),    # Micro Crude
+    "NYMEX:NG1!": Instrument("NYMEX:NG1!", "NG", 0.001, 10000.0),    # Natural Gas
 }
+
+
+def min_stop_for(symbol: str) -> float:
+    """The execution min-stop floor for a symbol, in price = MIN_STOP_TICKS * tick_size. Falls back
+    to a 0.25 tick (index-futures default) for unknown symbols. Keeps MES/MNQ at 2.0 (unchanged)."""
+    inst = INSTRUMENTS.get(symbol)
+    return MIN_STOP_TICKS * (inst.tick_size if inst else 0.25)

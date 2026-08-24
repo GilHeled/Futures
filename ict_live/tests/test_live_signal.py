@@ -53,6 +53,14 @@ def test_ticket_on_live_setup_matches_frozen_layers():
     raise AssertionError("no live setup produced")
 
 
+def test_min_stop_is_per_instrument():
+    from ict_live import config as C
+    assert C.min_stop_for("CME_MINI:MNQ1!") == 2.0          # 8 * 0.25 (index futures, unchanged)
+    assert round(C.min_stop_for("COMEX:GC1!"), 4) == 0.8    # 8 * 0.10 (gold)
+    assert round(C.min_stop_for("NYMEX:CL1!"), 4) == 0.08   # 8 * 0.01 (crude)
+    assert C.min_stop_for("UNKNOWN") == 2.0                 # falls back to a 0.25 tick
+
+
 def test_no_setup_ticket():
     t0 = datetime(2026, 6, 1, 18, tzinfo=ET)
     flat = [Bar("15m", t0 + timedelta(minutes=15 * i), t0 + timedelta(minutes=15 * (i + 1)),

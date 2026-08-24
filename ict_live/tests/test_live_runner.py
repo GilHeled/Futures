@@ -113,6 +113,21 @@ def test_pre_live_bars_prime_structure_but_never_open_trades(tmp_path):
     assert r2.live_since_ms == boundary
 
 
+def test_on_take_fires_once_per_new_take():
+    """The notification hook fires exactly once per genuinely new TAKE (never re-fires while the same
+    ticket is still open) and receives the ticket as a dict."""
+    seed = _seed_with_take()
+    assert seed is not None
+    calls = []
+    r = LiveRunner(Ingestor(), signal_tf="1H", window=240, on_take=lambda t: calls.append(t))
+    for b in _h1(360, seed=seed):
+        r.on_closed_bars("MNQ", [b])
+    assert calls, "on_take should fire on a TAKE"
+    assert all(c.get("action") == "TAKE" for c in calls)
+    ids = [c.get("ticket_id") for c in calls]
+    assert len(ids) == len(set(ids)), "each TAKE notified at most once (no duplicate ticket_id)"
+
+
 def test_live_bars_after_boundary_do_open_trades():
     """The mirror of the above: with the boundary in the past, bars flow through the full path and
     trades open exactly as when the boundary is unset."""

@@ -51,8 +51,12 @@ def build_service(cfg: Config | None = None):
     data.mkdir(parents=True, exist_ok=True)
     store = MarketStore(path=data / "raw_1m.jsonl")           # persisted + reloaded on restart
     ing = Ingestor(token=cfg.token, store=store)
+    from ict_live.live.notify import TelegramNotifier
+    notifier = TelegramNotifier()                             # env-configured; disabled if unset
     runner = LiveRunner(ing, signal_tf=cfg.signal_tf, entry_tf=cfg.entry_tf,
-                        store_dir=str(data / "signals"))
+                        store_dir=str(data / "signals"),
+                        on_take=(notifier.notify_ticket if notifier.enabled else None))
+    log.info("TAKE notifications: %s", "Telegram ENABLED" if notifier.enabled else "disabled (set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID)")
     rec = runner.warmup()                                     # replay stored 1m -> rebuild state
     log.info("warmup complete: %s", rec)
     from ict_live.api.webhook import create_app

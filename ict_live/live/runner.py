@@ -25,8 +25,9 @@ RECENT_SIGNALS = 40                     # in-memory ring of recent tickets (repo
 class LiveRunner:
     def __init__(self, ingestor: Ingestor, *, signal_tf: str = "1H", entry_tf: str = "15m",
                  window: int = SIG.WINDOW, horizon: int = DEFAULT_HORIZON,
-                 store_dir: Optional[str] = None):
+                 store_dir: Optional[str] = None, on_take=None):
         self.ingestor = ingestor
+        self.on_take = on_take            # optional callback(ticket_dict), fired once per NEW TAKE (notifications)
         self.signal_tf, self.entry_tf = signal_tf, entry_tf
         self.window, self.horizon = window, horizon
         self._entry_cap = window * 6 + 64
@@ -113,7 +114,12 @@ class LiveRunner:
                                   symbol=symbol, signal_tf=self.signal_tf, entry_tf=self.entry_tf,
                                   window=self.window)
         if ticket.action == "TAKE":
-            tr.open_from_ticket(ticket)
+            opened = tr.open_from_ticket(ticket)
+            if opened is not None and self.on_take:        # a genuinely NEW setup — notify once
+                try:
+                    self.on_take(ticket.to_dict())
+                except Exception:
+                    pass
         self.last_signal_bar[symbol] = sig_bar.open_time.isoformat()
         self.last_signal[symbol] = ticket.to_dict()
         self.recent_signals.append(ticket.to_dict())

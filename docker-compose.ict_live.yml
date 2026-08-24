@@ -24,6 +24,8 @@ services:
       ICT_LIVE_PORT: "8000"
       ICT_LIVE_DATA_DIR: /data        # persisted raw 1m + signal/trade logs
       ICT_LIVE_TOKEN: ${ICT_LIVE_TOKEN:-}   # optional; leave empty for local use
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}   # set both to get a Telegram alert on each new TAKE
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     command: ["python", "-m", "ict_live.live.serve"]
     ports:
       - "127.0.0.1:8000:8000"         # localhost only

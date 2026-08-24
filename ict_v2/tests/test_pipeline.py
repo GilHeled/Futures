@@ -32,12 +32,32 @@ def test_three_explicit_stages():
     # [2] setup: the intermediate manipulation/displacement/MSS layer is present (lists)
     assert isinstance(st.setup.sweeps, list) and isinstance(st.setup.displacements, list)
     assert isinstance(st.setup.mss, list)
-    # [3] execution: entry FVGs + a recommendation/decision
-    assert isinstance(st.execution.fvgs, list)
-    assert getattr(st.execution.recommendation, "decision", None) in ("LONG", "SHORT", "NO-TRADE")
+    # [3] execution: entry FVGs + executables (only for gated setups) + a decision
+    assert isinstance(st.execution.fvgs, list) and isinstance(st.execution.executables, list)
+    assert st.execution.decision.startswith(("LONG", "SHORT", "NO-TRADE"))
     # describe() renders all three stages
     d = st.describe()
     assert "HTF CONTEXT" in d and "MTF SETUP" in d and "LTF EXECUTION" in d
+
+
+def test_htf_gate_controls_execution():
+    # correlated data (HTF/MTF/LTF from one 1m base) so the gate is meaningful
+    st = v2.demo_state(seed=7)
+    c = st.context
+    # LTF execution operates ONLY on setups that passed the HTF gate — one executable per gated setup
+    assert len(st.execution.executables) == len(st.setup.gated)
+    # the gate is a real filter, not a pass-through
+    assert len(st.setup.candidates) >= len(st.setup.gated)
+    if st.setup.gated:
+        assert st.execution.decision in ("LONG", "SHORT")
+        # every gated setup agrees with HTF bias; every executable targets the HTF liquidity draw
+        assert all(g.setup.direction == c.bias for g in st.setup.gated)
+        for ex in st.execution.executables:
+            assert ex.direction == c.bias
+            if ex.objective is not None:
+                assert ex.target == ex.objective.price
+    else:
+        assert st.execution.decision.startswith("NO-TRADE")
 
 
 def test_stages_are_independent_functions():

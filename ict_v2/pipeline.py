@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from ict_live.engine import pipeline as v1        # frozen v1 engine, read-only
+from ict_v2 import align
 
 
 # ---- the three layers -------------------------------------------------------------------------
@@ -34,21 +35,42 @@ class HTFContext:
 
 
 @dataclass
+class GatedSetup:
+    """An MTF setup that PASSED the HTF gate, plus the HTF liquidity objective it targets."""
+    setup: object                                      # v1 Setup (direction/entry/stop/target)
+    objective: object = None                           # HTF liquidity pool = the draw (target)
+
+
+@dataclass
 class MTFSetup:
-    """Stage 2 — the intermediate-timeframe setup: manipulation, displacement, MSS."""
+    """Stage 2 — the intermediate-timeframe setup: manipulation, displacement, MSS, and the setups
+    that survive the HTF gate."""
     tf: str
     sweeps: list = field(default_factory=list)         # ranked manipulation (liquidity raids)
     displacements: list = field(default_factory=list)
     mss: list = field(default_factory=list)
+    candidates: list = field(default_factory=list)     # all MTF setups (pre-gate)
+    gated: list = field(default_factory=list)          # list[GatedSetup] that passed the HTF gate
+
+
+@dataclass
+class Executable:
+    """A gated setup turned into an executable ticket on the LTF (target = HTF liquidity draw)."""
+    direction: str
+    entry: float
+    stop: float
+    target: Optional[float]
+    ltf_confirmed: bool                                # an LTF entry FVG is present
+    objective: object = None
 
 
 @dataclass
 class LTFExecution:
-    """Stage 3 — the lower-timeframe execution: entry FVGs + the executable setup."""
+    """Stage 3 — execution, operating ONLY on MTF setups that passed the HTF gate."""
     tf: str
-    fvgs: list = field(default_factory=list)           # ranked entry FVGs
-    setup: object = None                               # executable setup (entry/stop/target) or None
-    recommendation: object = None                      # v1 Recommendation (decision + reason)
+    fvgs: list = field(default_factory=list)           # ranked LTF entry FVGs
+    executables: list = field(default_factory=list)    # list[Executable] (only for gated setups)
+    decision: str = "NO-TRADE"
 
 
 @dataclass
@@ -62,16 +84,18 @@ class MTFState:
         c, s, e = self.context, self.setup, self.execution
         dr = c.dealing_range
         drs = f"{dr.low:g}-{dr.high:g} (CE {dr.ce:g}, {dr.direction})" if dr else "none"
-        su = e.setup
-        if su:
-            tgt = f"{su.target:g}" if su.target is not None else "—"
-            sus = f"{su.direction} entry {su.entry:g} stop {su.stop:g} target {tgt} RR {su.rr:g}"
+        ex = e.executables[0] if e.executables else None
+        if ex:
+            tgt = f"{ex.target:g}" if ex.target is not None else "—"
+            exs = f"{ex.direction} entry {ex.entry:g} stop {ex.stop:g} target {tgt} (LTF-confirmed={ex.ltf_confirmed})"
         else:
-            sus = "none"
+            exs = "none"
         return (
             f"[1] HTF CONTEXT  ({c.tf}): bias={c.bias}  dealing_range={drs}  liquidity_draws={len(c.liquidity)}\n"
-            f"[2] MTF SETUP    ({s.tf}): sweeps={len(s.sweeps)}  displacements={len(s.displacements)}  mss={len(s.mss)}\n"
-            f"[3] LTF EXECUTION({e.tf}): fvgs={len(e.fvgs)}  setup={sus}  decision={getattr(e.recommendation,'decision',None)}"
+            f"[2] MTF SETUP    ({s.tf}): sweeps={len(s.sweeps)} displ={len(s.displacements)} mss={len(s.mss)} "
+            f"| candidates={len(s.candidates)} -> GATED(passed HTF)={len(s.gated)}\n"
+            f"[3] LTF EXECUTION({e.tf}): fvgs={len(e.fvgs)}  executables={len(e.executables)}  "
+            f"decision={e.decision}  {exs}"
         )
 
 
@@ -85,17 +109,35 @@ def htf_context(bars, tf: str) -> HTFContext:
 
 
 def mtf_setup(bars, tf: str, context: HTFContext) -> MTFSetup:
-    """Stage 2: run the engine on the MTF and keep the setup layer (manipulation/displacement/MSS)."""
+    """Stage 2: run the engine on the MTF, then GATE each setup by the HTF context (bias +
+    premium/discount + liquidity objective). Only setups that pass are carried forward."""
     ms = v1.analyze(bars, tf)
+    candidates = [r.item for r in ms.ranked_setups]
+    gated = []
+    for su in candidates:
+        passed, _reasons, objective = align.gate_setup(su, context)
+        if passed:
+            gated.append(GatedSetup(setup=su, objective=objective))
     return MTFSetup(tf=tf, sweeps=list(ms.ranked_sweeps), displacements=list(ms.ranked_displacements),
-                    mss=list(ms.ranked_mss))
+                    mss=list(ms.ranked_mss), candidates=candidates, gated=gated)
 
 
 def ltf_execution(bars, tf: str, setup: MTFSetup, context: HTFContext) -> LTFExecution:
-    """Stage 3: run the engine on the LTF and keep the execution layer (entry FVG + setup)."""
+    """Stage 3: execution runs ONLY on MTF setups that passed the HTF gate. For each, produce an
+    executable (target = the HTF liquidity draw), and note whether the LTF shows an entry FVG."""
+    if not setup.gated:
+        return LTFExecution(tf=tf, fvgs=[], executables=[], decision="NO-TRADE (no HTF-gated setup)")
     ms = v1.analyze(bars, tf)
-    return LTFExecution(tf=tf, fvgs=list(ms.ranked_fvgs), setup=ms.recommendation.setup,
-                        recommendation=ms.recommendation)
+    fvgs = list(ms.ranked_fvgs)
+    executables = []
+    for g in setup.gated:
+        su, obj = g.setup, g.objective
+        executables.append(Executable(direction=su.direction, entry=su.entry, stop=su.stop,
+                                       target=(obj.price if obj is not None else su.target),
+                                       ltf_confirmed=bool(fvgs), objective=obj))
+    top = executables[0]
+    decision = "LONG" if top.direction == "long" else "SHORT"
+    return LTFExecution(tf=tf, fvgs=fvgs, executables=executables, decision=decision)
 
 
 def analyze_mtf(htf_bars, mtf_bars, ltf_bars, *, htf: str = "4H", mtf: str = "15m",
@@ -107,8 +149,23 @@ def analyze_mtf(htf_bars, mtf_bars, ltf_bars, *, htf: str = "4H", mtf: str = "15
     return MTFState(context=ctx, setup=stp, execution=exe)
 
 
-# ---- runnable demo ----------------------------------------------------------------------------
-def _demo_bars(n, tf, minutes, seed):
+# ---- resampling + demo ------------------------------------------------------------------------
+def resample(bars, factor: int, tf: str):
+    """Aggregate every `factor` consecutive bars into one `tf` bar (o=first, h=max, l=min, c=last).
+    Lets the three timeframes be derived from ONE underlying series so their structure is consistent."""
+    from ict_live.market.bar import Bar
+    out = []
+    for i in range(0, len(bars), factor):
+        ch = bars[i:i + factor]
+        if not ch:
+            continue
+        out.append(Bar(tf, ch[0].open_time, ch[-1].close_time, ch[0].open,
+                       max(b.high for b in ch), min(b.low for b in ch), ch[-1].close,
+                       sum(b.volume for b in ch)))
+    return out
+
+
+def _base_1m(n, seed):
     from datetime import datetime, timedelta, timezone
     from ict_live.market.bar import Bar
     bars, px, x = [], 20000.0, seed
@@ -116,20 +173,35 @@ def _demo_bars(n, tf, minutes, seed):
     for i in range(n):
         x = (1103515245 * x + 12345) % (2 ** 31)
         o = px
-        c = px + ((x % 21) - 10) * 1.5
-        ot = t0 + timedelta(minutes=minutes * i)
-        bars.append(Bar(tf, ot, ot + timedelta(minutes=minutes), o, max(o, c) + (x % 7),
-                        min(o, c) - (x % 5), c, 100.0))
+        c = px + ((x % 25) - 12) * 0.6
+        ot = t0 + timedelta(minutes=i)
+        bars.append(Bar("1m", ot, ot + timedelta(minutes=1), o, max(o, c) + (x % 5) * 0.4,
+                        min(o, c) - (x % 4) * 0.4, c, 100.0))
         px = c
     return bars
 
 
+def demo_state(seed=7):
+    """Build HTF/MTF/LTF from one 1m base (so they're consistent) and run the three stages."""
+    base = _base_1m(20000, seed)                 # ~13 sessions of 1m
+    htf = resample(base, 240, "4H")
+    mtf = resample(base, 15, "15m")
+    ltf = base[-400:]                            # recent 1m for execution
+    return analyze_mtf(htf, mtf, ltf, htf="4H", mtf="15m", ltf="1m")
+
+
 def main() -> None:
-    htf = _demo_bars(260, "4H", 240, 7)
-    mtf = _demo_bars(260, "15m", 15, 11)
-    ltf = _demo_bars(260, "1m", 1, 23)
-    state = analyze_mtf(htf, mtf, ltf, htf="4H", mtf="15m", ltf="1m")
-    print("ICT v2 — three-stage pipeline (demo data)\n")
+    # search a few seeds for one that actually passes the HTF gate, to show the full path firing
+    state = None
+    for seed in (7, 11, 23, 42, 101, 202, 303):
+        st = demo_state(seed)
+        if st.setup.gated:
+            state = st
+            print(f"ICT v2 — three-stage pipeline (correlated demo data, seed={seed})\n")
+            break
+    if state is None:
+        state = demo_state(7)
+        print("ICT v2 — three-stage pipeline (correlated demo data; no gated setup in sample)\n")
     print(state.describe())
 
 

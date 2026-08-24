@@ -49,8 +49,9 @@ class MTFSetup:
     sweeps: list = field(default_factory=list)         # ranked manipulation (liquidity raids)
     displacements: list = field(default_factory=list)
     mss: list = field(default_factory=list)
-    candidates: list = field(default_factory=list)     # all MTF setups (pre-gate)
+    candidates: list = field(default_factory=list)     # ACTIONABLE MTF setups (the available pool)
     gated: list = field(default_factory=list)          # list[GatedSetup] that passed the HTF gate
+    cand_info: list = field(default_factory=list)      # ALL ranked candidates w/ {actionable, passed} flags
 
 
 @dataclass
@@ -110,16 +111,24 @@ def mtf_setup(bars, tf: str, context: HTFContext) -> MTFSetup:
     """Stage 2: run the engine on the MTF, then GATE each setup by the HTF context (bias +
     premium/discount + liquidity objective). Only setups that pass are carried forward."""
     ms = v1.analyze(bars, tf)
-    # only consider setups v1 itself deems ACTIONABLE — non-actionable ones are rejected by v1
-    # (mitigated FVG, RR too low, degenerate geometry) and must never be executed
-    candidates = [r.item for r in ms.ranked_setups if getattr(r.item, "actionable", False)]
-    gated = []
-    for su in candidates:
-        passed, _reasons, objective = align.gate_setup(su, context)
-        if passed:
-            gated.append(GatedSetup(setup=su, objective=objective))
+    # Gate only setups v1 deems ACTIONABLE (non-actionable ones are rejected — mitigated FVG, RR too
+    # low, degenerate geometry — and must never be executed). But record ALL ranked candidates with
+    # their status so the UI can show rejected (gray) / available (white) / passed-gate (bold).
+    gated, cand_info, candidates = [], [], []
+    for r in ms.ranked_setups:
+        su = r.item
+        act = bool(getattr(su, "actionable", False))
+        passed = False
+        if act:
+            candidates.append(su)
+            passed, _reasons, objective = align.gate_setup(su, context)
+            if passed:
+                gated.append(GatedSetup(setup=su, objective=objective))
+        cand_info.append({"id": getattr(su, "id", ""), "direction": su.direction, "entry": su.entry,
+                          "stop": su.stop, "target": su.target, "rr": getattr(su, "rr", None),
+                          "actionable": act, "passed": passed})
     return MTFSetup(tf=tf, sweeps=list(ms.ranked_sweeps), displacements=list(ms.ranked_displacements),
-                    mss=list(ms.ranked_mss), candidates=candidates, gated=gated)
+                    mss=list(ms.ranked_mss), candidates=candidates, gated=gated, cand_info=cand_info)
 
 
 def ltf_execution(bars, tf: str, setup: MTFSetup, context: HTFContext) -> LTFExecution:

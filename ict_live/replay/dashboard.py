@@ -181,6 +181,17 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .modal iframe{flex:1;border:0;width:100%}
  .modal .imgwrap{flex:1;overflow:auto;display:flex;background:var(--panel2)}
  .modal .imgwrap img{max-width:100%;margin:auto}
+ .modal-box.sm{width:min(600px,94vw);height:auto;max-height:76vh}
+ .candlink{cursor:pointer;color:var(--accent);border-bottom:1px dotted var(--accent)}
+ .candlink:hover{filter:brightness(1.2)}
+ .candbody{overflow:auto;padding:12px 14px;display:flex;flex-direction:column;gap:6px}
+ .candleg{font-size:11px;color:var(--mut);padding-bottom:8px;margin-bottom:4px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:4px}
+ .candleg .candall,.candleg .candavail,.candleg .candpass{padding:0}
+ .candrow{font-size:12px;font-family:"SF Mono",ui-monospace,Menlo,monospace;padding:5px 8px;border-radius:6px;background:var(--panel2)}
+ .candtag{font-size:10px;text-transform:uppercase;letter-spacing:.4px}
+ .candall{color:var(--mut)}
+ .candavail{color:var(--ink)}
+ .candpass{color:var(--ink);font-weight:700}
  /* ---- actionable trade tickets (the hero) ---- */
  .tickets{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
  .ticket{background:var(--panel);border:1px solid var(--line);border-left:6px solid var(--mut);
@@ -267,6 +278,9 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
 <div id=cmodal class=modal><div class=modal-box>
   <div class=modal-hd><b id=cmodal-title>Chart</b><button class=x onclick="closeChart()">✕ close</button></div>
   <div class=imgwrap><img id=cmodal-img alt="chart"></div></div></div>
+<div id=candmodal class=modal><div class="modal-box sm">
+  <div class=modal-hd><b id=candmodal-title>Candidates</b><button class=x onclick="closeCandidates()">✕ close</button></div>
+  <div id=candmodal-body class=candbody></div></div></div>
 <script>
 const $=s=>document.querySelector(s);
 function show(t){for(const s of ['live','replay','v2']){$('#'+s).classList.toggle('on',s===t);$('#nav-'+s).classList.toggle('on',s===t);}}
@@ -469,7 +483,8 @@ function openChart(sym){$('#cmodal-title').textContent=sym+' — chart';
 function closeChart(){$('#cmodal').classList.remove('on');$('#cmodal-img').removeAttribute('src');}
 $('#rmodal').onclick=e=>{if(e.target.id==='rmodal')closeReasoning();};
 $('#cmodal').onclick=e=>{if(e.target.id==='cmodal')closeChart();};
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeReasoning();closeChart();}});
+$('#candmodal').onclick=e=>{if(e.target.id==='candmodal')closeCandidates();};
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeReasoning();closeChart();closeCandidates();}});
 setInterval(pollLive,4000);pollLive();
 
 // ---------------- V2 (experimental, advisory) ----------------
@@ -489,7 +504,7 @@ function v2Tables(rep){
     const top=e.top; const execSide=top?sideOf(top.direction):'flat';
     const dec=top?execSide.toUpperCase():'NO-TRADE';
     const execLine=top?`${top.direction.toUpperCase()} entry ${num(top.entry)} · stop ${num(top.stop)} · target ${num(top.target)}${top.ltf_confirmed?' · ✓':''}`:fmt(e.decision);
-    const gline=(x)=>`gated <b>${fmt(x.gated)}</b> of ${fmt(x.candidates)}${x.gated>0?' · '+fmt(x.direction):''}`;
+    const gline=(layer,x)=>`<span class=candlink onclick="openCandidates('${sym}','${layer}')" title="click for the candidate list">gated <b>${fmt(x.gated)}</b> of <b>${fmt(x.available)}</b> available · ${fmt(x.total)} total ▸</span>`;
     return `<div class="ticket ${execSide}">
       <div class=thead><span class=sym>${sym}</span><span class="v2dec ${execSide}">${dec}</span></div>
       <div class=reads>
@@ -497,10 +512,10 @@ function v2Tables(rep){
           <div class=why><span class=wc>bias <b>${fmt(c.bias)}</b></span><span class=wc>range <b>${drs}</b></span><span class=wc>draw <b>${objs}</b></span></div>
           <div class=rfoot>updated ${fmt(u[tf.context])}</div></div>
         <div class="read ${setupSide}"><div class=rhd><span class=rsy>1H</span><span class=rnn>setup</span></div>
-          <div class=rln>${gline(st)}</div>
+          <div class=rln>${gline('setup',st)}</div>
           <div class=rfoot>updated ${fmt(u[tf.setup])}</div></div>
         <div class="read ${confSide}"><div class=rhd><span class=rsy>15m</span><span class=rnn>confirmation</span></div>
-          <div class=rln>${gline(cf)}</div>
+          <div class=rln>${gline('confirmation',cf)}</div>
           <div class=rfoot>updated ${fmt(u[tf.confirm])}</div></div>
         <div class="read ${execSide}"><div class=rhd><span class=rsy>1m</span><span class=rnn>execution</span></div>
           <div class=rln>${execLine}</div>
@@ -509,9 +524,22 @@ function v2Tables(rep){
   return banner+'<div class=tickets>'+cards+'</div>';
 }
 async function pollV2(){
-  try{const d=await (await fetch('/v2/report')).json();$('#v2-body').innerHTML=v2Tables(d);}
+  try{const d=await (await fetch('/v2/report')).json();window._v2last=d;$('#v2-body').innerHTML=v2Tables(d);}
   catch(e){$('#v2-body').innerHTML='<div class="card mut">v2 (experimental) service not reachable — start it with <code>python -m ict_v2.serve</code>.</div>';}
 }
+function openCandidates(sym,layer){
+  const s=((window._v2last||{}).symbols||{})[sym]||{}; const info=((s[layer]||{}).candidates)||[];
+  const rows=info.map(cnd=>{
+    const cls=cnd.passed?'candpass':(cnd.actionable?'candavail':'candall');
+    const tag=cnd.passed?'✓ passed gate':(cnd.actionable?'available':'rejected');
+    return `<div class="candrow ${cls}">${(cnd.direction||'').toUpperCase()} · entry ${num(cnd.entry)} · stop ${num(cnd.stop)} · target ${num(cnd.target)} · RR ${num(cnd.rr)} · <span class=candtag>${tag}</span></div>`;
+  }).join('')||'<div class=mut>no candidates on this timeframe.</div>';
+  const legend='<div class=candleg><span class=candpass>bold</span> = passed the gate · <span class=candavail>white</span> = available (actionable) · <span class=candall>grey</span> = rejected</div>';
+  $('#candmodal-title').textContent=sym+' — '+layer+' candidates';
+  $('#candmodal-body').innerHTML=legend+rows;
+  $('#candmodal').classList.add('on');
+}
+function closeCandidates(){$('#candmodal').classList.remove('on');}
 setInterval(pollV2,5000);pollV2();
 
 // ---------------- REPLAY ----------------

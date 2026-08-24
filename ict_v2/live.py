@@ -70,11 +70,12 @@ class V2Live:
             return None
         g0 = mtf.gated[0] if mtf.gated else None
         obj = g0.objective if (g0 and g0.objective is not None) else None
-        return {"candidates": len(mtf.candidates), "gated": len(mtf.gated),
+        return {"available": len(mtf.candidates), "gated": len(mtf.gated), "total": len(mtf.cand_info),
                 "direction": (g0.setup.direction if g0 else None),
                 "top": None if not g0 else {"direction": g0.setup.direction, "entry": g0.setup.entry,
                                             "stop": g0.setup.stop},
-                "objective": None if obj is None else {"kind": obj.kind, "price": obj.price}}
+                "objective": None if obj is None else {"kind": obj.kind, "price": obj.price},
+                "candidates": list(mtf.cand_info)}      # full list for the drill-down popup
 
     def snapshot(self) -> dict:
         eng = self.engine

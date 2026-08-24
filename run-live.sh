@@ -7,6 +7,9 @@
 # Usage:   ./run-live.sh [SYMBOL ...]    (default: CME_MINI:MNQ1! CME_MINI:MES1!)
 # Ctrl+C stops the feed and tears the Docker stack down.
 #
+# On start it WARMS UP the engine's history with a one-time yfinance backfill (WARMUP_DAYS, default 7)
+# so signals can form immediately, then switches to the real-time source. Set WARMUP_DAYS=0 to skip.
+#
 # For real-time TradingView, launch TradingView Desktop with the debug port once:
 #   open -a TradingView --args --remote-debugging-port=9222
 set -euo pipefail
@@ -16,6 +19,7 @@ if [ "$#" -gt 0 ]; then SYMBOLS=("$@"); else SYMBOLS=(CME_MINI:MNQ1! CME_MINI:ME
 COMPOSE="docker compose -f docker-compose.ict_live.yml"
 export TV_CLI="${TV_CLI:-node $HOME/dev/tradingview-mcp/src/cli/index.js}"
 PY="${PY:-.venv/bin/python}"; [ -x "$PY" ] || PY="python3"
+WARMUP_DAYS="${WARMUP_DAYS:-7}"
 
 echo "==> building + starting live service and dashboard (Docker)…"
 $COMPOSE up -d --build live dashboard
@@ -27,7 +31,15 @@ echo "    dashboard: http://127.0.0.1:8010   ·   monitor: http://127.0.0.1:8000
 cleanup() { echo; echo "==> stopping feed and tearing down Docker…"; $COMPOSE down; }
 trap cleanup EXIT INT TERM
 
-# Prefer REAL-TIME TradingView (MCP); fall back to yfinance only if TradingView isn't reachable.
+# One-time WARM-UP: backfill history from yfinance so the engine has enough 1H bars to form setups
+# (the real-time MCP feed only seeds ~100 bars). Historical bars aren't delayed, so this is safe.
+if [ "$WARMUP_DAYS" != "0" ]; then
+  echo "==> warming up ~${WARMUP_DAYS}d of history (yfinance backfill; one-time)…"
+  "$PY" -m ict_live.live.feed_bridge --url http://127.0.0.1:8000 --symbols "${SYMBOLS[@]}" \
+    --backfill "${WARMUP_DAYS}d" --once || echo "   (warm-up skipped/failed — continuing)"
+fi
+
+# Then stream live. Prefer REAL-TIME TradingView (MCP); fall back to yfinance if TV isn't reachable.
 if "$PY" -c "from ict_live.devtools.tvmcp.client import TvClient; import sys; sys.exit(0 if TvClient().available() else 1)" 2>/dev/null; then
   echo "==> DATA SOURCE: TradingView Desktop (MCP, real-time)  ·  ${SYMBOLS[*]}  (Ctrl+C to stop)"
   exec "$PY" -m ict_live.devtools.tvmcp.live_feed --url http://127.0.0.1:8000 --symbols "${SYMBOLS[@]}"

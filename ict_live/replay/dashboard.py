@@ -135,6 +135,8 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .lvl span{display:block;font-size:10.5px;letter-spacing:.08em;color:var(--mut);text-transform:uppercase;margin-bottom:3px}
  .lvl b{font-size:20px} .lvl.stop b{color:var(--short)} .lvl.tgt b{color:var(--long)}
  .ticket .meta{font-size:12px;color:var(--mut)} .ticket .meta b{color:var(--ink)}
+ .ticket.stale{border-left-color:var(--warn)}
+ .warn{background:var(--warn-bg);color:var(--warn);border-radius:10px;padding:9px 11px;font-size:12px;margin:2px 0 8px;font-weight:600}
  .empty{border-left-color:var(--line);color:var(--mut);text-align:center;padding:26px}
  /* ---- kpis ---- */
  .kpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px}
@@ -195,12 +197,29 @@ function cls(v){return (typeof v==='number')?(v>0?'pos':(v<0?'neg':'')):'';}
 function tickets(rep){
   const opens=rep.open_trades||[]; const byId={}; (rep.recent_signals||[]).forEach(s=>byId[s.ticket_id]=s);
   if(!opens.length) return '<div class="ticket empty">No active trade right now — the engine is waiting for the next valid setup.<br><span class=mut>A ticket appears here the moment a TAKE signal fires.</span></div>';
+  const now=rep.server_time_ms||Date.now(); const lastp=rep.last_price||{};
   return '<div class=tickets>'+opens.map(o=>{
     const sig=byId[o.ticket_id]||{}; const long=o.direction==='long'; const dir=long?'LONG':'SHORT';
     const risk=Math.abs(o.entry-o.stop);
     const status=o.status==='OPEN'?'<span class="pill in">IN TRADE</span>':'<span class="pill place">PLACE ORDER</span>';
     const how=o.status==='OPEN'?'You should be in this position:':'Place a limit order on Topstep:';
-    return `<div class="ticket ${o.direction}">
+    // Freshness guard: how far the entry sits from the live price, and how old the setup is. A
+    // PENDING (unfilled) ticket far from price is a resting limit, not an at-market order.
+    let guard=''; let warn=false; const lp=lastp[o.symbol];
+    if(lp!=null){
+      const dpts=o.entry-lp, dpct=Math.abs(dpts)/lp*100, side=dpts>0?'above':'below';
+      if(o.status!=='OPEN' && dpct>0.5) warn=true;
+      guard+=`<span class=chip>price now <b class=num>${num(lp)}</b></span>`+
+             `<span class=chip>entry <b class=num>${Math.abs(dpts).toFixed(2)}</b> pts ${side} market (<b>${dpct.toFixed(2)}%</b>)</span>`;
+    }
+    const opened=o.opened_time?Date.parse(o.opened_time):NaN;
+    if(!isNaN(opened)){
+      const am=Math.max(0,Math.round((now-opened)/60000));
+      if(o.status!=='OPEN' && am>240) warn=true;
+      guard+=`<span class=chip>setup age <b>${am>=120?Math.round(am/60)+'h':am+'m'}</b></span>`;
+    }
+    const banner=warn?'<div class=warn>⚠ Resting limit far from price / aging setup — NOT an at-market order. It fills only if price returns to the entry. Verify it still makes sense before placing.</div>':'';
+    return `<div class="ticket ${o.direction}${warn?' stale':''}">
       <div class=thead><span class="badge ${o.direction}">${dir}</span><span class=sym>${o.symbol}</span>${status}</div>
       <div class=instr>${how}</div>
       <div class=levels>
@@ -208,6 +227,8 @@ function tickets(rep){
         <div class="lvl stop"><span>Stop</span><b class=num>${num(o.stop)}</b></div>
         <div class="lvl tgt"><span>Target +2R</span><b class=num>${num(o.exit_target)}</b></div>
       </div>
+      ${guard?'<div class=strip style="margin:2px 0 8px">'+guard+'</div>':''}
+      ${banner}
       <div class=meta>risk <b class=num>${risk.toFixed(2)}</b> pts (1R) · reward +2R · struct target <span class=num>${num(o.structural_target)}</span>
         · exec score <span class=num>${num(o.execution_score!=null?o.execution_score:sig.confidence)}</span> · weakest ${fmt(o.weakest_factor||sig.weakest_factor)}</div>
     </div>`;}).join('')+'</div>';

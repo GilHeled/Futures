@@ -133,7 +133,7 @@ INSTRUMENTS = {
     "CME_MINI:MES1!": Instrument("CME_MINI:MES1!", "MES", 0.25, 5.0, "Micro E-mini S&P 500"),
     # major commodities (UNVALIDATED for this strategy — monitoring / paper)
     "COMEX:GC1!": Instrument("COMEX:GC1!", "GC", 0.10, 100.0, "Gold"),
-    "COMEX:MGC1!": Instrument("COMEX:MGC1!", "MGC", 0.10, 10.0, "Micro Gold"),
+    "COMEX_MINI:MGC1!": Instrument("COMEX_MINI:MGC1!", "MGC", 0.10, 10.0, "Micro Gold"),
     "COMEX:SI1!": Instrument("COMEX:SI1!", "SI", 0.005, 5000.0, "Silver"),
     "COMEX:HG1!": Instrument("COMEX:HG1!", "HG", 0.0005, 25000.0, "Copper"),
     "NYMEX:CL1!": Instrument("NYMEX:CL1!", "CL", 0.01, 1000.0, "Crude Oil (WTI)"),

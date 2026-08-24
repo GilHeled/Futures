@@ -75,6 +75,15 @@ def create_app(ingestor: Optional[Ingestor] = None, runner: Optional[LiveRunner]
     async def health():
         return {"ok": True}
 
+    def _last_price(symbol: str):
+        """Freshest close the service holds for a symbol (entry-TF, else signal-TF); None if empty."""
+        buf = runner.buffers.get(symbol) or {}
+        for tf in (runner.entry_tf, runner.signal_tf):
+            bars = buf.get(tf)
+            if bars:
+                return bars[-1].close
+        return None
+
     @app.get("/report")
     async def report():
         rep = REPORT.build_report(runner)
@@ -82,6 +91,8 @@ def create_app(ingestor: Optional[Ingestor] = None, runner: Optional[LiveRunner]
         rep["enabled"] = app.state.feed["enabled"]
         rep["instruments"] = sorted(C.INSTRUMENTS)
         rep["instrument_names"] = C.instrument_names()
+        rep["server_time_ms"] = int(time.time() * 1000)        # for ticket-age display
+        rep["last_price"] = {o["symbol"]: _last_price(o["symbol"]) for o in rep["open_trades"]}
         return rep
 
     # ---- feed control/status (a feed producer reports here; the dashboard toggles symbols) ----
@@ -109,6 +120,21 @@ def create_app(ingestor: Optional[Ingestor] = None, runner: Optional[LiveRunner]
         app.state.feed["enabled"] = ([s for s in en if s in C.INSTRUMENTS] if isinstance(en, list)
                                      else None)
         return {"ok": True, "enabled": app.state.feed["enabled"]}
+
+    # ---- seed/live boundary: mark "from now on, bars are live" so warm-up backfill only primes
+    #      structure and never surfaces a tradable ticket (operational; engine logic untouched) ----
+    @app.get("/live/boundary")
+    async def live_boundary():
+        return {"live_since_ms": runner.live_since_ms}
+
+    @app.post("/live/mark-now")
+    async def live_mark_now(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        ms = body.get("ms") if isinstance(body, dict) else None
+        return {"ok": True, "live_since_ms": runner.mark_live(ms)}
 
     @app.get("/report.html", response_class=HTMLResponse)
     async def report_html():

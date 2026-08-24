@@ -78,3 +78,50 @@ def test_take_trade_opens_and_resolves():
             assert (len(tr.closed) + len(tr.open)) >= 1        # trades are being tracked
             return
     # not fatal if no TAKE arose in the synthetic set; the wiring is covered by the other test
+
+
+def _seed_with_take():
+    for seed in range(1, 120):
+        r = LiveRunner(Ingestor(), signal_tf="1H", window=240)
+        if any((out := r.on_closed_bars("MNQ", [b]))["ticket"] and out["ticket"].action == "TAKE"
+               for b in _h1(360, seed=seed)):
+            return seed
+    return None
+
+
+def test_pre_live_bars_prime_structure_but_never_open_trades(tmp_path):
+    """Bars before the live boundary build the buffers (so setups can be detected) but must NOT open
+    or resolve trades, emit signals, or write logs — this is what keeps warm-up backfill from
+    surfacing phantom tickets."""
+    seed = _seed_with_take()
+    assert seed is not None, "expected at least one synthetic TAKE"
+    bars = _h1(360, seed=seed)
+    boundary = int(bars[-1].close_time.timestamp() * 1000) + 60_000    # after every bar => all seed
+
+    r = LiveRunner(Ingestor(), signal_tf="1H", entry_tf="15m", window=240, store_dir=str(tmp_path))
+    r.mark_live(boundary)
+    for b in bars:
+        r.on_closed_bars("MNQ", [b])
+    tr = r.tracker("MNQ")
+    assert len(tr.open) == 0 and len(tr.closed) == 0           # no phantom trades from seed bars
+    assert r.recent_signals == [] and not (tmp_path / "signals.jsonl").exists()
+    assert len(r._buf("MNQ")["1H"]) >= 240                     # but the structural window IS primed
+
+    # persisted boundary survives a restart (a fresh runner on the same store reloads it)
+    assert (tmp_path / "live_since.txt").exists()
+    r2 = LiveRunner(Ingestor(), signal_tf="1H", store_dir=str(tmp_path))
+    assert r2.live_since_ms == boundary
+
+
+def test_live_bars_after_boundary_do_open_trades():
+    """The mirror of the above: with the boundary in the past, bars flow through the full path and
+    trades open exactly as when the boundary is unset."""
+    seed = _seed_with_take()
+    assert seed is not None
+    r = LiveRunner(Ingestor(), signal_tf="1H", window=240)
+    r.mark_live(1)                                             # boundary at epoch => every bar is live
+    opened = any((out := r.on_closed_bars("MNQ", [b]))["ticket"] and out["ticket"].action == "TAKE"
+                 for b in _h1(360, seed=seed))
+    assert opened
+    tr = r.tracker("MNQ")
+    assert (len(tr.open) + len(tr.closed)) >= 1

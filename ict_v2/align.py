@@ -32,20 +32,20 @@ def gate_setup(setup, context):
     d = setup.direction
     # 0. geometry sanity — the stop must be on the RISK side (short: above entry; long: below)
     if (d == "long" and setup.stop >= setup.entry) or (d == "short" and setup.stop <= setup.entry):
-        reasons.append(f"invalid geometry: {d} stop {setup.stop:g} not beyond entry {setup.entry:g}")
+        reasons.append(f"Invalid geometry — {d} stop {setup.stop:g} not beyond entry {setup.entry:g}")
     # 1. directional bias
     if context.bias == "neutral":
-        reasons.append("HTF bias is neutral")
+        reasons.append("HTF context not aligned — bias is neutral")
     elif d != context.bias:
-        reasons.append(f"direction {d} != HTF bias {context.bias}")
+        reasons.append(f"HTF bias mismatch — setup {d} vs HTF {context.bias}")
     # 2. premium/discount location of the entry
     zone = context.zone(setup.entry)
     if zone is not None:
         want = "discount" if d == "long" else "premium"
         if zone not in (want, "equilibrium"):
-            reasons.append(f"entry in HTF {zone}, want {want}")
+            reasons.append(f"Wrong Premium/Discount zone — entry in {zone}, want {want}")
     # 3. liquidity objective in the setup direction
     objective = liquidity_objective(context, d)
     if objective is None:
-        reasons.append("no HTF liquidity objective in setup direction")
+        reasons.append(f"No valid HTF liquidity objective in the {d} direction")
     return (not reasons), reasons, objective

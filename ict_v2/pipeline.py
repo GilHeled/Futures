@@ -67,8 +67,8 @@ class Candidate:
     target: Optional[float] = None
     rr: Optional[float] = None
     actionable: bool = False               # v1 assembled a tradeable setup for it
-    passed: bool = False                   # cleared the HTF gate
-    reason: str = ""                       # why it stalled / was rejected
+    passed: bool = False                   # cleared the HTF gate (fully validated on this TF)
+    reasons: list = field(default_factory=list)   # EXPLICIT reasons it did not fully validate (empty ⇒ passed)
     setup: object = None                   # the assembled v1 Setup, if it reached one
 
     def to_dict(self) -> dict:
@@ -88,7 +88,7 @@ class Candidate:
                                                       "extreme": px(getattr(self.sweep, "extreme", None))},
             "fvg_status": None if self.fvg is None else getattr(self.fvg, "status", None),
             "mss_state": None if self.mss is None else getattr(self.mss, "state", None),
-            "actionable": self.actionable, "passed": self.passed, "reason": self.reason,
+            "actionable": self.actionable, "passed": self.passed, "reasons": list(self.reasons),
             "id": (getattr(self.setup, "id", "") if self.setup is not None
                    else getattr(self.sweep, "id", "")),
         }
@@ -213,6 +213,7 @@ def generate_candidates(ms, context: HTFContext) -> list:
         target = getattr(objective, "price", None) if objective is not None else None
 
         actionable = passed = False
+        reasons = []
         if setup is not None:                                            # adopt v1's authoritative setup
             entry, stop = setup.entry, setup.stop
             if target is None:
@@ -220,15 +221,17 @@ def generate_candidates(ms, context: HTFContext) -> list:
             rr = getattr(setup, "rr", None)
             actionable = bool(getattr(setup, "actionable", False))
             if actionable:
-                passed, _reasons, obj2 = align.gate_setup(setup, context)
+                passed, gate_reasons, obj2 = align.gate_setup(setup, context)
                 if obj2 is not None:
                     objective, target = obj2, getattr(obj2, "price", target)
-            reason = "" if actionable else getattr(setup, "reject_reason", "")
+                reasons = list(gate_reasons)                             # HTF-gate failures (empty ⇒ passed)
+            else:                                                        # v1 rejected the assembled setup
+                rr_txt = getattr(setup, "reject_reason", "") or "not a valid setup"
+                reasons = [f"Setup not valid — {rr_txt}"]
         else:
             risk = abs(stop - entry) if entry is not None else 0.0
             reward = abs(entry - target) if (entry is not None and target is not None) else 0.0
             rr = round(reward / risk, 2) if risk > 0 else None
-            reason = ""
 
         if disp is None:
             state = "swept"
@@ -240,16 +243,16 @@ def generate_candidates(ms, context: HTFContext) -> list:
             state = "mss"
         else:
             state = "displaced"
-        if not reason and not actionable:                                # a human note for partial ideas
-            reason = {"swept": "manipulation taken — no displacement off it yet",
-                      "displaced": "displaced — no market-structure shift yet",
-                      "mss": "structure shifted — awaiting an entry FVG",
-                      "fvg": "entry FVG present — not yet a valid setup"}.get(state, "")
+        if not reasons and not passed:                                   # partial idea: explain the stage reached
+            reasons = [{"swept": "Incomplete — no displacement off the manipulation yet",
+                        "displaced": "Incomplete — no market-structure shift (MSS) yet",
+                        "mss": "Incomplete — structure shifted, no valid entry FVG yet",
+                        "fvg": "Incomplete — entry FVG present, not yet a valid setup"}.get(state, "Incomplete")]
 
         cands.append(Candidate(direction=direction, state=state, sweep=sw, displacement=disp, mss=mss,
                                fvg=fvg, dealing_range=dr, pd_location=pd, objective=objective,
                                entry=entry, stop=stop, target=target, rr=rr, actionable=actionable,
-                               passed=passed, reason=reason, setup=setup))
+                               passed=passed, reasons=reasons, setup=setup))
     return cands
 
 

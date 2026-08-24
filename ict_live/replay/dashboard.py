@@ -212,7 +212,14 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .cstate.fvg{color:var(--info,#3b82f6)} .cstate.mss{color:var(--warn)}
  .cbadge{font-size:10px;font-weight:700;padding:2px 9px;border-radius:999px;text-transform:uppercase;letter-spacing:.4px}
  .cbadge.pass{color:var(--long);background:var(--long-bg)}
+ .cbadge.rej{color:var(--short);background:var(--short-bg)}
  .cbadge.avail{color:var(--ink);background:var(--panel);border:1px solid var(--line)}
+ /* the explicit "why it did not progress" block on every candidate */
+ .creason{font-size:11px;border-top:1px solid var(--line);padding-top:7px}
+ .creason-hd{text-transform:uppercase;letter-spacing:.4px;font-size:10px;color:var(--mut);font-weight:700;margin-bottom:3px}
+ .creason ul{margin:0;padding-left:16px;display:flex;flex-direction:column;gap:2px}
+ .creason li{color:var(--short)}
+ .creason.ok{color:var(--long)}
  /* the ICT chain: sweep → displacement → MSS → FVG */
  .cchain{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
  .cchain i{color:var(--mut);font-style:normal;font-size:11px}
@@ -576,14 +583,20 @@ function openCandidates(sym,layer){
   const objtxt=o=>o?`${o.kind==='high'?'BSL':'SSL'} ${num(o.price)}`:'—';
   const card=c=>{
     const cls=c.passed?'candpass':(c.actionable?'candavail':'candall');
-    const gate=c.passed?'<span class="cbadge pass">✓ passed gate</span>'
-                       :(c.actionable?'<span class="cbadge avail">available</span>':'');
+    const status=c.passed?'<span class="cbadge pass">✓ Passed</span>'
+                         :'<span class="cbadge rej">❌ Rejected</span>';
     const facts=[['entry',num(c.entry)],['stop',num(c.stop)],['target',num(c.target)],
                  ['RR',num(c.rr)],['P/D',c.pd_location||'—'],['draw',objtxt(c.objective)]]
       .map(([k,v])=>`<span class=cfact><i>${k}</i>${v}</span>`).join('');
+    const reasons=(c.reasons||[]);
+    const rblock=c.passed
+      ? '<div class="creason ok">All HTF gates aligned — promoted to the next stage.</div>'
+      : `<div class=creason><div class=creason-hd>Reason</div><ul>`
+        + reasons.map(r=>`<li>${esc(r)}</li>`).join('') + `</ul></div>`;
     return `<div class="ccard ${cls}"><div class=ccard-hd>${dpill(c.direction)}`
-         + `<span class="cstate ${c.state}" title="${esc(c.reason)}">${c.state}</span>`
-         + `<span class=ccard-gate>${gate}</span></div>${chain(c)}<div class=cfacts>${facts}</div></div>`;
+         + `<span class="cstate ${c.state}">${c.state}</span>`
+         + `<span class=ccard-gate>${status}</span></div>`
+         + `${chain(c)}<div class=cfacts>${facts}</div>${rblock}</div>`;
   };
   const cards=info.map(card).join('')||'<div class=cempty>no candidates on this timeframe yet</div>';
   $('#candmodal-title').innerHTML=`${sym}<span class=ctlayer>${layer} candidates</span>`;

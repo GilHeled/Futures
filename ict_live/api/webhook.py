@@ -30,7 +30,7 @@ from ict_live.live.runner import LiveRunner
 def create_app(ingestor: Optional[Ingestor] = None, runner: Optional[LiveRunner] = None,
                store_dir: Optional[str] = None, control=None):
     from fastapi import FastAPI, Header, Query, Request
-    from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+    from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
     from ict_live.live.control import TradeControl
 
     if runner is not None:
@@ -42,6 +42,7 @@ def create_app(ingestor: Optional[Ingestor] = None, runner: Optional[LiveRunner]
     app.state.ingestor = ing
     app.state.runner = runner
     app.state.control = control or TradeControl()              # user decision overlay (advisory)
+    app.state.charts = {}                                      # symbol -> {png: bytes, ts: ms} (latest TV screenshot)
     # feed control/status plane (operational; a feed reports here, the dashboard drives it)
     app.state.feed = {"status": None, "enabled": None}         # enabled None => feed's own default
 
@@ -97,7 +98,25 @@ def create_app(ingestor: Optional[Ingestor] = None, runner: Optional[LiveRunner]
         rep["server_time_ms"] = int(time.time() * 1000)        # for ticket-age display
         rep["last_price"] = {o["symbol"]: _last_price(o["symbol"]) for o in rep["open_trades"]}
         rep["control"] = app.state.control.all()               # user decisions per ticket (overlay)
+        rep["charts"] = {s: v["ts"] for s, v in app.state.charts.items()}   # which symbols have a chart + freshness
         return rep
+
+    @app.post("/chart")
+    async def chart_post(request: Request, symbol: str = ""):
+        """Store the latest TradingView screenshot for a symbol (posted by the host-side feed). The
+        feed captures it non-destructively — just a screenshot of the user's own charted template."""
+        data = await request.body()
+        if symbol and data:
+            app.state.charts[symbol] = {"png": data, "ts": int(time.time() * 1000)}
+        return {"ok": True, "symbol": symbol, "bytes": len(data or b"")}
+
+    @app.get("/chart")
+    async def chart_get(symbol: str = ""):
+        c = app.state.charts.get(symbol)
+        if not c:
+            return Response(status_code=404)
+        return Response(content=c["png"], media_type="image/png",
+                        headers={"Cache-Control": "no-store"})
 
     @app.post("/trade/control")
     async def trade_control(request: Request):

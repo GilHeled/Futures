@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+import urllib.parse
 import urllib.request
 
 from ict_live import config as C
@@ -67,6 +68,19 @@ def _post_json(full_url: str, payload: dict, token: str | None):
 
 def _post(url: str, payload: dict, token: str | None):
     return _post_json(url.rstrip("/") + "/webhook/tradingview", payload, token)
+
+
+def post_chart(url: str, symbol: str, png: bytes, token: str | None = None) -> bool:
+    """POST a PNG screenshot for `symbol` to the live service (/chart). Never raises."""
+    try:
+        full = url.rstrip("/") + "/chart?symbol=" + urllib.parse.quote(symbol)
+        headers = {"Content-Type": "image/png"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        with urllib.request.urlopen(urllib.request.Request(full, data=png, headers=headers), timeout=10) as r:
+            return r.status == 200
+    except Exception:
+        return False
 
 
 def get_last_bars(url: str) -> dict:

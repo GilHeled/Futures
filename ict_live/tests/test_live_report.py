@@ -115,3 +115,16 @@ def test_trade_control_endpoint_records_decision_without_touching_tracker():
     assert {s: len(t.closed) for s, t in runner.trackers.items()} == closed_before
     # unknown status is rejected
     assert c.post("/trade/control", json={"ticket_id": "X", "status": "nope"}).status_code == 400
+
+
+def test_chart_store_and_serve():
+    from starlette.testclient import TestClient
+    from ict_live.api.webhook import create_app
+    c = TestClient(create_app(runner=_runner_with_state()))
+    assert c.get("/chart", params={"symbol": "MNQ"}).status_code == 404      # none stored yet
+    png = b"\x89PNG\r\n\x1a\n" + b"fake-image-bytes"
+    r = c.post("/chart", params={"symbol": "MNQ"}, content=png, headers={"Content-Type": "image/png"})
+    assert r.status_code == 200 and r.json()["bytes"] == len(png)
+    g = c.get("/chart", params={"symbol": "MNQ"})
+    assert g.status_code == 200 and g.content == png and g.headers["content-type"].startswith("image/png")
+    assert "MNQ" in c.get("/report").json()["charts"]                        # advertised in the report

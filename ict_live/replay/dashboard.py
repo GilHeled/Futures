@@ -175,6 +175,8 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .modal-hd b{font-size:13px;font-family:"SF Mono",ui-monospace,Menlo,monospace}
  .modal-hd .x{margin-left:auto;cursor:pointer;font-size:16px;color:var(--mut);background:none;border:none;padding:2px 8px}
  .modal iframe{flex:1;border:0;width:100%}
+ .modal .imgwrap{flex:1;overflow:auto;display:flex;background:var(--panel2)}
+ .modal .imgwrap img{max-width:100%;margin:auto}
  /* ---- actionable trade tickets (the hero) ---- */
  .tickets{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
  .ticket{background:var(--panel);border:1px solid var(--line);border-left:6px solid var(--mut);
@@ -256,6 +258,9 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
 <div id=rmodal class=modal><div class=modal-box>
   <div class=modal-hd><b id=rmodal-title>Reasoning</b><button class=x onclick="closeReasoning()">✕ close</button></div>
   <iframe id=rmodal-frame title="reasoning inspector"></iframe></div></div>
+<div id=cmodal class=modal><div class=modal-box>
+  <div class=modal-hd><b id=cmodal-title>Chart</b><button class=x onclick="closeChart()">✕ close</button></div>
+  <div class=imgwrap><img id=cmodal-img alt="chart"></div></div></div>
 <script>
 const $=s=>document.querySelector(s);
 function show(t){for(const s of ['live','replay']){$('#'+s).classList.toggle('on',s===t);$('#nav-'+s).classList.toggle('on',s===t);}}
@@ -306,6 +311,7 @@ function tickets(rep){
     const banner=warn?'<div class=warn>⚠ Resting limit far from price / aging setup — NOT an at-market order. It fills only if price returns to the entry. Verify it still makes sense before placing.</div>':'';
     return `<div class="ticket ${o.direction}${warn?' stale':''}">
       <div class=thead><span class="badge ${o.direction}">${dir}</span><span class=sym>${o.symbol}</span>${status}
+        ${(rep.charts||{})[o.symbol]?`<button class=whybtn onclick="openChart('${o.symbol}')">chart</button>`:''}
         <button class=whybtn onclick="openReasoning('${o.symbol}')">why?</button></div>
       <div class=instr>${how}</div>
       <div class=levels>
@@ -401,6 +407,7 @@ function currentRead(rep){
         ${c.weakest_factor?'<span>weakest <b>'+fmt(c.weakest_factor)+'</b></span>':''}</div>
       ${why?'<div class=why>'+why+'</div>':''}
       <div class=rfoot><span>1H bar ${fmt(c.time)}${age?' · updated '+age:''}</span>
+        ${(rep.charts||{})[sym]?`<button class=whybtn onclick="openChart('${sym}')">chart</button>`:''}
         <button class=whybtn onclick="openReasoning('${sym}')">why?</button></div>
     </div>`;}).join('');
   return '<div class=reads>'+cards+'</div>';
@@ -451,8 +458,12 @@ async function pollLive(){
 function openReasoning(sym){$('#rmodal-title').textContent=sym+' — reasoning';
   $('#rmodal-frame').src='/live/reasoning?symbol='+encodeURIComponent(sym);$('#rmodal').classList.add('on');}
 function closeReasoning(){$('#rmodal').classList.remove('on');$('#rmodal-frame').src='about:blank';}
+function openChart(sym){$('#cmodal-title').textContent=sym+' — chart';
+  $('#cmodal-img').src='/live/chart?symbol='+encodeURIComponent(sym)+'&t='+Date.now();$('#cmodal').classList.add('on');}
+function closeChart(){$('#cmodal').classList.remove('on');$('#cmodal-img').removeAttribute('src');}
 $('#rmodal').onclick=e=>{if(e.target.id==='rmodal')closeReasoning();};
-document.addEventListener('keydown',e=>{if(e.key==='Escape')closeReasoning();});
+$('#cmodal').onclick=e=>{if(e.target.id==='cmodal')closeChart();};
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeReasoning();closeChart();}});
 setInterval(pollLive,4000);pollLive();
 
 // ---------------- REPLAY ----------------
@@ -558,6 +569,15 @@ def make_handler(jobs: JobManager, symbols: list[str], live_fetch=None, live_url
                         return self._send(200, r.read(), "text/html; charset=utf-8")
                 except Exception as e:
                     return self._send(502, f"<p style='padding:24px;font-family:system-ui'>reasoning unavailable: {type(e).__name__}</p>".encode(), "text/html; charset=utf-8")
+            if u.path == "/live/chart":                        # proxy the latest TradingView screenshot for a symbol
+                if not live_url:
+                    return self._send(404, b"", "image/png")
+                try:
+                    url = live_url.rstrip("/") + "/chart?symbol=" + quote(q.get("symbol", [""])[0])
+                    with urllib.request.urlopen(url, timeout=6) as r:
+                        return self._send(200, r.read(), "image/png", {"Cache-Control": "no-store"})
+                except Exception:
+                    return self._send(404, b"", "image/png")
             if u.path == "/status":
                 job = jobs.status(q.get("job", [""])[0])
                 return self._send(200 if job else 404, job or {"error": "unknown job"})

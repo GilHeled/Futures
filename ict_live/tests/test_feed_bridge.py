@@ -76,6 +76,10 @@ def test_get_enabled_falls_back(monkeypatch):
     assert FB.get_enabled("http://127.0.0.1:9", ["CME_MINI:MNQ1!"]) == ["CME_MINI:MNQ1!"]
 
 
+def test_post_chart_never_raises_when_unreachable():
+    assert FB.post_chart("http://127.0.0.1:9", "CME_MINI:MNQ1!", b"x") is False
+
+
 def test_run_respects_disabled_symbols(monkeypatch):
     # dashboard disabled MNQ -> only MES is fed
     monkeypatch.setattr(FB, "_reachable", lambda url, timeout=3.0: True)

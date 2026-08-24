@@ -27,7 +27,7 @@ import time
 from ict_live import config as C
 from ict_live.devtools.tvmcp.client import TvClient
 # reuse POST + preflight + control/heartbeat (devtools→live is the allowed import direction)
-from ict_live.live.feed_bridge import _post, _reachable, get_enabled, heartbeat
+from ict_live.live.feed_bridge import _post, _reachable, get_enabled, heartbeat, post_chart
 
 SCHEMA = "ict_live.bar.v1"
 SOURCE = "TradingView Desktop (MCP, real-time)"
@@ -69,6 +69,23 @@ def push_new(tv, url, symbol, *, token, last_ms: dict, log=print) -> int:
     return posted
 
 
+def capture_chart(tv, url, sym, *, token=None, log=print) -> bool:
+    """Screenshot the current chart (already switched to `sym`) and POST it to the live service so the
+    dashboard can show it. NON-DESTRUCTIVE: no draw, no clear — just a picture of the user's own
+    charted template. Never raises."""
+    try:
+        r = tv.screenshot("chart")
+        fp = (r.data or {}).get("file_path") if isinstance(r.data, dict) else None
+        if not fp:
+            return False
+        with open(fp, "rb") as fh:
+            png = fh.read()
+        return post_chart(url, sym, png, token)
+    except Exception as e:
+        log(f"{sym}: chart capture skipped ({type(e).__name__})")
+        return False
+
+
 def _pump(tv, url, sym, *, token, last_ms, load_wait, log) -> int:
     """Switch the chart to `sym` (1m) and POST its newly-closed bars. Returns count posted.
 
@@ -87,7 +104,7 @@ def _pump(tv, url, sym, *, token, last_ms, load_wait, log) -> int:
 
 
 def run(url, *, symbols=None, token=None, interval=15, once=False, load_wait=1.5,
-        tv_binary=None, tv_cwd=None, log=print) -> dict:
+        tv_binary=None, tv_cwd=None, capture_charts=True, log=print) -> dict:
     tv = TvClient(binary=tv_binary, cwd=tv_cwd)
     if not tv.available():
         raise SystemExit("TradingView MCP `tv` CLI not reachable — set TV_CLI and ensure TradingView "
@@ -117,6 +134,8 @@ def run(url, *, symbols=None, token=None, interval=15, once=False, load_wait=1.5
                 k = _pump(tv, url, sym, token=token, last_ms=last_ms, load_wait=load_wait, log=log)
                 if k:
                     log(f"{sym}: +{k} bars")
+                if capture_charts:                              # chart is on `sym` now — snapshot it
+                    capture_chart(tv, url, sym, token=token, log=log)
             except Exception as e:
                 log(f"{sym}: error {type(e).__name__}: {e}")
         heartbeat(url, SOURCE, dict(last_ms), token)
@@ -139,8 +158,11 @@ def main() -> None:
     ap.add_argument("--token", default=None)
     ap.add_argument("--interval", type=int, default=15, help="poll seconds")
     ap.add_argument("--once", action="store_true")
+    ap.add_argument("--no-charts", action="store_true",
+                    help="don't screenshot the chart each cycle (skip the dashboard chart snapshots)")
     ns = ap.parse_args()
-    run(ns.url, symbols=ns.symbols, token=ns.token, interval=ns.interval, once=ns.once)
+    run(ns.url, symbols=ns.symbols, token=ns.token, interval=ns.interval, once=ns.once,
+        capture_charts=not ns.no_charts)
 
 
 if __name__ == "__main__":

@@ -95,16 +95,28 @@ curl -X POST "http://127.0.0.1:8000/webhook/tradingview?token=YOUR_SECRET" \
 ```
 This is the frozen, authoritative feed. The service + tunnel must stay running.
 
-**B. Local feed bridge (convenience / evaluation).** Pull real recent 1m bars from yfinance and POST
-them to the webhook — no TradingView account or tunnel:
+**B. TradingView Desktop via MCP (real-time, local — no Pro webhook / tunnel).** Reuses the dev
+TradingView MCP connection as a live feed: reads your chart's real-time 1m bars and POSTs the
+closed ones to the webhook. This is **near-zero delay** (your real TradingView data; ~1 min = one
+closed bar), unlike yfinance's ~10–15 min lag. Requires TradingView Desktop running with
+`--remote-debugging-port` and the `tv` CLI:
+```bash
+TV_CLI="node ~/dev/tradingview-mcp/src/cli/index.js" \
+  python -m ict_live.devtools.tvmcp.live_feed --url http://127.0.0.1:8000 --symbol CME_MINI:MNQ1!
+```
+Notes: **one symbol per chart** (the MCP targets one chart — run one per symbol/chart); it switches
+the chart to the **1-minute** timeframe (dedicate a chart to it); host-side only (can't run inside
+the container — point it at the service's `:8000`). The charted symbol must be a known instrument
+(e.g. `CME_MINI:MNQ1!`). It's a devtools-tier producer of the same webhook payload — no trading logic.
+
+**C. yfinance feed bridge (convenience / evaluation).** Pull recent 1m bars from yfinance and POST
+them — no TradingView at all:
 ```bash
 .venv/bin/python -m ict_live.live.feed_bridge --url http://127.0.0.1:8000 --symbols MES MNQ
 ```
-It backfills recent bars on start (so LIVE populates immediately) and then streams new bars every
-minute while the market is open. `--once` backfills and exits. This is a **non-authoritative** feed:
-yfinance is a continuous-contract proxy that can differ from TradingView and may be delayed — fine
-for watching the system operate, not a substitute for the real feed in production. Only symbols in
-`config.INSTRUMENTS` (MES/MNQ/ES/NQ) are fed.
+Backfills on start then streams each minute. **Non-authoritative and ~10–15 min delayed** (yfinance
+is a continuous-contract proxy) — fine for watching the system, not for precise entries. Only
+`config.INSTRUMENTS` symbols (MES/MNQ/ES/NQ).
 
 ## Reliability
 - **Restart-safe.** Raw 1m is appended to `raw_1m.jsonl` and reloaded on startup; `warmup()` replays

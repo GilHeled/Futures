@@ -34,6 +34,11 @@ def _et_iso(dt):
     return dt.astimezone(_ET).isoformat()
 
 
+def _px(x):
+    """Round a price to 2 decimals for display (raw engine floats carry full binary precision)."""
+    return None if x is None else round(float(x), 2)
+
+
 class V2Live:
     def __init__(self, context_tf: str = "4H", setup_tf: str = "1H", confirm_tf: str = "15m",
                  trigger_tf: str = "1m", window: int = _WINDOW, exec_window: int = _EXEC_WINDOW):
@@ -85,9 +90,9 @@ class V2Live:
         obj = g0.objective if (g0 and g0.objective is not None) else None
         return {"available": len(mtf.candidates), "gated": len(mtf.gated), "total": len(mtf.cand_info),
                 "direction": (g0.setup.direction if g0 else None),
-                "top": None if not g0 else {"direction": g0.setup.direction, "entry": g0.setup.entry,
-                                            "stop": g0.setup.stop},
-                "objective": None if obj is None else {"kind": obj.kind, "price": obj.price},
+                "top": None if not g0 else {"direction": g0.setup.direction, "entry": _px(g0.setup.entry),
+                                            "stop": _px(g0.setup.stop)},
+                "objective": None if obj is None else {"kind": obj.kind, "price": _px(obj.price)},
                 "candidates": list(mtf.cand_info)}      # full list for the drill-down popup
 
     def snapshot(self) -> dict:
@@ -97,7 +102,7 @@ class V2Live:
         obj = None
         if s and s.gated and s.gated[0].objective is not None:
             p = s.gated[0].objective
-            obj = {"kind": p.kind, "price": p.price}
+            obj = {"kind": p.kind, "price": _px(p.price)}
         top = e.executables[0] if (e and e.executables) else None
         return {
             "timeframes": {"context": self.context_tf, "setup": self.setup_tf,
@@ -105,8 +110,8 @@ class V2Live:
             "updated": dict(self.updated),
             "context": None if not c else {
                 "bias": c.bias,
-                "dealing_range": None if dr is None else {"low": dr.low, "high": dr.high,
-                                                          "ce": dr.ce, "direction": dr.direction},
+                "dealing_range": None if dr is None else {"low": _px(dr.low), "high": _px(dr.high),
+                                                          "ce": _px(dr.ce), "direction": dr.direction},
                 "liquidity_draws": len(c.liquidity), "liquidity_objective": obj},
             "setup": self._setup_dict(s),
             "confirmation": self._setup_dict(cf),
@@ -115,8 +120,8 @@ class V2Live:
                 "available": sum(1 for x in e.cand_info if x.get("actionable")),
                 "gated": sum(1 for x in e.cand_info if x.get("passed")),
                 "total": len(e.cand_info), "candidates": list(e.cand_info),
-                "top": None if top is None else {"direction": top.direction, "entry": top.entry,
-                                                 "stop": top.stop, "target": top.target,
+                "top": None if top is None else {"direction": top.direction, "entry": _px(top.entry),
+                                                 "stop": _px(top.stop), "target": _px(top.target),
                                                  "ltf_confirmed": top.ltf_confirmed}},
         }
 

@@ -1,0 +1,46 @@
+==============================================================================
+PHASE 1 — TREND — DEV/OOS GO-NO-GO (frozen pre-registration)
+canonical TSMOM ensemble {21,63,126,252}d, 14 roots, net of cost
+==============================================================================
+contracts=14  days=4052  range=2010-06-01..2026-07-09
+
+-- window summary --
+  DEV 2010-2019 (1x)         Sharpe=-0.229  bootP=0.7652  PSR=0.240  maxDD=-33.2%  n=2408
+  OOS 2020-2024 (1x)         Sharpe=+0.902  bootP=0.0206  PSR=0.979  maxDD=-17.3%  n=1259
+  OOS 2020-2024 (2.0x)       Sharpe=+0.630  bootP=0.0732  PSR=0.921  maxDD=-20.7%  n=1259
+
+-- OOS benchmarks --
+  passive equity beta Sharpe = +0.780   (book must beat)
+  random-sign null Sharpe: mean=-2.426 p95=-1.759  -> book beats 100.0% of null
+  beta-fit vs ES: alpha/day=+3.11e-01  beta=-70.44  corr=-0.20  R2=0.04
+
+-- OOS breadth: sector Sharpes --
+    equities  +0.495
+    rates     +0.483
+    fx        +0.222
+    metals    +0.388
+    energy    +0.560
+    grains    +0.482
+  drop-best-sector (energy) Sharpe = +0.793
+-- OOS breadth: yearly Sharpes --
+    2020:+2.13  2021:+0.68  2022:+1.51  2023:-0.90  2024:+0.06
+  drop-best-year (2020) Sharpe = +0.497
+
+-- GO/NO-GO criteria --
+  [PASS] sharpe>=0.5
+  [PASS] bootstrap P<=0.05
+  [PASS] PSR/DSR>0.5
+  [PASS] beats passive beta
+  [PASS] beats random null (>95%)
+  [PASS] alpha>0 vs beta
+  [PASS] majority sectors +
+  [PASS] drop-best-sector +
+  [PASS] majority years +
+  [PASS] drop-best-year +
+  [PASS] 2x-cost still +
+  [FAIL] 2x-cost significant
+
+OVERALL: NO-GO
+
+Locked hold-out 2025-01-01..2026-07-09: NOT TOUCHED (remains locked; OOS did not pass)
+==============================================================================

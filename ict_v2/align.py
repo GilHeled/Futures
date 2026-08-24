@@ -30,6 +30,9 @@ def gate_setup(setup, context):
     (empty ⇒ passed). `objective` is the HTF liquidity draw for the setup direction (may be None)."""
     reasons = []
     d = setup.direction
+    # 0. geometry sanity — the stop must be on the RISK side (short: above entry; long: below)
+    if (d == "long" and setup.stop >= setup.entry) or (d == "short" and setup.stop <= setup.entry):
+        reasons.append(f"invalid geometry: {d} stop {setup.stop:g} not beyond entry {setup.entry:g}")
     # 1. directional bias
     if context.bias == "neutral":
         reasons.append("HTF bias is neutral")

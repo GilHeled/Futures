@@ -18,8 +18,10 @@ def _ctx(bias, ce, pools):
     return HTFContext(tf="4H", bias=bias, dealing_range=_dr(ce), liquidity=pools)
 
 
-def _setup(direction, entry):
-    return SimpleNamespace(direction=direction, entry=entry)
+def _setup(direction, entry, stop=None):
+    if stop is None:                                   # default to a valid risk side
+        stop = entry + 10 if direction == "short" else entry - 10
+    return SimpleNamespace(direction=direction, entry=entry, stop=stop)
 
 
 def test_passes_when_all_three_axes_agree():
@@ -57,3 +59,10 @@ def test_short_targets_sellside_below():
     ctx = _ctx("short", 150, [_pool("low", 90), _pool("high", 210)])
     ok, reasons, obj = align.gate_setup(_setup("short", 180), ctx)     # short, in premium, SSL below
     assert ok and obj.kind == "low" and obj.price == 90
+
+
+def test_rejects_invalid_geometry_short_stop_below_entry():
+    # the MGC bug: a "short" whose stop sits BELOW the entry must be rejected
+    ctx = _ctx("short", 150, [_pool("low", 90)])
+    ok, reasons, _ = align.gate_setup(_setup("short", 120, stop=110), ctx)
+    assert not ok and any("geometry" in r for r in reasons)

@@ -112,7 +112,9 @@ def mtf_setup(bars, tf: str, context: HTFContext) -> MTFSetup:
     """Stage 2: run the engine on the MTF, then GATE each setup by the HTF context (bias +
     premium/discount + liquidity objective). Only setups that pass are carried forward."""
     ms = v1.analyze(bars, tf)
-    candidates = [r.item for r in ms.ranked_setups]
+    # only consider setups v1 itself deems ACTIONABLE — non-actionable ones are rejected by v1
+    # (mitigated FVG, RR too low, degenerate geometry) and must never be executed
+    candidates = [r.item for r in ms.ranked_setups if getattr(r.item, "actionable", False)]
     gated = []
     for su in candidates:
         passed, _reasons, objective = align.gate_setup(su, context)

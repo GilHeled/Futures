@@ -1,6 +1,6 @@
-"""V2Live: driven by a 1-minute stream through the existing BarBuilder, it honors per-timeframe
-cadence — execution updates every 1m, MTF setup only on 15m closes, HTF context only on 4H closes —
-and produces a persistable snapshot."""
+"""V2Live driven by a 1-minute stream through the existing BarBuilder: per-timeframe cadence —
+execution updates every 1m (and every 15m), 1H setup only on 1H closes, 4H context only on 4H
+closes — plus a persistable snapshot."""
 import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -26,32 +26,32 @@ def _1m(n, seed=7):
 
 
 def test_per_timeframe_cadence_from_1m_stream():
-    v = V2Live("4H", "15m", "1m")
-    bars = _1m(720)                                  # 12 hours of 1m
-    prev = {"4H": None, "15m": None, "1m": None}
-    counts = {"4H": 0, "15m": 0, "1m": 0}
-    prev_ctx = None                                  # engine.context starts None
+    v = V2Live("4H", "1H", ("15m", "1m"))
+    bars = _1m(1500)                                 # 25 hours of 1m
+    prev = {"4H": None, "1H": None, "15m": None, "1m": None}
+    counts = {"4H": 0, "1H": 0, "15m": 0, "1m": 0}
+    prev_ctx = None
     for b in bars:
         v.push_1m(b)
-        for tf in ("4H", "15m", "1m"):
+        for tf in ("4H", "1H", "15m", "1m"):
             if v.updated[tf] != prev[tf]:
                 counts[tf] += 1
                 prev[tf] = v.updated[tf]
-        # the HTF context object may change ONLY on a bar where the 4H just closed
-        if v.engine.context is not prev_ctx:
-            assert counts["4H"] > 0 and v.updated["4H"] == prev["4H"]   # an HTF close happened
+        if v.engine.context is not prev_ctx:         # context changes only on a 4H close
+            assert counts["4H"] > 0 and v.updated["4H"] == prev["4H"]
             prev_ctx = v.engine.context
-    assert counts["1m"] == len(bars)                 # execution/LTF updates every minute
-    assert 1 <= counts["4H"] < counts["15m"] < counts["1m"]            # HTF rarest, MTF between
+    assert counts["1m"] == len(bars)                 # execution/LTF every minute
+    # HTF rarest, then 1H, then 15m, then 1m — strict cadence ordering
+    assert 1 <= counts["4H"] < counts["1H"] < counts["15m"] < counts["1m"]
 
 
 def test_snapshot_is_persistable(tmp_path):
-    v = run_bars(_1m(600))
+    v = run_bars(_1m(1200))
     snap = v.snapshot()
-    assert set(snap) >= {"timeframes", "updated", "context", "setup", "execution"}
-    assert snap["timeframes"] == {"htf": "4H", "mtf": "15m", "ltf": "1m"}
-    assert snap["updated"]["1m"] is not None                          # LTF advanced
+    assert snap["timeframes"] == {"context": "4H", "setup": "1H", "exec": ["15m", "1m"]}
+    assert set(snap["execution"]) == {"15m", "1m"}                  # per-exec-TF states
+    assert snap["updated"]["1m"] is not None
     p = tmp_path / "v2_state.json"
     v.save(p)
-    reloaded = json.loads(p.read_text())                              # valid JSON round-trip
-    assert reloaded["timeframes"]["htf"] == "4H"
+    reloaded = json.loads(p.read_text())
+    assert reloaded["timeframes"]["setup"] == "1H"

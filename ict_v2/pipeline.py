@@ -75,10 +75,12 @@ class LTFExecution:
 
 @dataclass
 class MTFState:
-    """The full three-stage result."""
+    """The full three-stage result. `execution` is the current (finest) execution; `executions`
+    holds every exec-TF's state (e.g. 15m and 1m) for the step-down view."""
     context: HTFContext
     setup: MTFSetup
     execution: LTFExecution
+    executions: dict = field(default_factory=dict)
 
     def describe(self) -> str:
         c, s, e = self.context, self.setup, self.execution

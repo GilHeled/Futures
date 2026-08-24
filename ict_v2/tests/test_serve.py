@@ -33,7 +33,7 @@ def test_reads_shared_store_and_snapshots(tmp_path):
     svc.ingest_new()
     assert SYM in svc.state
     snap = svc.state[SYM]
-    assert snap["updated"]["1m"] is not None and snap["timeframes"]["htf"] == "4H"
+    assert snap["updated"]["1m"] is not None and snap["timeframes"]["context"] == "4H"
     assert "v2" in svc.report() and svc.report()["experimental"] is True
 
 

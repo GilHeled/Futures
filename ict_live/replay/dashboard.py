@@ -243,6 +243,16 @@ function show(t){for(const s of ['live','replay']){$('#'+s).classList.toggle('on
 function fmt(v){return (v===null||v===undefined||v==='')?'—':v;}
 function num(v){return (v===null||v===undefined)?'—':v;}
 function cls(v){return (typeof v==='number')?(v>0?'pos':(v<0?'neg':'')):'';}
+// Format a PRICE for display: snap to the instrument's tick and show its natural decimals, so the
+// dashboard never shows an un-placeable float like 69.34250259399414 (Silver ticks are 0.005).
+function price(v,sym,rep){
+  if(v===null||v===undefined||v==='') return '—';
+  const n=Number(v); if(!isFinite(n)) return fmt(v);
+  const t=((rep&&rep.instrument_ticks)||{})[sym];
+  if(!t) return String(Math.round(n*100)/100);
+  const d=(String(t).split('.')[1]||'').length;
+  return (Math.round(n/t)*t).toFixed(d);
+}
 
 // ---------------- LIVE ----------------
 function tickets(rep){
@@ -260,7 +270,7 @@ function tickets(rep){
     if(lp!=null){
       const dpts=o.entry-lp, dpct=Math.abs(dpts)/lp*100, side=dpts>0?'above':'below';
       if(o.status!=='OPEN' && dpct>0.5) warn=true;
-      guard+=`<span class=chip>price now <b class=num>${num(lp)}</b></span>`+
+      guard+=`<span class=chip>price now <b class=num>${price(lp,o.symbol,rep)}</b></span>`+
              `<span class=chip>entry <b class=num>${Math.abs(dpts).toFixed(2)}</b> pts ${side} market (<b>${dpct.toFixed(2)}%</b>)</span>`;
     }
     const opened=o.opened_time?Date.parse(o.opened_time):NaN;
@@ -274,14 +284,14 @@ function tickets(rep){
       <div class=thead><span class="badge ${o.direction}">${dir}</span><span class=sym>${o.symbol}</span>${status}</div>
       <div class=instr>${how}</div>
       <div class=levels>
-        <div class=lvl><span>Entry</span><b class=num>${num(o.entry)}</b></div>
-        <div class="lvl stop"><span>Stop</span><b class=num>${num(o.stop)}</b></div>
-        <div class="lvl tgt"><span>Target +2R</span><b class=num>${num(o.exit_target)}</b></div>
+        <div class=lvl><span>Entry</span><b class=num>${price(o.entry,o.symbol,rep)}</b></div>
+        <div class="lvl stop"><span>Stop</span><b class=num>${price(o.stop,o.symbol,rep)}</b></div>
+        <div class="lvl tgt"><span>Target +2R</span><b class=num>${price(o.exit_target,o.symbol,rep)}</b></div>
       </div>
       ${guard?'<div class=strip style="margin:2px 0 8px">'+guard+'</div>':''}
       ${banner}
-      <div class=meta>risk <b class=num>${risk.toFixed(2)}</b> pts (1R) · reward +2R · struct target <span class=num>${num(o.structural_target)}</span>
-        · exec score <span class=num>${num(o.execution_score!=null?o.execution_score:sig.confidence)}</span> · weakest ${fmt(o.weakest_factor||sig.weakest_factor)}</div>
+      <div class=meta>risk <b class=num>${risk.toFixed(2)}</b> pts (1R) · reward +2R · struct target <span class=num>${price(o.structural_target,o.symbol,rep)}</span>
+        · exec score <span class=num>${o.execution_score!=null?Number(o.execution_score).toFixed(2):num(sig.confidence)}</span> · weakest ${fmt(o.weakest_factor||sig.weakest_factor)}</div>
     </div>`;}).join('')+'</div>';
 }
 function kpis(s,opens){
@@ -374,8 +384,8 @@ function liveTables(rep){
     ||'<tr><td colspan=8 class=mut>no closed trades yet</td></tr>';
   const sigR=(rep.recent_signals||[]).map(x=>{const r=x.reasoning||{};return `<tr>
     <td>${fmt(x.time)}</td><td>${x.symbol}</td><td><span class="tag ${x.action}">${x.action}</span></td>
-    <td>${fmt(x.structural)}</td><td class=num>${num(x.entry)}</td><td class=num>${num(x.stop)}</td>
-    <td class=num>${num(x.exit_target)}</td><td class=num>${num(x.confidence)}</td><td>${fmt(x.weakest_factor)}</td>
+    <td>${fmt(x.structural)}</td><td class=num>${price(x.entry,x.symbol,rep)}</td><td class=num>${price(x.stop,x.symbol,rep)}</td>
+    <td class=num>${price(x.exit_target,x.symbol,rep)}</td><td class=num>${x.confidence!=null?Number(x.confidence).toFixed(2):'—'}</td><td>${fmt(x.weakest_factor)}</td>
     <td>${fmt(r.manipulation)}</td><td>${fmt(r.mss)}</td><td>${fmt(r.fvg)}</td><td>${fmt(r.dealing_range)}</td></tr>`;}).join('')
     ||'<tr><td colspan=13 class=mut>no signals yet</td></tr>';
   return `${feedPanel(rep)}

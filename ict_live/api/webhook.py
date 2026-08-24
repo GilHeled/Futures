@@ -91,6 +91,7 @@ def create_app(ingestor: Optional[Ingestor] = None, runner: Optional[LiveRunner]
         rep["enabled"] = app.state.feed["enabled"]
         rep["instruments"] = sorted(C.INSTRUMENTS)
         rep["instrument_names"] = C.instrument_names()
+        rep["instrument_ticks"] = {k: v.tick_size for k, v in C.INSTRUMENTS.items()}  # for price rounding
         rep["server_time_ms"] = int(time.time() * 1000)        # for ticket-age display
         rep["last_price"] = {o["symbol"]: _last_price(o["symbol"]) for o in rep["open_trades"]}
         return rep

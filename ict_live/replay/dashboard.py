@@ -198,28 +198,38 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
    color:var(--mut);font-weight:600;font-variant-numeric:tabular-nums}
  .cchip.avail{color:var(--ink)}
  .cchip.pass{color:var(--long);border-color:color-mix(in srgb,var(--long) 45%,var(--line))}
- .ctblwrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px}
- .ctbl{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums}
- .ctbl th{text-align:right;font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);
-   font-weight:600;padding:9px 12px;background:var(--panel2);border-bottom:1px solid var(--line)}
- .ctbl th:first-child,.ctbl th:last-child{text-align:left}
- .ctbl td{padding:9px 12px;border-bottom:1px solid var(--line);text-align:right}
- .ctbl td:first-child,.ctbl td:last-child{text-align:left}
- .ctbl tbody tr:last-child td{border-bottom:0}
- .ctbl .nnum{font-family:"SF Mono",ui-monospace,Menlo,monospace}
- .ctbl .cempty{text-align:center;color:var(--mut);padding:22px}
+ .cempty{text-align:center;color:var(--mut);padding:22px;font-size:12px}
+ /* each candidate = one complete trade idea, rendered as a compact card */
+ .ccards{display:flex;flex-direction:column;gap:8px}
+ .ccard{border:1px solid var(--line);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px;background:var(--panel2)}
+ .ccard-hd{display:flex;align-items:center;gap:8px}
+ .ccard-gate{margin-left:auto}
  .cdir{font-size:10px;font-weight:800;padding:2px 8px;border-radius:5px;letter-spacing:.03em}
  .cdir.long{color:var(--long);background:var(--long-bg)} .cdir.short{color:var(--short);background:var(--short-bg)}
- .cbadge{font-size:10px;font-weight:600;padding:2px 9px;border-radius:999px;text-transform:uppercase;letter-spacing:.4px}
+ .cstate{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:999px;
+   background:var(--panel);border:1px solid var(--line);color:var(--mut)}
+ .cstate.actionable{color:var(--long);border-color:color-mix(in srgb,var(--long) 40%,var(--line))}
+ .cstate.fvg{color:var(--info,#3b82f6)} .cstate.mss{color:var(--warn)}
+ .cbadge{font-size:10px;font-weight:700;padding:2px 9px;border-radius:999px;text-transform:uppercase;letter-spacing:.4px}
  .cbadge.pass{color:var(--long);background:var(--long-bg)}
- .cbadge.avail{color:var(--ink);background:var(--panel2);border:1px solid var(--line)}
- .cbadge.rej{color:var(--mut);background:var(--panel2)}
+ .cbadge.avail{color:var(--ink);background:var(--panel);border:1px solid var(--line)}
+ /* the ICT chain: sweep → displacement → MSS → FVG */
+ .cchain{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+ .cchain i{color:var(--mut);font-style:normal;font-size:11px}
+ .cstep{font-size:10px;font-weight:600;padding:2px 8px;border-radius:6px;letter-spacing:.2px}
+ .cstep.on{color:var(--ink);background:var(--panel);border:1px solid color-mix(in srgb,var(--accent) 35%,var(--line))}
+ .cstep.off{color:var(--mut);background:transparent;border:1px dashed var(--line)}
+ .cfacts{display:flex;flex-wrap:wrap;gap:5px 14px;font-size:12px;font-variant-numeric:tabular-nums}
+ .cfact{font-family:"SF Mono",ui-monospace,Menlo,monospace}
+ .cfact i{color:var(--mut);font-style:normal;font-family:inherit;margin-right:5px;font-size:10px;text-transform:uppercase;letter-spacing:.4px}
  .cleg{font-size:11px;color:var(--mut);display:flex;flex-wrap:wrap;gap:5px;padding-top:2px}
- /* row tiers: grey = all, white = available, bold = passed */
- .candall,.candall .nnum{color:var(--mut)}
- .candavail,.candavail .nnum{color:var(--ink)}
- .candpass,.candpass .nnum{color:var(--ink);font-weight:700}
- .cleg .candall,.cleg .candavail,.cleg .candpass{padding:0;background:none}
+ /* tiers: grey = all possible, white = available, bold = passed the gate */
+ .ccard.candall{opacity:.72}
+ .ccard.candavail{opacity:1}
+ .ccard.candpass{opacity:1;border-color:color-mix(in srgb,var(--long) 45%,var(--line))}
+ .ccard.candpass .cfact{font-weight:700}
+ .cleg .candall,.cleg .candavail,.cleg .candpass{padding:0;background:none;opacity:1;border:0}
+ .cleg .candpass{font-weight:700}
  /* ---- actionable trade tickets (the hero) ---- */
  .tickets{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
  .ticket{background:var(--panel);border:1px solid var(--line);border-left:6px solid var(--mut);
@@ -558,25 +568,32 @@ async function pollV2(){
 function openCandidates(sym,layer){
   const s=((window._v2last||{}).symbols||{})[sym]||{}; const info=((s[layer]||{}).candidates)||[];
   const nTot=info.length, nAvail=info.filter(c=>c.actionable).length, nPass=info.filter(c=>c.passed).length;
+  const esc=t=>(t||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
   const dpill=d=>`<span class="cdir ${d==='long'?'long':'short'}">${(d||'').toUpperCase()}</span>`;
-  const badge=c=>c.passed?'<span class="cbadge pass">✓ passed gate</span>'
-                        :(c.actionable?'<span class="cbadge avail">available</span>'
-                                      :'<span class="cbadge rej">rejected</span>');
-  const rows=info.map(c=>{
+  const chain=c=>{const k=c.components||{};const step=(on,lbl)=>`<span class="cstep ${on?'on':'off'}">${lbl}</span>`;
+    return `<div class=cchain>${step(k.sweep,'sweep')}<i>→</i>${step(k.displacement,'displacement')}<i>→</i>`
+         + `${step(k.mss,'MSS')}<i>→</i>${step(k.fvg,'FVG')}</div>`;};
+  const objtxt=o=>o?`${o.kind==='high'?'BSL':'SSL'} ${num(o.price)}`:'—';
+  const card=c=>{
     const cls=c.passed?'candpass':(c.actionable?'candavail':'candall');
-    return `<tr class="${cls}"><td>${dpill(c.direction)}</td><td class=nnum>${num(c.entry)}</td>`
-         + `<td class=nnum>${num(c.stop)}</td><td class=nnum>${num(c.target)}</td>`
-         + `<td class=nnum>${num(c.rr)}</td><td>${badge(c)}</td></tr>`;
-  }).join('')||'<tr><td colspan=6 class=cempty>no candidates on this timeframe yet</td></tr>';
+    const gate=c.passed?'<span class="cbadge pass">✓ passed gate</span>'
+                       :(c.actionable?'<span class="cbadge avail">available</span>':'');
+    const facts=[['entry',num(c.entry)],['stop',num(c.stop)],['target',num(c.target)],
+                 ['RR',num(c.rr)],['P/D',c.pd_location||'—'],['draw',objtxt(c.objective)]]
+      .map(([k,v])=>`<span class=cfact><i>${k}</i>${v}</span>`).join('');
+    return `<div class="ccard ${cls}"><div class=ccard-hd>${dpill(c.direction)}`
+         + `<span class="cstate ${c.state}" title="${esc(c.reason)}">${c.state}</span>`
+         + `<span class=ccard-gate>${gate}</span></div>${chain(c)}<div class=cfacts>${facts}</div></div>`;
+  };
+  const cards=info.map(card).join('')||'<div class=cempty>no candidates on this timeframe yet</div>';
   $('#candmodal-title').innerHTML=`${sym}<span class=ctlayer>${layer} candidates</span>`;
   $('#candmodal-body').innerHTML=
       `<div class=csum><span class=cchip>${nTot} possible</span>`
     + `<span class="cchip avail">${nAvail} available</span>`
     + `<span class="cchip pass">${nPass} passed gate</span></div>`
-    + `<div class=ctblwrap><table class=ctbl>`
-    + `<thead><tr><th>dir</th><th>entry</th><th>stop</th><th>target</th><th>rr</th><th>status</th></tr></thead>`
-    + `<tbody>${rows}</tbody></table></div>`
-    + `<div class=cleg><span class=candall>grey</span> = all possible · <span class=candavail>white</span> = available · <span class=candpass>bold</span> = passed the gate</div>`;
+    + `<div class=ccards>${cards}</div>`
+    + `<div class=cleg><span class=candall>grey</span> = all possible ideas · `
+    + `<span class=candavail>white</span> = available · <span class=candpass>bold</span> = passed the gate</div>`;
   $('#candmodal').classList.add('on');
 }
 function closeCandidates(){$('#candmodal').classList.remove('on');}

@@ -41,6 +41,59 @@ class GatedSetup:
     objective: object = None                           # HTF liquidity pool = the draw (target)
 
 
+# progressive ICT workflow stages a candidate can reach (least → most complete)
+CANDIDATE_STATES = ("swept", "displaced", "mss", "fvg", "actionable")
+
+
+@dataclass
+class Candidate:
+    """A COMPLETE trade idea for one timeframe — everything the engine knows about a possible setup,
+    anchored on the manipulation (liquidity sweep). It is NOT "an FVG we filtered": it is generated
+    from the manipulation and then carries whatever of the ICT chain has formed so far
+    (displacement → MSS → FVG), plus the HTF dealing range, premium/discount location, and liquidity
+    objective. `state` says how far through the workflow it got; the next timeframe rejects / refines
+    / promotes it."""
+    direction: str                         # long | short
+    state: str                             # one of CANDIDATE_STATES
+    sweep: object = None                   # the manipulation (the anchor — always present)
+    displacement: object = None
+    mss: object = None
+    fvg: object = None
+    dealing_range: object = None
+    pd_location: Optional[str] = None      # premium | discount | equilibrium of the entry (HTF)
+    objective: object = None               # opposing liquidity pool = the draw (target)
+    entry: Optional[float] = None
+    stop: Optional[float] = None
+    target: Optional[float] = None
+    rr: Optional[float] = None
+    actionable: bool = False               # v1 assembled a tradeable setup for it
+    passed: bool = False                   # cleared the HTF gate
+    reason: str = ""                       # why it stalled / was rejected
+    setup: object = None                   # the assembled v1 Setup, if it reached one
+
+    def to_dict(self) -> dict:
+        def px(x):
+            return None if x is None else round(float(x), 2)
+        obj = self.objective
+        return {
+            "direction": self.direction, "state": self.state,
+            "entry": px(self.entry), "stop": px(self.stop), "target": px(self.target),
+            "rr": (None if self.rr is None else round(float(self.rr), 2)),
+            "pd_location": self.pd_location,
+            "objective": None if obj is None else {"kind": getattr(obj, "kind", None),
+                                                   "price": px(getattr(obj, "price", None))},
+            "components": {"sweep": self.sweep is not None, "displacement": self.displacement is not None,
+                           "mss": self.mss is not None, "fvg": self.fvg is not None},
+            "sweep": None if self.sweep is None else {"pool": px(getattr(self.sweep, "pool_price", None)),
+                                                      "extreme": px(getattr(self.sweep, "extreme", None))},
+            "fvg_status": None if self.fvg is None else getattr(self.fvg, "status", None),
+            "mss_state": None if self.mss is None else getattr(self.mss, "state", None),
+            "actionable": self.actionable, "passed": self.passed, "reason": self.reason,
+            "id": (getattr(self.setup, "id", "") if self.setup is not None
+                   else getattr(self.sweep, "id", "")),
+        }
+
+
 @dataclass
 class MTFSetup:
     """Stage 2 — the intermediate-timeframe setup: manipulation, displacement, MSS, and the setups
@@ -107,26 +160,114 @@ def htf_context(bars, tf: str) -> HTFContext:
     return HTFContext(tf=tf, bias=bias, dealing_range=dr, liquidity=list(ms.active_erl))
 
 
-def mtf_setup(bars, tf: str, context: HTFContext) -> MTFSetup:
-    """Stage 2: run the engine on the MTF, then GATE each setup by the HTF context (bias +
-    premium/discount + liquidity objective). Only setups that pass are carried forward."""
-    ms = v1.analyze(bars, tf)
-    # Gate only setups v1 deems ACTIONABLE (non-actionable ones are rejected — mitigated FVG, RR too
-    # low, degenerate geometry — and must never be executed). But record ALL ranked candidates with
-    # their status so the UI can show rejected (gray) / available (white) / passed-gate (bold).
-    gated, cand_info, candidates = [], [], []
+def generate_candidates(ms, context: HTFContext) -> list:
+    """GENERATE trade candidates from the manipulation, do NOT "find FVGs and filter".
+
+    Every liquidity sweep is a possible trade idea (its direction is set by which side was raided).
+    Starting from each sweep we gather whatever of the ICT chain has formed — the displacement off the
+    manipulation, the market-structure shift, and the entry FVG — plus the HTF dealing range, the
+    premium/discount location of the entry, and the opposing liquidity objective. Where v1 assembled a
+    full tradeable Setup we adopt its authoritative geometry/actionability; otherwise the candidate
+    still exists at whatever `state` it reached, for the next timeframe to reject / refine / promote."""
+    disp_by_sweep, fvg_by_disp, mss_by_disp = {}, {}, {}
+    for r in ms.ranked_displacements:
+        d = r.item
+        if d.depends_on:
+            disp_by_sweep.setdefault(d.depends_on[0], []).append(d)      # depends_on[0] = sweep id
+    for r in ms.ranked_fvgs:
+        f = r.item
+        if f.depends_on:
+            fvg_by_disp.setdefault(f.depends_on[0], []).append(f)        # depends_on[0] = displacement id
+    for r in ms.ranked_mss:
+        m = r.item
+        if m.depends_on:
+            mss_by_disp.setdefault(m.depends_on[0], []).append(m)        # depends_on[0] = displacement id
+    setup_by_fvg = {}
     for r in ms.ranked_setups:
         su = r.item
-        act = bool(getattr(su, "actionable", False))
-        passed = False
-        if act:
-            candidates.append(su)
-            passed, _reasons, objective = align.gate_setup(su, context)
-            if passed:
-                gated.append(GatedSetup(setup=su, objective=objective))
-        cand_info.append({"id": getattr(su, "id", ""), "direction": su.direction, "entry": su.entry,
-                          "stop": su.stop, "target": su.target, "rr": getattr(su, "rr", None),
-                          "actionable": act, "passed": passed})
+        deps = getattr(su, "depends_on", None) or ()
+        if deps:
+            setup_by_fvg[deps[0]] = su                                   # depends_on[0] = source FVG id
+
+    cands = []
+    for r in ms.ranked_sweeps:                                           # anchor: the manipulation
+        sw = r.item
+        direction = "long" if sw.direction == "bullish" else "short"     # sell-side raid → long, buy-side → short
+        disps = disp_by_sweep.get(sw.id, [])
+        disp = disps[0] if disps else None                               # best-ranked displacement off it
+        fvg = mss = setup = None
+        if disp is not None:
+            fvgs = fvg_by_disp.get(disp.id, [])
+            fvgs = sorted(fvgs, key=lambda f: 0 if getattr(f, "status", "") != "mitigated" else 1)
+            fvg = fvgs[0] if fvgs else None
+            msss = mss_by_disp.get(disp.id, [])
+            mss = msss[0] if msss else None
+        if fvg is not None:
+            setup = setup_by_fvg.get(getattr(fvg, "id", None))
+
+        stop = sw.extreme                                                # stop at the manipulation extreme
+        entry = getattr(fvg, "ce", None) if fvg is not None else None
+        dr = context.dealing_range if context else None
+        pd = context.zone(entry) if (context and entry is not None) else None
+        objective = align.liquidity_objective(context, direction) if context else None
+        target = getattr(objective, "price", None) if objective is not None else None
+
+        actionable = passed = False
+        if setup is not None:                                            # adopt v1's authoritative setup
+            entry, stop = setup.entry, setup.stop
+            if target is None:
+                target = setup.target
+            rr = getattr(setup, "rr", None)
+            actionable = bool(getattr(setup, "actionable", False))
+            if actionable:
+                passed, _reasons, obj2 = align.gate_setup(setup, context)
+                if obj2 is not None:
+                    objective, target = obj2, getattr(obj2, "price", target)
+            reason = "" if actionable else getattr(setup, "reject_reason", "")
+        else:
+            risk = abs(stop - entry) if entry is not None else 0.0
+            reward = abs(entry - target) if (entry is not None and target is not None) else 0.0
+            rr = round(reward / risk, 2) if risk > 0 else None
+            reason = ""
+
+        if disp is None:
+            state = "swept"
+        elif actionable:
+            state = "actionable"
+        elif fvg is not None:
+            state = "fvg"
+        elif mss is not None:
+            state = "mss"
+        else:
+            state = "displaced"
+        if not reason and not actionable:                                # a human note for partial ideas
+            reason = {"swept": "manipulation taken — no displacement off it yet",
+                      "displaced": "displaced — no market-structure shift yet",
+                      "mss": "structure shifted — awaiting an entry FVG",
+                      "fvg": "entry FVG present — not yet a valid setup"}.get(state, "")
+
+        cands.append(Candidate(direction=direction, state=state, sweep=sw, displacement=disp, mss=mss,
+                               fvg=fvg, dealing_range=dr, pd_location=pd, objective=objective,
+                               entry=entry, stop=stop, target=target, rr=rr, actionable=actionable,
+                               passed=passed, reason=reason, setup=setup))
+    return cands
+
+
+def mtf_setup(bars, tf: str, context: HTFContext) -> MTFSetup:
+    """Stage 2: GENERATE trade candidates on this timeframe (manipulation → full ICT idea), then GATE
+    the tradeable ones by the HTF context (bias + premium/discount + liquidity objective). Every
+    candidate is retained (with its workflow `state`) so the next timeframe can reject / refine /
+    promote it; cand_info carries all of them so the UI shows all-possible (grey) / available (white,
+    reached `actionable`) / passed-gate (bold)."""
+    ms = v1.analyze(bars, tf)
+    all_cands = generate_candidates(ms, context)
+    gated, candidates, cand_info = [], [], []
+    for c in all_cands:
+        cand_info.append(c.to_dict())
+        if c.actionable and c.setup is not None:
+            candidates.append(c.setup)
+            if c.passed:
+                gated.append(GatedSetup(setup=c.setup, objective=c.objective))
     return MTFSetup(tf=tf, sweeps=list(ms.ranked_sweeps), displacements=list(ms.ranked_displacements),
                     mss=list(ms.ranked_mss), candidates=candidates, gated=gated, cand_info=cand_info)
 

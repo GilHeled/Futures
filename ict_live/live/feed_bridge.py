@@ -109,9 +109,15 @@ def push_new(url, root, tv_symbol, *, period, token, last_ms: dict, now_ms: int)
 def run(url, symbols, *, token=None, backfill="2d", poll_period="1d", interval=60, once=False,
         log=print) -> dict:
     inst = _instruments()
-    roots = [s.upper() for s in symbols if s.upper() in inst]
+
+    def _to_root(s):                                            # accept roots (MES) or keys (CME_MINI:MES1!)
+        if s.upper() in inst:
+            return s.upper()
+        return C.INSTRUMENTS[s].root if s in C.INSTRUMENTS else None
+    roots = [r for r in (_to_root(s) for s in symbols) if r]
     if not roots:
-        raise SystemExit(f"no known symbols in {symbols}; known: {sorted(inst)}")
+        raise SystemExit(f"no known symbols in {symbols}; known roots {sorted(inst)} / "
+                         f"keys {sorted(C.INSTRUMENTS)}")
     if not _reachable(url):
         raise SystemExit(f"live service not reachable at {url} — start it first (in another "
                          f"terminal):\n  python3 -m ict_live.live.serve")

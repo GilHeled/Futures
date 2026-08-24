@@ -26,14 +26,19 @@ The live service + dashboard run in Docker from a single image. The **data feed*
 that can't always live in the container — the real-time TradingView feed depends on TradingView
 Desktop (a GUI app that cannot run in a Linux container) — so there are two modes:
 
-**Real-time (recommended) — one command, `./run-live.sh`:**
+**Default (recommended) — one command, `./run-live.sh`:**
 ```bash
-./run-live.sh                 # or: ./run-live.sh CME_MINI:MES1!
+./run-live.sh                 # or: ./run-live.sh CME_MINI:MNQ1! CME_MINI:MES1!
 ```
-This builds + starts the live service and dashboard in Docker, waits for health, then runs the
-real-time TradingView **MCP feed on the host** (TradingView Desktop must be open with
-`--remote-debugging-port=9222` on that symbol; `TV_CLI` set). `Ctrl+C` stops the feed and tears the
-stack down. Near-zero data delay.
+Builds + starts the live service and dashboard in Docker, waits for health, then starts the data
+feed on the host. **The data source defaults to real-time TradingView** (via the MCP connection to
+TradingView Desktop) and only falls back to the delayed yfinance feed if TradingView isn't reachable.
+`Ctrl+C` stops the feed and tears the stack down. For real-time, launch TradingView Desktop once with
+the debug port:
+```bash
+open -a TradingView --args --remote-debugging-port=9222
+```
+(TradingView Desktop is a GUI app, so the feed runs on the host, not in the container.)
 
 **Fully in Docker (delayed, no TradingView) — for evaluation on any machine:**
 ```bash

@@ -51,6 +51,18 @@ def test_run_once_backfills(monkeypatch):
     assert rep["symbols"] == ["MES", "MNQ"] and rep["posted"] == 4    # 2 bars x 2 known symbols
 
 
+def test_run_accepts_instrument_keys(monkeypatch):
+    # run-live.sh passes CME_MINI:…1! keys to both feeds; the yfinance bridge maps them to roots
+    monkeypatch.setattr(FB, "_reachable", lambda url, timeout=3.0: True)
+    monkeypatch.setattr(FB, "get_enabled", lambda url, default: default)
+    monkeypatch.setattr(FB, "heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(FB, "fetch_1m", lambda root, period="2d": [_bar(0, 100)])
+    posted = []
+    monkeypatch.setattr(FB, "_post", lambda url, p, token: (posted.append(p["symbol"]), {"status": "accepted"})[1])
+    rep = FB.run("http://x", ["CME_MINI:MNQ1!"], once=True, log=lambda *a: None)
+    assert rep["symbols"] == ["MNQ"] and posted == ["CME_MINI:MNQ1!"]
+
+
 def test_get_enabled_falls_back(monkeypatch):
     # unreachable control endpoint -> returns the default set (never raises)
     assert FB.get_enabled("http://127.0.0.1:9", ["CME_MINI:MNQ1!"]) == ["CME_MINI:MNQ1!"]

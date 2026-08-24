@@ -38,12 +38,12 @@ class MTFEngine:
         return self.setup
 
     def on_confirm_close(self, bars):
-        """15m confirmation: its own actionable setup in the context/setup direction. Computed whenever
-        a context exists (so the dashboard can show 'developing'); it only matters to the decision when
-        the 1H setup is also gated."""
+        """15m confirmation: its OWN actionable setup that must confirm the 1H setup (same direction as
+        a gated 1H setup). Computed whenever a context exists (so the dashboard can show what is
+        developing and WHY each 15m candidate is rejected); it only promotes when the 1H setup is gated."""
         if self.context is None:
             return None
-        self.confirmation = P.mtf_setup(bars, self.confirm_tf, self.context)
+        self.confirmation = P.confirm_setup(bars, self.confirm_tf, self.context, self.setup)
         return self.confirmation
 
     def on_trigger_close(self, bars):

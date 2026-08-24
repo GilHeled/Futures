@@ -13,12 +13,25 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from ict_live.market.bar_builder import BarBuilder
 from ict_v2.engine import MTFEngine
 
 _WINDOW = 240          # context/setup/confirmation structural window
 _EXEC_WINDOW = 400     # recent 1m bars for the execution trigger
+_ET = ZoneInfo("America/New_York")
+_UTC = ZoneInfo("UTC")
+
+
+def _et_iso(dt):
+    """All `updated` timestamps in ONE timezone (ET) so the 4H/1H/15m (ET-aligned resamples) and the 1m
+    (ingested UTC) never disagree on wall clock. Naive datetimes are assumed UTC."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_UTC)
+    return dt.astimezone(_ET).isoformat()
 
 
 class V2Live:
@@ -47,20 +60,20 @@ class V2Live:
             if cb.timeframe == self.context_tf:
                 self._append(self.context_tf, cb, self.window)
                 self.engine.on_context_close(self.buf[self.context_tf])
-                self.updated[self.context_tf] = cb.close_time.isoformat()
+                self.updated[self.context_tf] = _et_iso(cb.close_time)
         for cb in closed:                                    # setup
             if cb.timeframe == self.setup_tf:
                 self._append(self.setup_tf, cb, self.window)
                 self.engine.on_setup_close(self.buf[self.setup_tf])
-                self.updated[self.setup_tf] = cb.close_time.isoformat()
+                self.updated[self.setup_tf] = _et_iso(cb.close_time)
         for cb in closed:                                    # confirmation
             if cb.timeframe == self.confirm_tf:
                 self._append(self.confirm_tf, cb, self.window)
                 self.engine.on_confirm_close(self.buf[self.confirm_tf])
-                self.updated[self.confirm_tf] = cb.close_time.isoformat()
+                self.updated[self.confirm_tf] = _et_iso(cb.close_time)
         self._append(self.trigger_tf, bar, self.exec_window)  # 1m trigger = every bar
         self.engine.on_trigger_close(self.buf[self.trigger_tf])
-        self.updated[self.trigger_tf] = bar.close_time.isoformat()
+        self.updated[self.trigger_tf] = _et_iso(bar.close_time)
         return self.engine.state()
 
     # ---- serialization ------------------------------------------------------------------------

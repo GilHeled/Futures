@@ -104,7 +104,8 @@ class MTFSetup:
     mss: list = field(default_factory=list)
     candidates: list = field(default_factory=list)     # ACTIONABLE MTF setups (the available pool)
     gated: list = field(default_factory=list)          # list[GatedSetup] that passed the HTF gate
-    cand_info: list = field(default_factory=list)      # ALL ranked candidates w/ {actionable, passed} flags
+    cand_info: list = field(default_factory=list)      # ALL candidates as dicts (w/ actionable/passed/reasons)
+    candidate_objs: list = field(default_factory=list) # the rich Candidate objects (for the next stage to refine)
 
 
 @dataclass
@@ -272,7 +273,37 @@ def mtf_setup(bars, tf: str, context: HTFContext) -> MTFSetup:
             if c.passed:
                 gated.append(GatedSetup(setup=c.setup, objective=c.objective))
     return MTFSetup(tf=tf, sweeps=list(ms.ranked_sweeps), displacements=list(ms.ranked_displacements),
-                    mss=list(ms.ranked_mss), candidates=candidates, gated=gated, cand_info=cand_info)
+                    mss=list(ms.ranked_mss), candidates=candidates, gated=gated, cand_info=cand_info,
+                    candidate_objs=all_cands)
+
+
+def confirm_setup(bars, tf: str, context: HTFContext, setup: MTFSetup) -> MTFSetup:
+    """Stage 3 — the 15m CONFIRMATION. Generate 15m candidates with their OWN structure
+    (sweep/displacement/MSS/FVG), gate them by the HTF context exactly like the 1H stage, THEN require
+    they confirm the 1H setup: a confirmation is valid only if it is a complete 15m setup, HTF-aligned,
+    AND in the direction of a gated 1H setup. Every candidate keeps EXPLICIT reasons — the HTF-gate
+    reasons plus the confirmation reason — so this stage explains each rejection just like the 1H stage
+    ("No gated 1H setup to confirm" / "Direction mismatch — 15m X vs 1H setup Y")."""
+    mtf = mtf_setup(bars, tf, context)                       # generate + HTF-gate (reasons already attached)
+    setup_dirs = sorted({g.setup.direction for g in (setup.gated if setup else [])})
+    gated, candidates, cand_info = [], [], []
+    for c in mtf.candidate_objs:                             # the rich Candidate objects from the 15m generate
+        if c.actionable:                                     # only a COMPLETE 15m setup can confirm the 1H
+            if not setup_dirs:
+                c.reasons = list(c.reasons) + ["No gated 1H setup to confirm"]
+                c.passed = False
+            elif c.direction not in setup_dirs:
+                c.reasons = list(c.reasons) + [
+                    f"Direction mismatch — 15m {c.direction} vs 1H setup {'/'.join(setup_dirs)}"]
+                c.passed = False
+            # else: keep c.passed from the HTF gate — a confirmed 15m setup in the 1H direction
+        cand_info.append(c.to_dict())
+        if c.actionable and c.setup is not None:
+            candidates.append(c.setup)
+            if c.passed:
+                gated.append(GatedSetup(setup=c.setup, objective=c.objective))
+    return MTFSetup(tf=tf, sweeps=mtf.sweeps, displacements=mtf.displacements, mss=mtf.mss,
+                    candidates=candidates, gated=gated, cand_info=cand_info)
 
 
 def ltf_execution(bars, tf: str, setup: MTFSetup, context: HTFContext) -> LTFExecution:
@@ -316,7 +347,7 @@ def analyze_mtf(context_bars, setup_bars, confirm_bars, trigger_bars, *, context
     """Run the four-layer cascade in order and return the combined state (stateless convenience)."""
     ctx = htf_context(context_bars, context_tf)
     stp = mtf_setup(setup_bars, setup_tf, ctx)
-    cf = mtf_setup(confirm_bars, confirm_tf, ctx)          # 15m confirmation = its own gated setup, same dir
+    cf = confirm_setup(confirm_bars, confirm_tf, ctx, stp)  # 15m confirmation of the 1H setup
     exe = execution_for(trigger_bars, trigger_tf, ctx, stp, cf)
     return MTFState(context=ctx, setup=stp, confirmation=cf, execution=exe)
 

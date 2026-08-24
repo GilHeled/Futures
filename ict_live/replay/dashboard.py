@@ -181,17 +181,45 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .modal iframe{flex:1;border:0;width:100%}
  .modal .imgwrap{flex:1;overflow:auto;display:flex;background:var(--panel2)}
  .modal .imgwrap img{max-width:100%;margin:auto}
- .modal-box.sm{width:min(600px,94vw);height:auto;max-height:76vh}
- .candlink{cursor:pointer;color:var(--accent);border-bottom:1px dotted var(--accent)}
- .candlink:hover{filter:brightness(1.2)}
- .candbody{overflow:auto;padding:12px 14px;display:flex;flex-direction:column;gap:6px}
- .candleg{font-size:11px;color:var(--mut);padding-bottom:8px;margin-bottom:4px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:4px}
- .candleg .candall,.candleg .candavail,.candleg .candpass{padding:0}
- .candrow{font-size:12px;font-family:"SF Mono",ui-monospace,Menlo,monospace;padding:5px 8px;border-radius:6px;background:var(--panel2)}
- .candtag{font-size:10px;text-transform:uppercase;letter-spacing:.4px}
- .candall{color:var(--mut)}
- .candavail{color:var(--ink)}
- .candpass{color:var(--ink);font-weight:700}
+ .modal-box.sm{width:min(560px,94vw);height:auto;max-height:82vh}
+ /* the count opener is a real button */
+ .candbtn{font:inherit;cursor:pointer;background:var(--panel2);color:var(--ink);border:1px solid var(--line);
+   border-radius:8px;padding:4px 10px;font-size:11px;font-weight:600;display:inline-flex;align-items:center;
+   gap:7px;line-height:1;transition:border-color .12s,color .12s}
+ .candbtn:hover{border-color:var(--accent);color:var(--accent)}
+ .candbtn b{font-weight:800}
+ .candbtn i{width:1px;height:11px;background:var(--line);display:inline-block}
+ /* the pro candidate popup */
+ .candbody{overflow:auto;padding:16px;display:flex;flex-direction:column;gap:14px}
+ #candmodal-title{display:flex;align-items:baseline;gap:8px}
+ #candmodal-title .ctlayer{color:var(--mut);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+ .csum{display:flex;gap:8px;flex-wrap:wrap}
+ .cchip{font-size:11px;padding:4px 11px;border-radius:999px;background:var(--panel2);border:1px solid var(--line);
+   color:var(--mut);font-weight:600;font-variant-numeric:tabular-nums}
+ .cchip.avail{color:var(--ink)}
+ .cchip.pass{color:var(--long);border-color:color-mix(in srgb,var(--long) 45%,var(--line))}
+ .ctblwrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px}
+ .ctbl{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums}
+ .ctbl th{text-align:right;font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);
+   font-weight:600;padding:9px 12px;background:var(--panel2);border-bottom:1px solid var(--line)}
+ .ctbl th:first-child,.ctbl th:last-child{text-align:left}
+ .ctbl td{padding:9px 12px;border-bottom:1px solid var(--line);text-align:right}
+ .ctbl td:first-child,.ctbl td:last-child{text-align:left}
+ .ctbl tbody tr:last-child td{border-bottom:0}
+ .ctbl .nnum{font-family:"SF Mono",ui-monospace,Menlo,monospace}
+ .ctbl .cempty{text-align:center;color:var(--mut);padding:22px}
+ .cdir{font-size:10px;font-weight:800;padding:2px 8px;border-radius:5px;letter-spacing:.03em}
+ .cdir.long{color:var(--long);background:var(--long-bg)} .cdir.short{color:var(--short);background:var(--short-bg)}
+ .cbadge{font-size:10px;font-weight:600;padding:2px 9px;border-radius:999px;text-transform:uppercase;letter-spacing:.4px}
+ .cbadge.pass{color:var(--long);background:var(--long-bg)}
+ .cbadge.avail{color:var(--ink);background:var(--panel2);border:1px solid var(--line)}
+ .cbadge.rej{color:var(--mut);background:var(--panel2)}
+ .cleg{font-size:11px;color:var(--mut);display:flex;flex-wrap:wrap;gap:5px;padding-top:2px}
+ /* row tiers: grey = all, white = available, bold = passed */
+ .candall,.candall .nnum{color:var(--mut)}
+ .candavail,.candavail .nnum{color:var(--ink)}
+ .candpass,.candpass .nnum{color:var(--ink);font-weight:700}
+ .cleg .candall,.cleg .candavail,.cleg .candpass{padding:0;background:none}
  /* ---- actionable trade tickets (the hero) ---- */
  .tickets{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
  .ticket{background:var(--panel);border:1px solid var(--line);border-left:6px solid var(--mut);
@@ -504,7 +532,7 @@ function v2Tables(rep){
     const top=e.top; const execSide=top?sideOf(top.direction):'flat';
     const dec=top?execSide.toUpperCase():'NO-TRADE';
     const execLine=top?`${top.direction.toUpperCase()} entry ${num(top.entry)} · stop ${num(top.stop)} · target ${num(top.target)}${top.ltf_confirmed?' · ✓':''}`:fmt(e.decision);
-    const gline=(layer,x)=>`<span class=candlink onclick="openCandidates('${sym}','${layer}')" title="click for the candidate list">gated <b>${fmt(x.gated)}</b> of <b>${fmt(x.available)}</b> available · ${fmt(x.total)} total ▸</span>`;
+    const gline=(layer,x)=>`<button type=button class=candbtn onclick="openCandidates('${sym}','${layer}')"><b>${fmt(x.gated)}</b> gated<i></i>${fmt(x.available)} avail<i></i>${fmt(x.total)} total</button>`;
     return `<div class="ticket ${execSide}">
       <div class=thead><span class=sym>${sym}</span><span class="v2dec ${execSide}">${dec}</span></div>
       <div class=reads>
@@ -529,14 +557,26 @@ async function pollV2(){
 }
 function openCandidates(sym,layer){
   const s=((window._v2last||{}).symbols||{})[sym]||{}; const info=((s[layer]||{}).candidates)||[];
-  const rows=info.map(cnd=>{
-    const cls=cnd.passed?'candpass':(cnd.actionable?'candavail':'candall');
-    const tag=cnd.passed?'✓ passed gate':(cnd.actionable?'available':'rejected');
-    return `<div class="candrow ${cls}">${(cnd.direction||'').toUpperCase()} · entry ${num(cnd.entry)} · stop ${num(cnd.stop)} · target ${num(cnd.target)} · RR ${num(cnd.rr)} · <span class=candtag>${tag}</span></div>`;
-  }).join('')||'<div class=mut>no candidates on this timeframe.</div>';
-  const legend='<div class=candleg><span class=candpass>bold</span> = passed the gate · <span class=candavail>white</span> = available (actionable) · <span class=candall>grey</span> = rejected</div>';
-  $('#candmodal-title').textContent=sym+' — '+layer+' candidates';
-  $('#candmodal-body').innerHTML=legend+rows;
+  const nTot=info.length, nAvail=info.filter(c=>c.actionable).length, nPass=info.filter(c=>c.passed).length;
+  const dpill=d=>`<span class="cdir ${d==='long'?'long':'short'}">${(d||'').toUpperCase()}</span>`;
+  const badge=c=>c.passed?'<span class="cbadge pass">✓ passed gate</span>'
+                        :(c.actionable?'<span class="cbadge avail">available</span>'
+                                      :'<span class="cbadge rej">rejected</span>');
+  const rows=info.map(c=>{
+    const cls=c.passed?'candpass':(c.actionable?'candavail':'candall');
+    return `<tr class="${cls}"><td>${dpill(c.direction)}</td><td class=nnum>${num(c.entry)}</td>`
+         + `<td class=nnum>${num(c.stop)}</td><td class=nnum>${num(c.target)}</td>`
+         + `<td class=nnum>${num(c.rr)}</td><td>${badge(c)}</td></tr>`;
+  }).join('')||'<tr><td colspan=6 class=cempty>no candidates on this timeframe yet</td></tr>';
+  $('#candmodal-title').innerHTML=`${sym}<span class=ctlayer>${layer} candidates</span>`;
+  $('#candmodal-body').innerHTML=
+      `<div class=csum><span class=cchip>${nTot} possible</span>`
+    + `<span class="cchip avail">${nAvail} available</span>`
+    + `<span class="cchip pass">${nPass} passed gate</span></div>`
+    + `<div class=ctblwrap><table class=ctbl>`
+    + `<thead><tr><th>dir</th><th>entry</th><th>stop</th><th>target</th><th>rr</th><th>status</th></tr></thead>`
+    + `<tbody>${rows}</tbody></table></div>`
+    + `<div class=cleg><span class=candall>grey</span> = all possible · <span class=candavail>white</span> = available · <span class=candpass>bold</span> = passed the gate</div>`;
   $('#candmodal').classList.add('on');
 }
 function closeCandidates(){$('#candmodal').classList.remove('on');}

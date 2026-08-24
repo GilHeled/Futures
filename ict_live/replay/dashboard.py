@@ -221,9 +221,9 @@ function kpis(s,opens){
 function sourcePanel(rep){
   const f=rep.feed;
   if(!f) return '<div class=card><h2 style=margin-top:0>Data source</h2><span class=mut>No feed connected — start a real-time (MCP) or yfinance feed.</span></div>';
-  const now=Date.now();
+  const now=Date.now(); const nm=rep.instrument_names||{};
   const ages=(f.symbols||[]).map(s=>{const t=(f.bars||{})[s];const a=t?Math.round((now-t)/60000):null;
-    return '<span class=chip>'+s+' <b>'+(a==null?'—':a+'m ago')+'</b></span>';}).join('');
+    return '<span class=chip>'+s+(nm[s]?' ('+nm[s]+')':'')+' <b>'+(a==null?'—':a+'m ago')+'</b></span>';}).join('');
   const beat=f.received_ms?Math.round((now-f.received_ms)/1000):null;
   return '<h2>Data source</h2><div class=card><div class=strip>'+
     '<span class=chip>source <b>'+fmt(f.source)+'</b></span>'+
@@ -232,10 +232,12 @@ function sourcePanel(rep){
 }
 function togglePanel(rep){
   const inst=rep.instruments||[]; if(!inst.length) return '';
+  const nm=rep.instrument_names||{};
   // effective active set: an explicit dashboard selection if set, else what the feed reports streaming
   const active = (rep.enabled!=null) ? rep.enabled : (((rep.feed||{}).symbols)||[]);
   const boxes=inst.map(s=>{const on=active.includes(s);
-    return '<label class=sym><input type=checkbox '+(on?'checked':'')+' value="'+s+'" onchange="postControl()"> '+s+'</label>';}).join('');
+    return '<label class=sym><input type=checkbox '+(on?'checked':'')+' value="'+s+'" onchange="postControl()"> '+
+      s+(nm[s]?' <span class=mut>'+nm[s]+'</span>':'')+'</label>';}).join('');
   return '<h2>Symbols (feed)</h2><div class=card><div class=strip id=toggles>'+boxes+'</div>'+
     '<div class=mut style=margin-top:6px>checked = actually streaming. Toggling adds/removes a symbol '+
     'from the feed (the real-time TradingView feed round-robins one chart, so more symbols = slower cycle).</div></div>';

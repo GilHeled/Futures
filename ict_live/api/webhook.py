@@ -81,6 +81,7 @@ def create_app(ingestor: Optional[Ingestor] = None, runner: Optional[LiveRunner]
         rep["feed"] = app.state.feed["status"]                 # which feed, freshness (dashboard shows this)
         rep["enabled"] = app.state.feed["enabled"]
         rep["instruments"] = sorted(C.INSTRUMENTS)
+        rep["instrument_names"] = C.instrument_names()
         return rep
 
     # ---- feed control/status (a feed producer reports here; the dashboard toggles symbols) ----

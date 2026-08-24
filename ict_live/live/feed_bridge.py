@@ -142,9 +142,15 @@ def run(url, symbols, *, token=None, backfill="2d", poll_period="1d", interval=6
     if once:
         return {"posted": total, "symbols": roots}
     log(f"streaming every {interval}s (Ctrl+C to stop)…")
+    prev = None
     while True:
         time.sleep(interval)
-        for root in active_roots():
+        active = active_roots()
+        keys = [inst[r] for r in active]
+        if keys != prev:
+            log(f"active symbols now: {keys}")                  # visible when a dashboard toggle takes effect
+            prev = keys
+        for root in active:
             try:
                 n = push_new(url, root, inst[root], period=poll_period, token=token,
                              last_ms=last_ms, now_ms=int(time.time() * 1000))

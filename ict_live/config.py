@@ -114,6 +114,7 @@ class Instrument:
     root: str                   # "NQ"
     tick_size: float
     point_value: float
+    name: str = ""              # human-readable, e.g. "E-mini Nasdaq-100"
 
 
 # Instrument registry — the symbols the service will accept. Keys are TradingView tickerids
@@ -126,19 +127,24 @@ class Instrument:
 # unseen data. Tick sizes are the real CME/COMEX/NYMEX increments (used for the min-stop floor).
 INSTRUMENTS = {
     # index futures (validated)
-    "CME_MINI:NQ1!": Instrument("CME_MINI:NQ1!", "NQ", 0.25, 20.0),
-    "CME_MINI:ES1!": Instrument("CME_MINI:ES1!", "ES", 0.25, 50.0),
-    "CME_MINI:MNQ1!": Instrument("CME_MINI:MNQ1!", "MNQ", 0.25, 2.0),
-    "CME_MINI:MES1!": Instrument("CME_MINI:MES1!", "MES", 0.25, 5.0),
+    "CME_MINI:NQ1!": Instrument("CME_MINI:NQ1!", "NQ", 0.25, 20.0, "E-mini Nasdaq-100"),
+    "CME_MINI:ES1!": Instrument("CME_MINI:ES1!", "ES", 0.25, 50.0, "E-mini S&P 500"),
+    "CME_MINI:MNQ1!": Instrument("CME_MINI:MNQ1!", "MNQ", 0.25, 2.0, "Micro E-mini Nasdaq-100"),
+    "CME_MINI:MES1!": Instrument("CME_MINI:MES1!", "MES", 0.25, 5.0, "Micro E-mini S&P 500"),
     # major commodities (UNVALIDATED for this strategy — monitoring / paper)
-    "COMEX:GC1!": Instrument("COMEX:GC1!", "GC", 0.10, 100.0),       # Gold
-    "COMEX:MGC1!": Instrument("COMEX:MGC1!", "MGC", 0.10, 10.0),     # Micro Gold
-    "COMEX:SI1!": Instrument("COMEX:SI1!", "SI", 0.005, 5000.0),     # Silver
-    "COMEX:HG1!": Instrument("COMEX:HG1!", "HG", 0.0005, 25000.0),   # Copper
-    "NYMEX:CL1!": Instrument("NYMEX:CL1!", "CL", 0.01, 1000.0),      # Crude Oil (WTI)
-    "NYMEX:MCL1!": Instrument("NYMEX:MCL1!", "MCL", 0.01, 100.0),    # Micro Crude
-    "NYMEX:NG1!": Instrument("NYMEX:NG1!", "NG", 0.001, 10000.0),    # Natural Gas
+    "COMEX:GC1!": Instrument("COMEX:GC1!", "GC", 0.10, 100.0, "Gold"),
+    "COMEX:MGC1!": Instrument("COMEX:MGC1!", "MGC", 0.10, 10.0, "Micro Gold"),
+    "COMEX:SI1!": Instrument("COMEX:SI1!", "SI", 0.005, 5000.0, "Silver"),
+    "COMEX:HG1!": Instrument("COMEX:HG1!", "HG", 0.0005, 25000.0, "Copper"),
+    "NYMEX:CL1!": Instrument("NYMEX:CL1!", "CL", 0.01, 1000.0, "Crude Oil (WTI)"),
+    "NYMEX:MCL1!": Instrument("NYMEX:MCL1!", "MCL", 0.01, 100.0, "Micro Crude Oil"),
+    "NYMEX:NG1!": Instrument("NYMEX:NG1!", "NG", 0.001, 10000.0, "Natural Gas"),
 }
+
+
+def instrument_names() -> dict:
+    """{tickerid: human name} for the dashboard."""
+    return {k: v.name for k, v in INSTRUMENTS.items()}
 
 
 def min_stop_for(symbol: str) -> float:

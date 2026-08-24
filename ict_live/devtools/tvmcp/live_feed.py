@@ -105,9 +105,13 @@ def run(url, *, symbols=None, token=None, interval=15, once=False, load_wait=1.5
             f"them each cycle — dedicate this chart to the feed.")
     log(f"TradingView real-time feed: {wanted} -> {url}")
     last_ms: dict[str, int] = {}
+    prev = [None]
 
     def cycle():
         enabled = [s for s in get_enabled(url, wanted) if s in C.INSTRUMENTS]   # dashboard toggles
+        if enabled != prev[0]:
+            log(f"active symbols now: {enabled}")               # visible when a toggle takes effect
+            prev[0] = enabled
         for sym in enabled:
             try:
                 k = _pump(tv, url, sym, token=token, last_ms=last_ms, load_wait=load_wait, log=log)

@@ -133,8 +133,10 @@ def create_app(ingestor: Optional[Ingestor] = None, runner: Optional[LiveRunner]
             body = await request.json()
         except Exception:
             body = {}
-        ms = body.get("ms") if isinstance(body, dict) else None
-        return {"ok": True, "live_since_ms": runner.mark_live(ms)}
+        body = body if isinstance(body, dict) else {}
+        if body.get("only_if_unset") and runner.live_since_ms is not None:
+            return {"ok": True, "live_since_ms": runner.live_since_ms, "unchanged": True}
+        return {"ok": True, "live_since_ms": runner.mark_live(body.get("ms"))}
 
     @app.get("/report.html", response_class=HTMLResponse)
     async def report_html():

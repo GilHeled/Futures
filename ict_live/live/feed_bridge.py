@@ -69,6 +69,26 @@ def _post(url: str, payload: dict, token: str | None):
     return _post_json(url.rstrip("/") + "/webhook/tradingview", payload, token)
 
 
+def get_last_bars(url: str) -> dict:
+    """{tv_symbol: last stored 1m open_ms} from the service, so warm-up fetches only NEWER bars.
+
+    Returns {} if unreachable — callers then fall back to a full-window backfill."""
+    try:
+        with urllib.request.urlopen(url.rstrip("/") + "/status", timeout=5) as r:
+            syms = (json.loads(r.read().decode()).get("symbols") or {})
+        return {s: v["last_open_ms"] for s, v in syms.items() if v.get("last_open_ms") is not None}
+    except Exception:
+        return {}
+
+
+def _period_for_gap(last_open_ms: int, now_ms: int, default: str) -> str:
+    """A yfinance period that just covers the gap since the last stored bar (1..7d; 7d is yfinance's
+    1-minute limit). Small gaps download a small window; an empty/old store uses the full default."""
+    import math
+    days = math.ceil(max(0, now_ms - last_open_ms) / 86_400_000)
+    return f"{max(1, min(7, days))}d" if days else default
+
+
 def get_enabled(url: str, default: list) -> list:
     """The dashboard-selected symbol set from the service; falls back to `default` if unset/unreachable."""
     try:
@@ -131,13 +151,23 @@ def run(url, symbols, *, token=None, backfill="2d", poll_period="1d", interval=6
     def beat():
         heartbeat(url, SOURCE, {inst[r]: last_ms[inst[r]] for r in roots if inst[r] in last_ms}, token)
 
-    # initial backfill so LIVE populates immediately from real recent bars
+    # Warm-up: seed only the DELTA. Ask the service what it already stored and fetch only bars newer
+    # than that (always forward of the last stored bar, so the ingestor accepts them — no reset). An
+    # empty/unknown store falls back to the full `backfill` window.
+    last_store = get_last_bars(url)
+    now0 = int(time.time() * 1000)
     total = 0
     for root in active_roots():
-        n = push_new(url, root, inst[root], period=backfill, token=token, last_ms=last_ms,
-                     now_ms=int(time.time() * 1000))
+        tv = inst[root]
+        ls = last_store.get(tv)
+        if ls is not None:
+            last_ms[tv] = ls                                   # only post bars newer than stored
+            period, kind = _period_for_gap(ls, now0, backfill), "delta"
+        else:
+            period, kind = backfill, "full"
+        n = push_new(url, root, tv, period=period, token=token, last_ms=last_ms, now_ms=now0)
         total += n
-        log(f"backfill {root} ({inst[root]}): {n} bars")
+        log(f"backfill {root} ({tv}): {n} bars ({kind}, {period})")
     beat()
     if once:
         return {"posted": total, "symbols": roots}

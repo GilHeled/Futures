@@ -90,6 +90,31 @@ def test_run_respects_disabled_symbols(monkeypatch):
     assert beats and "delayed" in beats[0][0].lower()
 
 
+def test_period_for_gap():
+    now = int(datetime(2026, 8, 21, 12, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    h3 = now - 3 * 3600 * 1000                              # 3h gap -> 1 day window
+    d2 = now - int(2.5 * 86400 * 1000)                      # 2.5d gap -> 3 day window
+    d30 = now - 30 * 86400 * 1000                           # huge gap -> capped at yfinance's 7d
+    assert FB._period_for_gap(h3, now, "7d") == "1d"
+    assert FB._period_for_gap(d2, now, "7d") == "3d"
+    assert FB._period_for_gap(d30, now, "7d") == "7d"
+
+
+def test_warmup_fetches_only_the_delta(monkeypatch):
+    # the store already holds up to 10:00 -> warm-up posts only the NEWER bars (10:01, 10:02)
+    last00 = int(datetime(2026, 8, 21, 10, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    monkeypatch.setattr(FB, "_reachable", lambda url, timeout=3.0: True)
+    monkeypatch.setattr(FB, "get_enabled", lambda url, default: ["CME_MINI:MES1!"])
+    monkeypatch.setattr(FB, "get_last_bars", lambda url: {"CME_MINI:MES1!": last00})
+    monkeypatch.setattr(FB, "heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(FB, "fetch_1m", lambda root, period="2d": [_bar(0, 100), _bar(1, 101), _bar(2, 102)])
+    posted = []
+    monkeypatch.setattr(FB, "_post", lambda url, p, token: (posted.append(p["bar_time_ms"]), {"status": "accepted"})[1])
+    rep = FB.run("http://x", ["MES"], once=True, log=lambda *a: None)
+    assert last00 not in posted                             # the already-stored 10:00 bar is not re-sent
+    assert rep["posted"] == 2                               # only the 10:01 and 10:02 delta
+
+
 def test_run_errors_clearly_when_service_down(monkeypatch):
     import pytest
     monkeypatch.setattr(FB, "_reachable", lambda url, timeout=3.0: False)

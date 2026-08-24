@@ -27,11 +27,11 @@ export TV_CLI="${TV_CLI:-node $HOME/dev/tradingview-mcp/src/cli/index.js}"
 PY="${PY:-.venv/bin/python}"; [ -x "$PY" ] || PY="python3"
 WARMUP_DAYS="${WARMUP_DAYS:-7}"
 
-# Reset the persisted store so the historical warm-up seeds cleanly (the ingestor only accepts
-# forward bars, so a backfill can't load behind stale data left from a previous run). The warm-up
-# re-seeds the full window each start. Set KEEP_STORE=1 to preserve it (and skip the reset).
-if [ "${KEEP_STORE:-0}" != "1" ]; then
-  echo "==> resetting persisted store for a clean warm-up (KEEP_STORE=1 to preserve)…"
+# The store PERSISTS across runs; warm-up fetches only the delta since the last stored bar (always
+# forward of it, so the ingestor accepts it — no reset needed). Set RESET=1 to wipe and re-seed
+# from scratch, e.g. after a long outage or suspected bad data.
+if [ "${RESET:-0}" = "1" ]; then
+  echo "==> RESET=1: wiping persisted store…"
   $COMPOSE down -v >/dev/null 2>&1 || true
 fi
 
@@ -45,17 +45,19 @@ echo "    dashboard: http://127.0.0.1:8010   ·   monitor: http://127.0.0.1:8000
 cleanup() { echo; echo "==> stopping feed and tearing down Docker…"; $COMPOSE down; }
 trap cleanup EXIT INT TERM
 
-# Mark the seed→live boundary at NOW: everything backfilled below only PRIMES structure and can
-# never surface as a tradable ticket; only real-time bars after this instant open trades.
-echo "==> marking live boundary (warm-up seeds structure only; live bars trade)…"
-curl -sf -X POST http://127.0.0.1:8000/live/mark-now -H 'Content-Type: application/json' -d '{}' \
-  >/dev/null || echo "   (could not mark live boundary — continuing)"
+# Mark the seed→live boundary ONCE (first run only). Bars before it only PRIME structure; live bars
+# after it trade. Kept across restarts (only_if_unset) so prior open trades recover and the delta
+# fill of any downtime gap replays consistently.
+echo "==> marking live boundary if unset (warm-up seeds structure only; live bars trade)…"
+curl -sf -X POST http://127.0.0.1:8000/live/mark-now -H 'Content-Type: application/json' \
+  -d '{"only_if_unset": true}' >/dev/null || echo "   (could not mark live boundary — continuing)"
 
-# One-time WARM-UP: backfill history from yfinance so the engine has enough 1H bars to form setups
-# (the real-time MCP feed only seeds ~100 bars). Historical bars aren't delayed, so this is safe.
-# These bars are pre-boundary, so they build the structural window WITHOUT opening any trades.
+# WARM-UP: top up history from yfinance so the engine has enough 1H bars to form setups (the
+# real-time MCP feed only seeds ~100 bars). The bridge asks the service what it already has and
+# fetches ONLY the delta since the last stored bar — the first run pulls ~${WARMUP_DAYS}d, later
+# runs pull just the gap. Historical bars aren't delayed, so this is safe.
 if [ "$WARMUP_DAYS" != "0" ]; then
-  echo "==> warming up ~${WARMUP_DAYS}d of history (yfinance backfill; one-time)…"
+  echo "==> warming up history (yfinance delta backfill; up to ${WARMUP_DAYS}d on a fresh store)…"
   "$PY" -m ict_live.live.feed_bridge --url http://127.0.0.1:8000 --symbols "${SYMBOLS[@]}" \
     --backfill "${WARMUP_DAYS}d" --once || echo "   (warm-up skipped/failed — continuing)"
 fi

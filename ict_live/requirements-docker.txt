@@ -6,3 +6,4 @@ pandas>=2.0           # replay historical loader / resampling
 pyarrow>=14.0         # read the Databento 5m parquet cache
 yfinance>=0.2.40      # local feed bridge (convenience real-data source)
 matplotlib>=3.7       # engine-rendered ICT chart (dashboard /chart)
+watchdog>=3.0        # ict_v2 event-driven store watch (advisory service)

@@ -30,7 +30,7 @@ def test_reads_shared_store_and_snapshots(tmp_path):
     for b in _1m(400, 0):
         store.append(SYM, b)
     svc = V2Service(str(tmp_path))
-    svc.poll()
+    svc.ingest_new()
     assert SYM in svc.state
     snap = svc.state[SYM]
     assert snap["updated"]["1m"] is not None and snap["timeframes"]["htf"] == "4H"
@@ -43,11 +43,11 @@ def test_incremental_only_new_bars(tmp_path):
     for b in _1m(300, 0):
         store.append(SYM, b)
     svc = V2Service(str(tmp_path))
-    svc.poll()
+    svc.ingest_new()
     first = svc.last_ms[SYM]
     # append more bars to the SAME store, poll again -> processes only the new ones
     store2 = MarketStore(path=path)
     for b in _1m(60, 300, seed=9):
         store2.append(SYM, b)
-    svc.poll()
+    svc.ingest_new()
     assert svc.last_ms[SYM] > first                          # advanced, not reprocessed from scratch

@@ -231,12 +231,14 @@ function sourcePanel(rep){
     '<div class=strip style=margin-top:6px>'+(ages||'<span class=mut>waiting for bars…</span>')+'</div></div>';
 }
 function togglePanel(rep){
-  const inst=rep.instruments||[]; const en=rep.enabled;      // null = all enabled
-  if(!inst.length) return '';
-  const boxes=inst.map(s=>{const on=(en==null)||en.includes(s);
+  const inst=rep.instruments||[]; if(!inst.length) return '';
+  // effective active set: an explicit dashboard selection if set, else what the feed reports streaming
+  const active = (rep.enabled!=null) ? rep.enabled : (((rep.feed||{}).symbols)||[]);
+  const boxes=inst.map(s=>{const on=active.includes(s);
     return '<label class=sym><input type=checkbox '+(on?'checked':'')+' value="'+s+'" onchange="postControl()"> '+s+'</label>';}).join('');
   return '<h2>Symbols (feed)</h2><div class=card><div class=strip id=toggles>'+boxes+'</div>'+
-    '<div class=mut style=margin-top:6px>toggle which symbols the feed streams</div></div>';
+    '<div class=mut style=margin-top:6px>checked = actually streaming. Toggling adds/removes a symbol '+
+    'from the feed (the real-time TradingView feed round-robins one chart, so more symbols = slower cycle).</div></div>';
 }
 async function postControl(){
   const en=[...document.querySelectorAll('#toggles input:checked')].map(c=>c.value);

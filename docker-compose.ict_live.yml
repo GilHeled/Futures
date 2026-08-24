@@ -36,12 +36,16 @@ services:
       retries: 12
       start_period: 15s
 
+  # OPTIONAL delayed yfinance feed, fully inside Docker (no TradingView needed).
+  # OFF by default (profile "sim"); enable with:  docker compose ... --profile sim up
+  # For REAL-TIME data use the host-side MCP feed instead (./run-live.sh) — TradingView Desktop
+  # is a GUI app and cannot run in a container.
   feed:
     <<: *img
+    profiles: ["sim"]
     depends_on:
       live:
         condition: service_healthy
-    # feeds real 1m bars from yfinance into the live service (edit --symbols as desired)
     command: ["python", "-m", "ict_live.live.feed_bridge",
               "--url", "http://live:8000", "--symbols", "MES", "MNQ"]
 

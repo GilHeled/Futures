@@ -168,6 +168,10 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .tbtn.no{color:var(--short);border-color:color-mix(in srgb,var(--short) 45%,var(--line))}
  .placedtag{background:var(--info-bg);color:var(--info);border-radius:999px;padding:3px 10px;font-size:11px;font-weight:800}
  .decisions{color:var(--mut);font-size:12px;margin-top:10px}
+ .v2dec{border-radius:999px;padding:2px 10px;font-size:11px;font-weight:800;letter-spacing:.03em;
+   background:var(--panel2);color:var(--mut);border:1px solid var(--line)}
+ .v2dec.long{color:var(--long);background:var(--long-bg);border-color:transparent}
+ .v2dec.short{color:var(--short);background:var(--short-bg);border-color:transparent}
  .modal{position:fixed;inset:0;background:#000a;display:none;z-index:50;padding:22px}
  .modal.on{display:flex} .modal-box{background:var(--panel);border:1px solid var(--line);border-radius:14px;
    margin:auto;width:min(1120px,96vw);height:90vh;display:flex;flex-direction:column;overflow:hidden}
@@ -478,18 +482,22 @@ function v2Tables(rep){
     const dr=c.dealing_range; const drs=dr?`${num(dr.low)}–${num(dr.high)} CE ${num(dr.ce)} (${dr.direction})`:'—';
     const obj=c.liquidity_objective; const objs=obj?`${obj.kind==='high'?'BSL':'SSL'} ${num(obj.price)}`:'—';
     const top=e.top;
-    const exline=top?`${top.direction.toUpperCase()} entry ${num(top.entry)} · stop ${num(top.stop)} · target ${num(top.target)}${top.ltf_confirmed?' · LTF✓':''}`:fmt(e.decision);
-    const side=c.bias==='long'?'long':(c.bias==='short'?'short':'flat');
-    return `<div class="ticket ${side}">
-      <div class=thead><span class=sym>${sym}</span><span class="pill ${side==='flat'?'':'in'}">${(c.bias||'neutral').toUpperCase()}</span></div>
+    // COLOR = an actionable execution exists; NO-TRADE is neutral. Bias is shown as TEXT, not color.
+    const exside=top?(top.direction==='long'?'long':'short'):'flat';
+    const dec=top?exside.toUpperCase():'NO-TRADE';
+    const exline=top?`${top.direction.toUpperCase()} entry ${num(top.entry)} · stop ${num(top.stop)} · target ${num(top.target)}${top.ltf_confirmed?' · LTF✓':''}`
+                    :'no gated setup — waiting';
+    return `<div class="ticket ${exside}">
+      <div class=thead><span class=sym>${sym}</span><span class="v2dec ${exside}">${dec}</span>
+        <span class=rnn style=margin-left:auto>HTF bias: ${fmt(c.bias)}</span></div>
       <div class=reads>
-        <div class="read ${side}"><div class=rhd><span class=rsy>HTF ${fmt(tfs.htf)}</span><span class=rnn>context</span></div>
+        <div class=read><div class=rhd><span class=rsy>HTF ${fmt(tfs.htf)}</span><span class=rnn>context · bias ${fmt(c.bias)}</span></div>
           <div class=why><span class=wc>dealing range <b>${drs}</b></span><span class=wc>liquidity draw <b>${objs}</b></span></div>
           <div class=rfoot>updated ${fmt(u[tfs.htf])}</div></div>
         <div class=read><div class=rhd><span class=rsy>MTF ${fmt(tfs.mtf)}</span><span class=rnn>setup</span></div>
           <div class=rln>gated <b>${fmt(st.gated)}</b> of ${fmt(st.candidates)} candidates</div>
           <div class=rfoot>updated ${fmt(u[tfs.mtf])}</div></div>
-        <div class="read ${side}"><div class=rhd><span class=rsy>LTF ${fmt(tfs.ltf)}</span><span class=rnn>execution</span></div>
+        <div class="read ${exside}"><div class=rhd><span class=rsy>LTF ${fmt(tfs.ltf)}</span><span class=rnn>execution</span></div>
           <div class=rln>${exline}</div>
           <div class=rfoot>updated ${fmt(u[tfs.ltf])}</div></div>
       </div></div>`;}).join('');

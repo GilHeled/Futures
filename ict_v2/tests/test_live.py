@@ -26,7 +26,7 @@ def _1m(n, seed=7):
 
 
 def test_per_timeframe_cadence_from_1m_stream():
-    v = V2Live("4H", "1H", ("15m", "1m"))
+    v = V2Live("4H", "1H", "15m", "1m")
     bars = _1m(1500)                                 # 25 hours of 1m
     prev = {"4H": None, "1H": None, "15m": None, "1m": None}
     counts = {"4H": 0, "1H": 0, "15m": 0, "1m": 0}
@@ -40,18 +40,18 @@ def test_per_timeframe_cadence_from_1m_stream():
         if v.engine.context is not prev_ctx:         # context changes only on a 4H close
             assert counts["4H"] > 0 and v.updated["4H"] == prev["4H"]
             prev_ctx = v.engine.context
-    assert counts["1m"] == len(bars)                 # execution/LTF every minute
-    # HTF rarest, then 1H, then 15m, then 1m — strict cadence ordering
+    assert counts["1m"] == len(bars)                 # 1m trigger every minute
+    # 4H rarest, then 1H, then 15m, then 1m — strict cadence ordering
     assert 1 <= counts["4H"] < counts["1H"] < counts["15m"] < counts["1m"]
 
 
 def test_snapshot_is_persistable(tmp_path):
     v = run_bars(_1m(1200))
     snap = v.snapshot()
-    assert snap["timeframes"] == {"context": "4H", "setup": "1H", "exec": ["15m", "1m"]}
-    assert set(snap["execution"]) == {"15m", "1m"}                  # per-exec-TF states
+    assert snap["timeframes"] == {"context": "4H", "setup": "1H", "confirm": "15m", "trigger": "1m"}
+    assert "setup" in snap and "confirmation" in snap and "execution" in snap
     assert snap["updated"]["1m"] is not None
     p = tmp_path / "v2_state.json"
     v.save(p)
     reloaded = json.loads(p.read_text())
-    assert reloaded["timeframes"]["setup"] == "1H"
+    assert reloaded["timeframes"]["confirm"] == "15m"

@@ -75,29 +75,25 @@ class LTFExecution:
 
 @dataclass
 class MTFState:
-    """The full three-stage result. `execution` is the current (finest) execution; `executions`
-    holds every exec-TF's state (e.g. 15m and 1m) for the step-down view."""
+    """The full four-layer cascade: 4H context -> 1H setup -> 15m confirmation -> 1m execution."""
     context: HTFContext
-    setup: MTFSetup
-    execution: LTFExecution
-    executions: dict = field(default_factory=dict)
+    setup: MTFSetup                       # 1H primary setup (gated by context)
+    confirmation: MTFSetup = None         # 15m confirmation (its own structure, in the setup direction)
+    execution: LTFExecution = None        # 1m execution trigger
 
     def describe(self) -> str:
-        c, s, e = self.context, self.setup, self.execution
-        dr = c.dealing_range
+        c, s, cf, e = self.context, self.setup, self.confirmation, self.execution
+        dr = c.dealing_range if c else None
         drs = f"{dr.low:g}-{dr.high:g} (CE {dr.ce:g}, {dr.direction})" if dr else "none"
-        ex = e.executables[0] if e.executables else None
-        if ex:
-            tgt = f"{ex.target:g}" if ex.target is not None else "—"
-            exs = f"{ex.direction} entry {ex.entry:g} stop {ex.stop:g} target {tgt} (LTF-confirmed={ex.ltf_confirmed})"
-        else:
-            exs = "none"
+        ng = len(cf.gated) if cf else 0
+        ex = e.executables[0] if (e and e.executables) else None
+        exs = (f"{ex.direction} entry {ex.entry:g} stop {ex.stop:g} target "
+               f"{('%g'%ex.target) if ex.target is not None else '—'}") if ex else (e.decision if e else "—")
         return (
-            f"[1] HTF CONTEXT  ({c.tf}): bias={c.bias}  dealing_range={drs}  liquidity_draws={len(c.liquidity)}\n"
-            f"[2] MTF SETUP    ({s.tf}): sweeps={len(s.sweeps)} displ={len(s.displacements)} mss={len(s.mss)} "
-            f"| candidates={len(s.candidates)} -> GATED(passed HTF)={len(s.gated)}\n"
-            f"[3] LTF EXECUTION({e.tf}): fvgs={len(e.fvgs)}  executables={len(e.executables)}  "
-            f"decision={e.decision}  {exs}"
+            f"[1] CONTEXT   ({c.tf if c else '?'}): bias={c.bias if c else '?'}  dealing_range={drs}\n"
+            f"[2] SETUP     ({s.tf if s else '?'}): gated={len(s.gated) if s else 0} of {len(s.candidates) if s else 0}\n"
+            f"[3] CONFIRM   ({cf.tf if cf else '?'}): gated={ng}\n"
+            f"[4] EXECUTION ({e.tf if e else '?'}): {exs}"
         )
 
 
@@ -144,13 +140,32 @@ def ltf_execution(bars, tf: str, setup: MTFSetup, context: HTFContext) -> LTFExe
     return LTFExecution(tf=tf, fvgs=fvgs, executables=executables, decision=decision)
 
 
-def analyze_mtf(htf_bars, mtf_bars, ltf_bars, *, htf: str = "4H", mtf: str = "15m",
-                ltf: str = "1m") -> MTFState:
-    """Run the three explicit stages in order and return the combined state."""
-    ctx = htf_context(htf_bars, htf)
-    stp = mtf_setup(mtf_bars, mtf, ctx)
-    exe = ltf_execution(ltf_bars, ltf, stp, ctx)
-    return MTFState(context=ctx, setup=stp, execution=exe)
+def execution_for(bars, tf: str, context, setup, confirmation) -> LTFExecution:
+    """The 1m execution fires ONLY when the whole cascade holds: a directional context, a gated 1H
+    setup, AND a gated 15m confirmation. Otherwise it returns a NO-TRADE that says how far the cascade
+    got (so the dashboard can show the stage reached). The executable is built from the 15m
+    confirmation (the finer, confirmed structure), targeting the HTF liquidity draw, and 1m-confirmed
+    by an entry FVG."""
+    if context is None or context.bias == "neutral":
+        return LTFExecution(tf=tf, decision="NO-TRADE (no context bias)")
+    if not (setup and setup.gated):
+        return LTFExecution(tf=tf, decision="NO-TRADE (no 1H setup)")
+    if not (confirmation and confirmation.gated):
+        return LTFExecution(tf=tf, decision="NO-TRADE (awaiting 15m confirmation)")
+    exe = ltf_execution(bars, tf, confirmation, context)
+    if not exe.executables:
+        return LTFExecution(tf=tf, fvgs=exe.fvgs, executables=[], decision="NO-TRADE (awaiting 1m trigger)")
+    return exe
+
+
+def analyze_mtf(context_bars, setup_bars, confirm_bars, trigger_bars, *, context_tf: str = "4H",
+                setup_tf: str = "1H", confirm_tf: str = "15m", trigger_tf: str = "1m") -> MTFState:
+    """Run the four-layer cascade in order and return the combined state (stateless convenience)."""
+    ctx = htf_context(context_bars, context_tf)
+    stp = mtf_setup(setup_bars, setup_tf, ctx)
+    cf = mtf_setup(confirm_bars, confirm_tf, ctx)          # 15m confirmation = its own gated setup, same dir
+    exe = execution_for(trigger_bars, trigger_tf, ctx, stp, cf)
+    return MTFState(context=ctx, setup=stp, confirmation=cf, execution=exe)
 
 
 # ---- resampling + demo ------------------------------------------------------------------------
@@ -186,26 +201,24 @@ def _base_1m(n, seed):
 
 
 def demo_state(seed=7):
-    """Build HTF/MTF/LTF from one 1m base (so they're consistent) and run the three stages."""
+    """Build 4H/1H/15m/1m from one 1m base (so they're consistent) and run the four-layer cascade."""
     base = _base_1m(20000, seed)                 # ~13 sessions of 1m
-    htf = resample(base, 240, "4H")
-    mtf = resample(base, 15, "15m")
-    ltf = base[-400:]                            # recent 1m for execution
-    return analyze_mtf(htf, mtf, ltf, htf="4H", mtf="15m", ltf="1m")
+    return analyze_mtf(resample(base, 240, "4H"), resample(base, 60, "1H"), resample(base, 15, "15m"),
+                       base[-400:], context_tf="4H", setup_tf="1H", confirm_tf="15m", trigger_tf="1m")
 
 
 def main() -> None:
-    # search a few seeds for one that actually passes the HTF gate, to show the full path firing
+    # search a few seeds for one that actually forms a 1H setup, to show the cascade firing
     state = None
     for seed in (7, 11, 23, 42, 101, 202, 303):
         st = demo_state(seed)
         if st.setup.gated:
             state = st
-            print(f"ICT v2 — three-stage pipeline (correlated demo data, seed={seed})\n")
+            print(f"ICT v2 — 4H context -> 1H setup -> 15m confirm -> 1m execution (seed={seed})\n")
             break
     if state is None:
         state = demo_state(7)
-        print("ICT v2 — three-stage pipeline (correlated demo data; no gated setup in sample)\n")
+        print("ICT v2 — cascade (correlated demo data; no 1H setup in sample)\n")
     print(state.describe())
 
 

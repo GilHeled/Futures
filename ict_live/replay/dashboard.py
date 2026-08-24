@@ -475,33 +475,36 @@ setInterval(pollLive,4000);pollLive();
 // ---------------- V2 (experimental, advisory) ----------------
 function v2Tables(rep){
   const syms=rep.symbols||{}; const names=Object.keys(syms).sort();
-  const banner='<div class=warn>&#9879; V2 (experimental) — ICT multi-timeframe engine (4H context → 1H setup → 15m/1m execution), side-by-side with v1, ADVISORY ONLY, not validated.</div>';
+  const banner='<div class=warn>&#9879; V2 (experimental) — ICT cascade 4H context → 1H setup → 15m confirmation → 1m execution, side-by-side with v1, ADVISORY ONLY, not validated.</div>';
   if(!names.length) return banner+'<div class="card mut">No v2 data yet — waiting for the shared feed to accumulate bars.</div>';
+  const sideOf=d=>d==='long'?'long':(d==='short'?'short':'flat');
   const cards=names.map(sym=>{
-    const s=syms[sym], c=s.context||{}, st=s.setup||{}, exs=s.execution||{}, u=s.updated||{}, tf=s.timeframes||{}, cur=s.current;
+    const s=syms[sym], c=s.context||{}, st=s.setup||{}, cf=s.confirmation||{}, e=s.execution||{}, u=s.updated||{}, tf=s.timeframes||{};
     const dr=c.dealing_range; const drs=dr?`${num(dr.low)}–${num(dr.high)} CE ${num(dr.ce)} (${dr.direction})`:'—';
     const obj=c.liquidity_objective; const objs=obj?`${obj.kind==='high'?'BSL':'SSL'} ${num(obj.price)}`:'—';
-    // each stage colored by ITS OWN state: context by bias, setup only when gated>0, each exec TF
-    // only when it has a suggestion. Neutral (grey) otherwise, so color never implies a phantom trade.
-    const biasSide=c.bias==='long'?'long':(c.bias==='short'?'short':'flat');
-    const mtfSide=(st.gated>0)?biasSide:'flat';
-    const curTop=cur&&cur.top; const curSide=curTop?(curTop.direction==='long'?'long':'short'):'flat';
-    const dec=curTop?curSide.toUpperCase():'NO-TRADE';
-    const execCards=(tf.exec||[]).map(etf=>{
-      const e=exs[etf]||{}, top=e.top, eside=top?(top.direction==='long'?'long':'short'):'flat';
-      const line=top?`${top.direction.toUpperCase()} entry ${num(top.entry)} · stop ${num(top.stop)} · target ${num(top.target)}${top.ltf_confirmed?' · ✓':''}`:'waiting';
-      return `<div class="read ${eside}"><div class=rhd><span class=rsy>LTF ${etf}</span><span class=rnn>execution</span></div>
-        <div class=rln>${line}</div><div class=rfoot>updated ${fmt(u[etf])}</div></div>`;}).join('');
-    return `<div class="ticket ${curSide}">
-      <div class=thead><span class=sym>${sym}</span><span class="v2dec ${curSide}">${dec}</span></div>
+    // each stage colored by ITS OWN state; neutral grey otherwise so color never implies a phantom trade
+    const biasSide=sideOf(c.bias);
+    const setupSide=(st.gated>0)?sideOf(st.direction):'flat';
+    const confSide=(cf.gated>0)?sideOf(cf.direction):'flat';
+    const top=e.top; const execSide=top?sideOf(top.direction):'flat';
+    const dec=top?execSide.toUpperCase():'NO-TRADE';
+    const execLine=top?`${top.direction.toUpperCase()} entry ${num(top.entry)} · stop ${num(top.stop)} · target ${num(top.target)}${top.ltf_confirmed?' · ✓':''}`:fmt(e.decision);
+    const gline=(x)=>`gated <b>${fmt(x.gated)}</b> of ${fmt(x.candidates)}${x.gated>0?' · '+fmt(x.direction):''}`;
+    return `<div class="ticket ${execSide}">
+      <div class=thead><span class=sym>${sym}</span><span class="v2dec ${execSide}">${dec}</span></div>
       <div class=reads>
-        <div class="read ${biasSide}"><div class=rhd><span class=rsy>HTF ${fmt(tf.context)}</span><span class=rnn>context</span></div>
-          <div class=why><span class=wc>bias <b>${fmt(c.bias)}</b></span><span class=wc>dealing range <b>${drs}</b></span><span class=wc>liquidity draw <b>${objs}</b></span></div>
+        <div class="read ${biasSide}"><div class=rhd><span class=rsy>4H</span><span class=rnn>context</span></div>
+          <div class=why><span class=wc>bias <b>${fmt(c.bias)}</b></span><span class=wc>range <b>${drs}</b></span><span class=wc>draw <b>${objs}</b></span></div>
           <div class=rfoot>updated ${fmt(u[tf.context])}</div></div>
-        <div class="read ${mtfSide}"><div class=rhd><span class=rsy>MTF ${fmt(tf.setup)}</span><span class=rnn>setup</span></div>
-          <div class=rln>gated <b>${fmt(st.gated)}</b> of ${fmt(st.candidates)} candidates</div>
+        <div class="read ${setupSide}"><div class=rhd><span class=rsy>1H</span><span class=rnn>setup</span></div>
+          <div class=rln>${gline(st)}</div>
           <div class=rfoot>updated ${fmt(u[tf.setup])}</div></div>
-        ${execCards}
+        <div class="read ${confSide}"><div class=rhd><span class=rsy>15m</span><span class=rnn>confirmation</span></div>
+          <div class=rln>${gline(cf)}</div>
+          <div class=rfoot>updated ${fmt(u[tf.confirm])}</div></div>
+        <div class="read ${execSide}"><div class=rhd><span class=rsy>1m</span><span class=rnn>execution</span></div>
+          <div class=rln>${execLine}</div>
+          <div class=rfoot>updated ${fmt(u[tf.trigger])}</div></div>
       </div></div>`;}).join('');
   return banner+'<div class=tickets>'+cards+'</div>';
 }

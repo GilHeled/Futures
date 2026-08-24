@@ -1,68 +1,39 @@
-"""ICT v2 pipeline: operates as three explicit stages (HTF context / MTF setup / LTF execution),
-each on its own timeframe, reusing the frozen v1 engine. First-iteration structural test."""
-from datetime import datetime, timedelta, timezone
+"""ICT v2 pipeline: four-layer cascade (4H context -> 1H setup -> 15m confirmation -> 1m execution),
+each reusing the frozen v1 engine on its own timeframe."""
+from types import SimpleNamespace
 
 from ict_live.market.bar import Bar
 from ict_v2 import pipeline as v2
 
 
-def _bars(n, tf, minutes, seed):
-    bars, px, x = [], 20000.0, seed
-    t0 = datetime(2026, 6, 1, 18, 0, tzinfo=timezone.utc)
-    for i in range(n):
-        x = (1103515245 * x + 12345) % (2 ** 31)
-        o = px
-        c = px + ((x % 21) - 10) * 1.5
-        ot = t0 + timedelta(minutes=minutes * i)
-        bars.append(Bar(tf, ot, ot + timedelta(minutes=minutes), o, max(o, c) + (x % 7),
-                        min(o, c) - (x % 5), c, 100.0))
-        px = c
-    return bars
-
-
-def test_three_explicit_stages():
-    st = v2.analyze_mtf(_bars(260, "4H", 240, 7), _bars(260, "15m", 15, 11),
-                        _bars(260, "1m", 1, 23), htf="4H", mtf="15m", ltf="1m")
-    # each stage exists, tagged with its own timeframe
-    assert st.context.tf == "4H" and st.setup.tf == "15m" and st.execution.tf == "1m"
-    # [1] context: a bias + (usually) a dealing range with premium/discount zones
+def test_four_layer_cascade_runs():
+    st = v2.demo_state(seed=7)
+    assert st.context.tf == "4H" and st.setup.tf == "1H" and st.confirmation.tf == "15m"
+    assert st.execution.tf == "1m"
     assert st.context.bias in ("long", "short", "neutral")
-    if st.context.dealing_range is not None:
-        assert st.context.zone(st.context.dealing_range.ce) in ("premium", "discount", "equilibrium")
-    # [2] setup: the intermediate manipulation/displacement/MSS layer is present (lists)
-    assert isinstance(st.setup.sweeps, list) and isinstance(st.setup.displacements, list)
-    assert isinstance(st.setup.mss, list)
-    # [3] execution: entry FVGs + executables (only for gated setups) + a decision
-    assert isinstance(st.execution.fvgs, list) and isinstance(st.execution.executables, list)
-    assert st.execution.decision.startswith(("LONG", "SHORT", "NO-TRADE"))
-    # describe() renders all three stages
+    assert isinstance(st.setup.candidates, list) and isinstance(st.confirmation.gated, list)
     d = st.describe()
-    assert "HTF CONTEXT" in d and "MTF SETUP" in d and "LTF EXECUTION" in d
+    assert "CONTEXT" in d and "SETUP" in d and "CONFIRM" in d and "EXECUTION" in d
 
 
-def test_htf_gate_controls_execution():
-    # correlated data (HTF/MTF/LTF from one 1m base) so the gate is meaningful
+def test_execution_only_fires_when_whole_cascade_holds():
     st = v2.demo_state(seed=7)
     c = st.context
-    # LTF execution operates ONLY on setups that passed the HTF gate — one executable per gated setup
-    assert len(st.execution.executables) == len(st.setup.gated)
-    # the gate is a real filter, not a pass-through
-    assert len(st.setup.candidates) >= len(st.setup.gated)
-    if st.setup.gated:
-        assert st.execution.decision in ("LONG", "SHORT")
-        # every gated setup agrees with HTF bias; every executable targets the HTF liquidity draw
-        assert all(g.setup.direction == c.bias for g in st.setup.gated)
+    if st.execution.executables:                          # a real trade requires the FULL chain
+        assert c.bias in ("long", "short")
+        assert st.setup.gated and st.confirmation.gated
         for ex in st.execution.executables:
-            assert ex.direction == c.bias
-            if ex.objective is not None:
-                assert ex.target == ex.objective.price
+            assert ex.direction == c.bias                 # every layer aligned to the context bias
     else:
         assert st.execution.decision.startswith("NO-TRADE")
 
 
-def test_stages_are_independent_functions():
-    # the three stages are callable on their own (real separation, not one blob)
-    ctx = v2.htf_context(_bars(200, "4H", 240, 3), "4H")
-    stp = v2.mtf_setup(_bars(200, "15m", 15, 3), "15m", ctx)
-    exe = v2.ltf_execution(_bars(200, "1m", 1, 3), "1m", stp, ctx)
-    assert isinstance(ctx, v2.HTFContext) and isinstance(stp, v2.MTFSetup) and isinstance(exe, v2.LTFExecution)
+def test_execution_for_reports_the_stage_reached():
+    # staged NO-TRADE messages (early returns, no bars needed)
+    long_ctx = SimpleNamespace(bias="long")
+    gated = SimpleNamespace(gated=[SimpleNamespace(setup=SimpleNamespace(direction="long"))])
+    empty = SimpleNamespace(gated=[])
+    assert "no context bias" in v2.execution_for(None, "1m", None, gated, gated).decision
+    assert "no context bias" in v2.execution_for(None, "1m", SimpleNamespace(bias="neutral"), gated, gated).decision
+    assert "no 1H setup" in v2.execution_for(None, "1m", long_ctx, empty, gated).decision
+    assert "awaiting 15m confirmation" in v2.execution_for(None, "1m", long_ctx, gated, empty).decision

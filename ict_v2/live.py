@@ -112,6 +112,9 @@ class V2Live:
             "confirmation": self._setup_dict(cf),
             "execution": None if not e else {
                 "decision": e.decision, "executables": len(e.executables), "fvgs": len(e.fvgs),
+                "available": sum(1 for x in e.cand_info if x.get("actionable")),
+                "gated": sum(1 for x in e.cand_info if x.get("passed")),
+                "total": len(e.cand_info), "candidates": list(e.cand_info),
                 "top": None if top is None else {"direction": top.direction, "entry": top.entry,
                                                  "stop": top.stop, "target": top.target,
                                                  "ltf_confirmed": top.ltf_confirmed}},

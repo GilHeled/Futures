@@ -45,6 +45,70 @@ class GatedSetup:
 CANDIDATE_STATES = ("swept", "displaced", "mss", "fvg", "actionable")
 
 
+def _mk(name, status, note="", permanent=False):
+    """One pipeline check: status ∈ {ok, fail, pending}; `permanent` marks a REJECTED (vs INCOMPLETE)
+    failure so the UI can colour it differently."""
+    return {"name": name, "status": status, "note": note, "permanent": permanent}
+
+
+def _short_reject(txt: str) -> str:
+    t = (txt or "").lower()
+    if "mitigat" in t:
+        return "mitigated"
+    if "min_rr" in t or t.startswith("rr "):
+        return "RR too low"
+    if "degenerate" in t:
+        return "stop too tight"
+    if "opposing" in t or "liquidity target" in t:
+        return "no target"
+    if "geometry" in t:
+        return "bad geometry"
+    return (txt or "invalid")[:24]
+
+
+def _short_gate(reasons: list) -> str:
+    r = (reasons[0] if reasons else "").lower()
+    if "bias mismatch" in r:
+        return "bias mismatch"
+    if "not aligned" in r or "neutral" in r:
+        return "bias neutral"
+    if "premium/discount" in r or "premium" in r or "discount" in r:
+        return "wrong P/D zone"
+    if "liquidity objective" in r:
+        return "no HTF objective"
+    if "geometry" in r:
+        return "bad geometry"
+    return (reasons[0] if reasons else "")[:24]
+
+
+def structural_checks(sw, disp, mss, fvg, setup, actionable):
+    """The ICT chain rendered as ordered checks — sweep → displacement → MSS → FVG → entry — marking
+    the exact point it stopped progressing. Returns (checks, complete, status): `status` is None when
+    the chain is complete AND the setup is actionable (ready for the HTF gate), else 'incomplete'
+    (still developing, could still become valid) or 'rejected' (permanently invalid)."""
+    fvg_mit = fvg is not None and getattr(fvg, "status", None) == "mitigated"
+    checks = [_mk("sweep", "ok")]                                         # the manipulation = the anchor
+    if disp is None:
+        return checks + [_mk("displacement", "fail", "waiting"), _mk("MSS", "pending"),
+                         _mk("FVG", "pending"), _mk("entry", "pending")], False, "incomplete"
+    checks.append(_mk("displacement", "ok"))
+    if mss is None:
+        return checks + [_mk("MSS", "fail", "waiting"), _mk("FVG", "pending"),
+                         _mk("entry", "pending")], False, "incomplete"
+    checks.append(_mk("MSS", "ok"))
+    if fvg is None:
+        return checks + [_mk("FVG", "fail", "waiting"), _mk("entry", "pending")], False, "incomplete"
+    if fvg_mit:
+        return checks + [_mk("FVG", "fail", "mitigated", True), _mk("entry", "pending")], False, "rejected"
+    checks.append(_mk("FVG", "ok"))
+    if setup is None:
+        return checks + [_mk("entry", "fail", "no valid setup yet")], False, "incomplete"
+    if not actionable:
+        return checks + [_mk("entry", "fail", _short_reject(getattr(setup, "reject_reason", "")), True)], False, "rejected"
+    checks.append(_mk("entry", "ok"))
+    return checks, True, None
+
+
 @dataclass
 class Candidate:
     """A COMPLETE trade idea for one timeframe — everything the engine knows about a possible setup,
@@ -68,7 +132,9 @@ class Candidate:
     rr: Optional[float] = None
     actionable: bool = False               # v1 assembled a tradeable setup for it
     passed: bool = False                   # cleared the HTF gate (fully validated on this TF)
+    status: str = "incomplete"             # passed | incomplete (still developing) | rejected (permanently invalid)
     reasons: list = field(default_factory=list)   # EXPLICIT reasons it did not fully validate (empty ⇒ passed)
+    checks: list = field(default_factory=list)    # the ordered pipeline (sweep→…→gate) w/ per-step status
     setup: object = None                   # the assembled v1 Setup, if it reached one
 
     def to_dict(self) -> dict:
@@ -76,7 +142,7 @@ class Candidate:
             return None if x is None else round(float(x), 2)
         obj = self.objective
         return {
-            "direction": self.direction, "state": self.state,
+            "direction": self.direction, "state": self.state, "status": self.status,
             "entry": px(self.entry), "stop": px(self.stop), "target": px(self.target),
             "rr": (None if self.rr is None else round(float(self.rr), 2)),
             "pd_location": self.pd_location,
@@ -89,6 +155,7 @@ class Candidate:
             "fvg_status": None if self.fvg is None else getattr(self.fvg, "status", None),
             "mss_state": None if self.mss is None else getattr(self.mss, "state", None),
             "actionable": self.actionable, "passed": self.passed, "reasons": list(self.reasons),
+            "checks": [dict(c) for c in self.checks],
             "id": (getattr(self.setup, "id", "") if self.setup is not None
                    else getattr(self.sweep, "id", "")),
         }
@@ -121,11 +188,15 @@ class Executable:
 
 @dataclass
 class LTFExecution:
-    """Stage 3 — execution, operating ONLY on MTF setups that passed the HTF gate."""
+    """Stage 4 — the 1m execution trigger. Its own candidates (each confirming the 15m confirmation)
+    carry the same explicit reasons/pipeline as the higher stages; the trigger fires only for a gated
+    one."""
     tf: str
     fvgs: list = field(default_factory=list)           # ranked LTF entry FVGs
-    executables: list = field(default_factory=list)    # list[Executable] (only for gated setups)
+    executables: list = field(default_factory=list)    # list[Executable] (only for gated triggers)
     decision: str = "NO-TRADE"
+    cand_info: list = field(default_factory=list)      # ALL 1m candidates as dicts (status/reasons/checks)
+    candidate_objs: list = field(default_factory=list)
 
 
 @dataclass
@@ -250,7 +321,20 @@ def generate_candidates(ms, context: HTFContext) -> list:
                         "mss": "Incomplete — structure shifted, no valid entry FVG yet",
                         "fvg": "Incomplete — entry FVG present, not yet a valid setup"}.get(state, "Incomplete")]
 
-        cands.append(Candidate(direction=direction, state=state, sweep=sw, displacement=disp, mss=mss,
+        # build the step-by-step pipeline: structural chain + the HTF-context gate node
+        checks, complete, sstatus = structural_checks(sw, disp, mss, fvg, setup, actionable)
+        if not complete:
+            status = sstatus
+            checks.append(_mk("HTF context", "pending"))
+        elif passed:
+            status = "passed"
+            checks.append(_mk("HTF context", "ok"))
+        else:
+            status = "rejected"
+            checks.append(_mk("HTF context", "fail", _short_gate(reasons), True))
+
+        cands.append(Candidate(direction=direction, state=state, status=status, checks=checks,
+                               sweep=sw, displacement=disp, mss=mss,
                                fvg=fvg, dealing_range=dr, pd_location=pd, objective=objective,
                                entry=entry, stop=stop, target=target, rr=rr, actionable=actionable,
                                passed=passed, reasons=reasons, setup=setup))
@@ -277,33 +361,40 @@ def mtf_setup(bars, tf: str, context: HTFContext) -> MTFSetup:
                     candidate_objs=all_cands)
 
 
-def confirm_setup(bars, tf: str, context: HTFContext, setup: MTFSetup) -> MTFSetup:
-    """Stage 3 — the 15m CONFIRMATION. Generate 15m candidates with their OWN structure
-    (sweep/displacement/MSS/FVG), gate them by the HTF context exactly like the 1H stage, THEN require
-    they confirm the 1H setup: a confirmation is valid only if it is a complete 15m setup, HTF-aligned,
-    AND in the direction of a gated 1H setup. Every candidate keeps EXPLICIT reasons — the HTF-gate
-    reasons plus the confirmation reason — so this stage explains each rejection just like the 1H stage
-    ("No gated 1H setup to confirm" / "Direction mismatch — 15m X vs 1H setup Y")."""
-    mtf = mtf_setup(bars, tf, context)                       # generate + HTF-gate (reasons already attached)
+def confirm_setup(bars, tf: str, context: HTFContext, setup: MTFSetup, *,
+                  against: str = "1H setup", node: str = "confirms 1H") -> MTFSetup:
+    """A CONFIRMATION stage. Generate candidates on `tf` with their OWN structure, HTF-gate them like
+    the 1H stage, THEN require they confirm the higher layer (`setup`): a confirmation is valid only if
+    it is a complete, HTF-aligned setup in the direction of a gated setup on that higher layer. Each
+    candidate keeps EXPLICIT reasons AND its step-by-step pipeline, with a final `node` check
+    ("confirms 1H" for 15m, "1m trigger" for 1m) that fails as INCOMPLETE ("No gated ... to confirm")
+    or REJECTED ("Direction mismatch")."""
+    mtf = mtf_setup(bars, tf, context)                       # generate + HTF-gate (checks/reasons attached)
     setup_dirs = sorted({g.setup.direction for g in (setup.gated if setup else [])})
     gated, candidates, cand_info = [], [], []
-    for c in mtf.candidate_objs:                             # the rich Candidate objects from the 15m generate
-        if c.actionable:                                     # only a COMPLETE 15m setup can confirm the 1H
+    for c in mtf.candidate_objs:                             # the rich Candidate objects from the generate
+        if c.actionable and c.passed:                        # passed the HTF gate → evaluate confirmation
             if not setup_dirs:
-                c.reasons = list(c.reasons) + ["No gated 1H setup to confirm"]
-                c.passed = False
+                c.reasons = list(c.reasons) + [f"No gated {against} to confirm"]
+                c.passed, c.status = False, "incomplete"
+                c.checks.append(_mk(node, "fail", "no " + against, False))
             elif c.direction not in setup_dirs:
                 c.reasons = list(c.reasons) + [
-                    f"Direction mismatch — 15m {c.direction} vs 1H setup {'/'.join(setup_dirs)}"]
-                c.passed = False
-            # else: keep c.passed from the HTF gate — a confirmed 15m setup in the 1H direction
+                    f"Direction mismatch — {tf} {c.direction} vs {against} {'/'.join(setup_dirs)}"]
+                c.passed, c.status = False, "rejected"
+                c.checks.append(_mk(node, "fail", "wrong direction", True))
+            else:
+                c.checks.append(_mk(node, "ok"))             # confirmed in the higher-layer direction
+        else:                                                # HTF-failed or structurally incomplete
+            c.checks.append(_mk(node, "pending"))
         cand_info.append(c.to_dict())
         if c.actionable and c.setup is not None:
             candidates.append(c.setup)
             if c.passed:
                 gated.append(GatedSetup(setup=c.setup, objective=c.objective))
     return MTFSetup(tf=tf, sweeps=mtf.sweeps, displacements=mtf.displacements, mss=mtf.mss,
-                    candidates=candidates, gated=gated, cand_info=cand_info)
+                    candidates=candidates, gated=gated, cand_info=cand_info,
+                    candidate_objs=mtf.candidate_objs)
 
 
 def ltf_execution(bars, tf: str, setup: MTFSetup, context: HTFContext) -> LTFExecution:
@@ -325,21 +416,30 @@ def ltf_execution(bars, tf: str, setup: MTFSetup, context: HTFContext) -> LTFExe
 
 
 def execution_for(bars, tf: str, context, setup, confirmation) -> LTFExecution:
-    """The 1m execution fires ONLY when the whole cascade holds: a directional context, a gated 1H
-    setup, AND a gated 15m confirmation. Otherwise it returns a NO-TRADE that says how far the cascade
-    got (so the dashboard can show the stage reached). The executable is built from the 15m
-    confirmation (the finer, confirmed structure), targeting the HTF liquidity draw, and 1m-confirmed
-    by an entry FVG."""
+    """Stage 4 — the 1m execution trigger. It GENERATES 1m candidates that must confirm the 15m
+    confirmation (own structure, HTF-aligned, same direction as a gated 15m confirmation), exactly the
+    same candidate+reasons+pipeline model as the higher stages. The trade fires only for a gated 1m
+    candidate; otherwise the top-line decision reports how far the cascade got. Every 1m candidate
+    still carries its explicit reasons/checks so the trigger stage is as transparent as the rest."""
+    # cheap cascade preconditions first (no bars needed) — the 1m candidate universe is only built
+    # once the higher layers are actually gated (also avoids running v1 on 1m every bar for nothing)
     if context is None or context.bias == "neutral":
         return LTFExecution(tf=tf, decision="NO-TRADE (no context bias)")
     if not (setup and setup.gated):
         return LTFExecution(tf=tf, decision="NO-TRADE (no 1H setup)")
     if not (confirmation and confirmation.gated):
         return LTFExecution(tf=tf, decision="NO-TRADE (awaiting 15m confirmation)")
-    exe = ltf_execution(bars, tf, confirmation, context)
-    if not exe.executables:
-        return LTFExecution(tf=tf, fvgs=exe.fvgs, executables=[], decision="NO-TRADE (awaiting 1m trigger)")
-    return exe
+    conf = confirm_setup(bars, tf, context, confirmation, against="15m confirmation", node="1m trigger")
+    if not conf.gated:
+        decision, executables = "NO-TRADE (awaiting 1m trigger)", []
+    else:
+        decision = "LONG" if conf.gated[0].setup.direction == "long" else "SHORT"
+        executables = [Executable(direction=g.setup.direction, entry=g.setup.entry, stop=g.setup.stop,
+                                  target=(getattr(g.objective, "price", None) if g.objective is not None
+                                          else g.setup.target), ltf_confirmed=True, objective=g.objective)
+                       for g in conf.gated]
+    return LTFExecution(tf=tf, fvgs=[], executables=executables, decision=decision,
+                        cand_info=conf.cand_info, candidate_objs=conf.candidate_objs)
 
 
 def analyze_mtf(context_bars, setup_bars, confirm_bars, trigger_bars, *, context_tf: str = "4H",

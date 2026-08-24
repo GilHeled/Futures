@@ -196,8 +196,9 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .csum{display:flex;gap:8px;flex-wrap:wrap}
  .cchip{font-size:11px;padding:4px 11px;border-radius:999px;background:var(--panel2);border:1px solid var(--line);
    color:var(--mut);font-weight:600;font-variant-numeric:tabular-nums}
- .cchip.avail{color:var(--ink)}
  .cchip.pass{color:var(--long);border-color:color-mix(in srgb,var(--long) 45%,var(--line))}
+ .cchip.inc{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,var(--line))}
+ .cchip.rej{color:var(--short);border-color:color-mix(in srgb,var(--short) 45%,var(--line))}
  .cempty{text-align:center;color:var(--mut);padding:22px;font-size:12px}
  /* each candidate = one complete trade idea, rendered as a compact card */
  .ccards{display:flex;flex-direction:column;gap:8px}
@@ -212,31 +213,34 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .cstate.fvg{color:var(--info,#3b82f6)} .cstate.mss{color:var(--warn)}
  .cbadge{font-size:10px;font-weight:700;padding:2px 9px;border-radius:999px;text-transform:uppercase;letter-spacing:.4px}
  .cbadge.pass{color:var(--long);background:var(--long-bg)}
+ .cbadge.inc{color:var(--warn);background:var(--warn-bg)}
  .cbadge.rej{color:var(--short);background:var(--short-bg)}
- .cbadge.avail{color:var(--ink);background:var(--panel);border:1px solid var(--line)}
  /* the explicit "why it did not progress" block on every candidate */
  .creason{font-size:11px;border-top:1px solid var(--line);padding-top:7px}
  .creason-hd{text-transform:uppercase;letter-spacing:.4px;font-size:10px;color:var(--mut);font-weight:700;margin-bottom:3px}
  .creason ul{margin:0;padding-left:16px;display:flex;flex-direction:column;gap:2px}
- .creason li{color:var(--short)}
+ .creason.rejected li{color:var(--short)}
+ .creason.incomplete li{color:var(--warn)}
  .creason.ok{color:var(--long)}
- /* the ICT chain: sweep → displacement → MSS → FVG */
- .cchain{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+ /* the ICT chain: sweep → displacement → MSS → FVG → entry → gate; ✓ ok / ✗ fail / — pending */
+ .cchain{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
  .cchain i{color:var(--mut);font-style:normal;font-size:11px}
  .cstep{font-size:10px;font-weight:600;padding:2px 8px;border-radius:6px;letter-spacing:.2px}
- .cstep.on{color:var(--ink);background:var(--panel);border:1px solid color-mix(in srgb,var(--accent) 35%,var(--line))}
+ .cstep.on{color:var(--ink);background:var(--panel);border:1px solid color-mix(in srgb,var(--long) 40%,var(--line))}
  .cstep.off{color:var(--mut);background:transparent;border:1px dashed var(--line)}
+ .cstep.fail.perm{color:var(--short);background:var(--short-bg);border:1px solid color-mix(in srgb,var(--short) 45%,var(--line))}
+ .cstep.fail.wait{color:var(--warn);background:var(--warn-bg);border:1px solid color-mix(in srgb,var(--warn) 45%,var(--line))}
+ .cstep em{font-style:normal;opacity:.85;font-weight:700}
  .cfacts{display:flex;flex-wrap:wrap;gap:5px 14px;font-size:12px;font-variant-numeric:tabular-nums}
  .cfact{font-family:"SF Mono",ui-monospace,Menlo,monospace}
  .cfact i{color:var(--mut);font-style:normal;font-family:inherit;margin-right:5px;font-size:10px;text-transform:uppercase;letter-spacing:.4px}
  .cleg{font-size:11px;color:var(--mut);display:flex;flex-wrap:wrap;gap:5px;padding-top:2px}
- /* tiers: grey = all possible, white = available, bold = passed the gate */
- .ccard.candall{opacity:.72}
- .ccard.candavail{opacity:1}
- .ccard.candpass{opacity:1;border-color:color-mix(in srgb,var(--long) 45%,var(--line))}
- .ccard.candpass .cfact{font-weight:700}
- .cleg .candall,.cleg .candavail,.cleg .candpass{padding:0;background:none;opacity:1;border:0}
- .cleg .candpass{font-weight:700}
+ /* status colours: green = passed, amber = incomplete (still developing), red = rejected (permanent) */
+ .ccard.passed{border-color:color-mix(in srgb,var(--long) 45%,var(--line))}
+ .ccard.incomplete{border-color:color-mix(in srgb,var(--warn) 35%,var(--line))}
+ .ccard.rejected{opacity:.82}
+ .ccard.passed .cfact{font-weight:700}
+ .lg-pass{color:var(--long);font-weight:700} .lg-inc{color:var(--warn);font-weight:700} .lg-rej{color:var(--short);font-weight:700}
  /* ---- actionable trade tickets (the hero) ---- */
  .tickets{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
  .ticket{background:var(--panel);border:1px solid var(--line);border-left:6px solid var(--mut);
@@ -564,6 +568,7 @@ function v2Tables(rep){
           <div class=rfoot>updated ${fmt(u[tf.confirm])}</div></div>
         <div class="read ${execSide}"><div class=rhd><span class=rsy>1m</span><span class=rnn>execution</span></div>
           <div class=rln>${execLine}</div>
+          ${e.total!=null?`<div class=rln>${gline('execution',e)}</div>`:''}
           <div class=rfoot>updated ${fmt(u[tf.trigger])}</div></div>
       </div></div>`;}).join('');
   return banner+'<div class=tickets>'+cards+'</div>';
@@ -574,39 +579,52 @@ async function pollV2(){
 }
 function openCandidates(sym,layer){
   const s=((window._v2last||{}).symbols||{})[sym]||{}; const info=((s[layer]||{}).candidates)||[];
-  const nTot=info.length, nAvail=info.filter(c=>c.actionable).length, nPass=info.filter(c=>c.passed).length;
+  const nTot=info.length;
+  const nPass=info.filter(c=>c.status==='passed').length;
+  const nInc=info.filter(c=>c.status==='incomplete').length;
+  const nRej=info.filter(c=>c.status==='rejected').length;
   const esc=t=>(t||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
   const dpill=d=>`<span class="cdir ${d==='long'?'long':'short'}">${(d||'').toUpperCase()}</span>`;
-  const chain=c=>{const k=c.components||{};const step=(on,lbl)=>`<span class="cstep ${on?'on':'off'}">${lbl}</span>`;
-    return `<div class=cchain>${step(k.sweep,'sweep')}<i>→</i>${step(k.displacement,'displacement')}<i>→</i>`
-         + `${step(k.mss,'MSS')}<i>→</i>${step(k.fvg,'FVG')}</div>`;};
+  // the step-by-step pipeline: each check ✓ (ok) / ✗+note (fail) / — (pending); the failing step is
+  // coloured red when permanent (REJECTED) and amber when still waiting (INCOMPLETE)
+  const chain=c=>{
+    const steps=(c.checks||[]);
+    return '<div class=cchain>'+steps.map((k,i)=>{
+      const sym=k.status==='ok'?'✓':(k.status==='fail'?'✗':'—');
+      const cls=k.status==='ok'?'on':(k.status==='fail'?('fail '+(k.permanent?'perm':'wait')):'off');
+      const note=k.note?` <em>${esc(k.note)}</em>`:'';
+      return (i?'<i>→</i>':'')+`<span class="cstep ${cls}">${esc(k.name)} ${sym}${note}</span>`;
+    }).join('')+'</div>';};
   const objtxt=o=>o?`${o.kind==='high'?'BSL':'SSL'} ${num(o.price)}`:'—';
+  const badgeFor=st=>st==='passed'?'<span class="cbadge pass">✓ Passed</span>'
+    :(st==='incomplete'?'<span class="cbadge inc">⏳ Incomplete</span>':'<span class="cbadge rej">❌ Rejected</span>');
+  const hd=st=>st==='passed'?'Confirmed':(st==='incomplete'?'Still developing — waiting for':'Rejected — reason');
   const card=c=>{
-    const cls=c.passed?'candpass':(c.actionable?'candavail':'candall');
-    const status=c.passed?'<span class="cbadge pass">✓ Passed</span>'
-                         :'<span class="cbadge rej">❌ Rejected</span>';
+    const st=c.status||'rejected';
     const facts=[['entry',num(c.entry)],['stop',num(c.stop)],['target',num(c.target)],
                  ['RR',num(c.rr)],['P/D',c.pd_location||'—'],['draw',objtxt(c.objective)]]
       .map(([k,v])=>`<span class=cfact><i>${k}</i>${v}</span>`).join('');
     const reasons=(c.reasons||[]);
-    const rblock=c.passed
-      ? '<div class="creason ok">All HTF gates aligned — promoted to the next stage.</div>'
-      : `<div class=creason><div class=creason-hd>Reason</div><ul>`
+    const rblock=st==='passed'
+      ? '<div class="creason ok">All checks passed — promoted to the next stage.</div>'
+      : `<div class="creason ${st}"><div class=creason-hd>${hd(st)}</div><ul>`
         + reasons.map(r=>`<li>${esc(r)}</li>`).join('') + `</ul></div>`;
-    return `<div class="ccard ${cls}"><div class=ccard-hd>${dpill(c.direction)}`
+    return `<div class="ccard ${st}"><div class=ccard-hd>${dpill(c.direction)}`
          + `<span class="cstate ${c.state}">${c.state}</span>`
-         + `<span class=ccard-gate>${status}</span></div>`
+         + `<span class=ccard-gate>${badgeFor(st)}</span></div>`
          + `${chain(c)}<div class=cfacts>${facts}</div>${rblock}</div>`;
   };
   const cards=info.map(card).join('')||'<div class=cempty>no candidates on this timeframe yet</div>';
   $('#candmodal-title').innerHTML=`${sym}<span class=ctlayer>${layer} candidates</span>`;
   $('#candmodal-body').innerHTML=
       `<div class=csum><span class=cchip>${nTot} possible</span>`
-    + `<span class="cchip avail">${nAvail} available</span>`
-    + `<span class="cchip pass">${nPass} passed gate</span></div>`
+    + `<span class="cchip pass">${nPass} passed</span>`
+    + `<span class="cchip inc">${nInc} incomplete</span>`
+    + `<span class="cchip rej">${nRej} rejected</span></div>`
     + `<div class=ccards>${cards}</div>`
-    + `<div class=cleg><span class=candall>grey</span> = all possible ideas · `
-    + `<span class=candavail>white</span> = available · <span class=candpass>bold</span> = passed the gate</div>`;
+    + `<div class=cleg><span class=lg-pass>green</span> = passed · `
+    + `<span class=lg-inc>amber</span> = incomplete (still developing) · `
+    + `<span class=lg-rej>red</span> = rejected (permanently invalid)</div>`;
   $('#candmodal').classList.add('on');
 }
 function closeCandidates(){$('#candmodal').classList.remove('on');}

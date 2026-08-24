@@ -195,11 +195,16 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  #candmodal-title{display:flex;align-items:baseline;gap:8px}
  #candmodal-title .ctlayer{color:var(--mut);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
  .csum{display:flex;gap:8px;flex-wrap:wrap}
- .cchip{font-size:11px;padding:4px 11px;border-radius:999px;background:var(--panel2);border:1px solid var(--line);
-   color:var(--mut);font-weight:600;font-variant-numeric:tabular-nums}
+ /* status chips double as filters (click to show only that status; "possible" = all) */
+ .cchip{font:inherit;font-size:11px;padding:4px 11px;border-radius:999px;background:var(--panel2);
+   border:1px solid var(--line);color:var(--mut);font-weight:600;font-variant-numeric:tabular-nums;
+   cursor:pointer;transition:border-color .12s,background .12s,box-shadow .12s}
+ .cchip:hover{border-color:var(--mut)}
  .cchip.pass{color:var(--long);border-color:color-mix(in srgb,var(--long) 45%,var(--line))}
  .cchip.inc{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,var(--line))}
  .cchip.rej{color:var(--short);border-color:color-mix(in srgb,var(--short) 45%,var(--line))}
+ .cchip.on{box-shadow:0 0 0 1px currentColor inset}
+ .cchip.on:not(.pass):not(.inc):not(.rej){color:var(--ink);box-shadow:0 0 0 1px var(--ink) inset}
  .cempty{text-align:center;color:var(--mut);padding:22px;font-size:12px}
  /* each candidate = one complete trade idea, rendered as a compact card */
  .ccards{display:flex;flex-direction:column;gap:8px}
@@ -578,57 +583,60 @@ async function pollV2(){
   try{const d=await (await fetch('/v2/report')).json();window._v2last=d;$('#v2-body').innerHTML=v2Tables(d);}
   catch(e){$('#v2-body').innerHTML='<div class="card mut">v2 (experimental) service not reachable — start it with <code>python -m ict_v2.serve</code>.</div>';}
 }
+function _candEsc(t){return (t||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
+function _candCard(c){
+  const esc=_candEsc;
+  const dpill=`<span class="cdir ${c.direction==='long'?'long':'short'}">${(c.direction||'').toUpperCase()}</span>`;
+  // step-by-step pipeline: ✓ ok / ✗+note fail / — pending; fail is red (permanent) or amber (waiting)
+  const chain='<div class=cchain>'+(c.checks||[]).map((k,i)=>{
+    const sym=k.status==='ok'?'✓':(k.status==='fail'?'✗':'—');
+    const cls=k.status==='ok'?'on':(k.status==='fail'?('fail '+(k.permanent?'perm':'wait')):'off');
+    const note=k.note?` <em>${esc(k.note)}</em>`:'';
+    return (i?'<i>→</i>':'')+`<span class="cstep ${cls}">${esc(k.name)} ${sym}${note}</span>`;
+  }).join('')+'</div>';
+  const objtxt=c.objective?`${c.objective.kind==='high'?'BSL':'SSL'} ${num(c.objective.price)}`:'—';
+  const st=c.status||'rejected';
+  const badge=st==='passed'?'<span class="cbadge pass">✓ Passed</span>'
+    :(st==='incomplete'?'<span class="cbadge inc">⏳ Incomplete</span>':'<span class="cbadge rej">❌ Rejected</span>');
+  const hd=st==='passed'?'Confirmed':(st==='incomplete'?'Still developing — waiting for':'Rejected — reason');
+  const facts=[['entry',num(c.entry)],['stop',num(c.stop)],['target',num(c.target)],
+               ['RR',num(c.rr)],['P/D',c.pd_location||'—'],['draw',objtxt]]
+    .map(([k,v])=>`<span class=cfact><i>${k}</i>${v}</span>`).join('');
+  const rblock=st==='passed'
+    ? '<div class="creason ok">All checks passed — promoted to the next stage.</div>'
+    : `<div class="creason ${st}"><div class=creason-hd>${hd}</div><ul>`
+      + (c.reasons||[]).map(r=>`<li>${esc(r)}</li>`).join('') + `</ul></div>`;
+  return `<div class="ccard ${st}"><div class=ccard-hd>${dpill}`
+       + `<span class="cstate ${c.state}">${c.state}</span>`
+       + `<span class=ccard-gate>${badge}</span></div>`
+       + `${chain}<div class=cfacts>${facts}</div>${rblock}</div>`;
+}
+function _candRender(){
+  const ctx=window._candCtx; if(!ctx) return;
+  const f=ctx.filter||'possible';
+  const shown=(f==='possible')?ctx.info:ctx.info.filter(c=>c.status===f);
+  document.querySelectorAll('#candmodal .cchip').forEach(el=>el.classList.toggle('on',el.dataset.f===f));
+  $('#cand-cards').innerHTML=shown.map(_candCard).join('')
+    ||`<div class=cempty>no ${f==='possible'?'':f+' '}candidates on this timeframe${f==='possible'?' yet':''}</div>`;
+}
+function filterCand(f){ if(window._candCtx){ window._candCtx.filter=f; _candRender(); } }
 function openCandidates(sym,layer){
   const s=((window._v2last||{}).symbols||{})[sym]||{}; const info=((s[layer]||{}).candidates)||[];
-  const nTot=info.length;
-  const nPass=info.filter(c=>c.status==='passed').length;
-  const nInc=info.filter(c=>c.status==='incomplete').length;
-  const nRej=info.filter(c=>c.status==='rejected').length;
-  const esc=t=>(t||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
-  const dpill=d=>`<span class="cdir ${d==='long'?'long':'short'}">${(d||'').toUpperCase()}</span>`;
-  // the step-by-step pipeline: each check ✓ (ok) / ✗+note (fail) / — (pending); the failing step is
-  // coloured red when permanent (REJECTED) and amber when still waiting (INCOMPLETE)
-  const chain=c=>{
-    const steps=(c.checks||[]);
-    return '<div class=cchain>'+steps.map((k,i)=>{
-      const sym=k.status==='ok'?'✓':(k.status==='fail'?'✗':'—');
-      const cls=k.status==='ok'?'on':(k.status==='fail'?('fail '+(k.permanent?'perm':'wait')):'off');
-      const note=k.note?` <em>${esc(k.note)}</em>`:'';
-      return (i?'<i>→</i>':'')+`<span class="cstep ${cls}">${esc(k.name)} ${sym}${note}</span>`;
-    }).join('')+'</div>';};
-  const objtxt=o=>o?`${o.kind==='high'?'BSL':'SSL'} ${num(o.price)}`:'—';
-  const badgeFor=st=>st==='passed'?'<span class="cbadge pass">✓ Passed</span>'
-    :(st==='incomplete'?'<span class="cbadge inc">⏳ Incomplete</span>':'<span class="cbadge rej">❌ Rejected</span>');
-  const hd=st=>st==='passed'?'Confirmed':(st==='incomplete'?'Still developing — waiting for':'Rejected — reason');
-  const card=c=>{
-    const st=c.status||'rejected';
-    const facts=[['entry',num(c.entry)],['stop',num(c.stop)],['target',num(c.target)],
-                 ['RR',num(c.rr)],['P/D',c.pd_location||'—'],['draw',objtxt(c.objective)]]
-      .map(([k,v])=>`<span class=cfact><i>${k}</i>${v}</span>`).join('');
-    const reasons=(c.reasons||[]);
-    const rblock=st==='passed'
-      ? '<div class="creason ok">All checks passed — promoted to the next stage.</div>'
-      : `<div class="creason ${st}"><div class=creason-hd>${hd(st)}</div><ul>`
-        + reasons.map(r=>`<li>${esc(r)}</li>`).join('') + `</ul></div>`;
-    return `<div class="ccard ${st}"><div class=ccard-hd>${dpill(c.direction)}`
-         + `<span class="cstate ${c.state}">${c.state}</span>`
-         + `<span class=ccard-gate>${badgeFor(st)}</span></div>`
-         + `${chain(c)}<div class=cfacts>${facts}</div>${rblock}</div>`;
-  };
-  const cards=info.map(card).join('')||'<div class=cempty>no candidates on this timeframe yet</div>';
+  window._candCtx={sym,layer,info,filter:'possible'};
+  const n=st=>st==='possible'?info.length:info.filter(c=>c.status===st).length;
+  const chip=(f,cls,lbl)=>`<button type=button class="cchip ${cls}" data-f="${f}" onclick="filterCand('${f}')">${n(f)} ${lbl}</button>`;
   $('#candmodal-title').innerHTML=`${sym}<span class=ctlayer>${layer} candidates</span>`;
   $('#candmodal-body').innerHTML=
-      `<div class=csum><span class=cchip>${nTot} possible</span>`
-    + `<span class="cchip pass">${nPass} passed</span>`
-    + `<span class="cchip inc">${nInc} incomplete</span>`
-    + `<span class="cchip rej">${nRej} rejected</span></div>`
-    + `<div class=ccards>${cards}</div>`
-    + `<div class=cleg><span class=lg-pass>green</span> = passed · `
+      `<div class=csum>${chip('possible','','possible')}${chip('passed','pass','passed')}`
+    + `${chip('incomplete','inc','incomplete')}${chip('rejected','rej','rejected')}</div>`
+    + `<div class=ccards id=cand-cards></div>`
+    + `<div class=cleg>click a badge to filter · <span class=lg-pass>green</span> = passed · `
     + `<span class=lg-inc>amber</span> = incomplete (still developing) · `
     + `<span class=lg-rej>red</span> = rejected (permanently invalid)</div>`;
+  _candRender();
   $('#candmodal').classList.add('on');
 }
-function closeCandidates(){$('#candmodal').classList.remove('on');}
+function closeCandidates(){$('#candmodal').classList.remove('on');window._candCtx=null;}
 setInterval(pollV2,5000);pollV2();
 
 // ---------------- REPLAY ----------------

@@ -199,6 +199,9 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  input,select{font:inherit;padding:7px 10px;border:1px solid var(--line);border-radius:9px;background:var(--panel);color:var(--ink)}
  .sym{font-size:14px;margin-right:14px} button{font:inherit;padding:9px 18px;border:none;border-radius:9px;
    background:var(--accent);color:#fff;font-weight:700;cursor:pointer} button:disabled{opacity:.5;cursor:default}
+ button.preset{background:var(--panel2);color:var(--ink);border:1px solid var(--line);padding:6px 12px;
+   font-size:12px;font-weight:600} button.preset:hover{border-color:var(--accent)}
+ #presets{gap:8px;align-items:center;margin:2px 0 4px}
  .prog{height:8px;background:var(--line);border-radius:6px;overflow:hidden;width:200px;display:inline-block;vertical-align:middle}
  .prog>i{display:block;height:100%;background:var(--accent)} a.dl{color:var(--accent);font-weight:700;text-decoration:none}
  .mut{color:var(--mut);font-size:12px}
@@ -215,6 +218,13 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
   <div class=card>
     <h2 style="margin-top:0">run a simulation</h2>
     <div class=row id=syms>__OPTS__</div>
+    <div class=row id=presets><span class=mut>quick range:</span>
+      <button class=preset data-r="1m">last month</button>
+      <button class=preset data-r="3m">last 3 months</button>
+      <button class=preset data-r="ytd">YTD</button>
+      <button class=preset data-r="2025">2025</button>
+      <button class=preset data-r="2024">2024</button>
+      <button class=preset data-r="full">full range</button></div>
     <div class=row>
       <label class=fld>from<input type=date id=from value="2025-01-01"></label>
       <label class=fld>to<input type=date id=to value="2025-03-31"></label>
@@ -407,6 +417,14 @@ function statTable(agg){
     rows+="<tr><td>"+k+"</td>"+COLS.map(c=>'<td class=num>'+fmt(agg.periods[k][c[0]])+'</td>').join("")+"</tr>";
   return "<div class=scroll><table>"+h+rows+"</table></div>";
 }
+const RKPI=[["scored","trades"],["win_rate","win %"],["expectancy_R","exp R"],["total_R","total R"],
+ ["profit_factor","profit factor"],["max_drawdown_R","max DD R"]];
+function replayKpis(o){
+  o=o||{};
+  return '<div class=kpis>'+RKPI.map(([k,l])=>{const v=o[k];
+    const c=k==="max_drawdown_R"?(v>0?"neg":""):cls(typeof v==="number"?v:0);
+    return `<div class=kpi><span>${l}</span><b class="${c}">${num(v)}</b></div>`;}).join("")+'</div>';
+}
 function renderReplay(job){
   let html="";
   if(job.state==="error")html+='<div class=card style="border-color:var(--short)"><b>Error:</b> '+fmt(job.error)+'</div>';
@@ -414,13 +432,27 @@ function renderReplay(job){
     const p=job.progress[sym]||{}, pct=p.total?Math.round(100*p.done/p.total):0;
     const r=job.results[sym], csv=job.csv[sym];
     html+='<div class=card><h2 style=margin-top:0>'+sym+'</h2>';
-    if(!r)html+='<div class=prog><i style=width:'+pct+'%></i></div> <span class=mut>'+pct+'%</span>';
-    else{html+='<div class=mut>'+r.bars_5m+' 5m bars · '+r.signals+' signals · '+(csv?csv.trades:0)+' trades</div>'+statTable(r);
+    if(!r)html+='<div class=prog><i style=width:'+pct+'%></i></div> <span class=mut>'+pct+'% · '+(p.done||0)+'/'+(p.total||'?')+' bars</span>';
+    else{html+='<div class=mut style=margin-bottom:10px>'+r.bars_5m+' 5m bars · '+r.signals+' signals · '+(csv?csv.trades:0)+' trades</div>'
+      +replayKpis(r.overall)
+      +'<details style=margin-top:10px><summary class=mut style=cursor:pointer>per-period breakdown</summary>'+statTable(r)+'</details>';
       if(csv)html+="<p><a class=dl href='/download?job="+job.id+"&symbol="+encodeURIComponent(sym)+"'>⬇ download trades CSV</a></p>";}
     html+='</div>';
   }
   $("#replay-out").innerHTML=html;
 }
+function setRange(r){
+  const pad=n=>String(n).padStart(2,"0"), iso=d=>d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate());
+  const to=new Date(); let f=new Date(to), t=to;
+  if(r==="1m")f.setMonth(f.getMonth()-1);
+  else if(r==="3m")f.setMonth(f.getMonth()-3);
+  else if(r==="ytd")f=new Date(to.getFullYear(),0,1);
+  else if(r==="2025"){f=new Date(2025,0,1);t=new Date(2025,11,31);}
+  else if(r==="2024"){f=new Date(2024,0,1);t=new Date(2024,11,31);}
+  else if(r==="full")f=new Date(2019,4,1);
+  $("#from").value=iso(f);$("#to").value=iso(t);
+}
+document.querySelectorAll(".preset").forEach(b=>b.onclick=()=>setRange(b.dataset.r));
 let timer=null;
 async function pollReplay(id){
   const job=await (await fetch("/status?job="+id)).json();renderReplay(job);

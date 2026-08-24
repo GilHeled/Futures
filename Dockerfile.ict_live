@@ -24,6 +24,7 @@ RUN pip install --upgrade pip && pip install -r requirements-docker.txt
 
 # then the package source (cache comes in as a volume, never copied)
 COPY ict_live/ ./ict_live/
+COPY ict_v2/ ./ict_v2/            # experimental v2 (ICT 3-timeframe) advisory service
 
 EXPOSE 8000 8010
 

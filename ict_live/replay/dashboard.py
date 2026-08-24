@@ -227,11 +227,13 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
 <header>
   <span class=brand>ict&nbsp;live</span><span class=sub>trading dashboard</span>
   <nav><a id=nav-live class=on onclick="show('live')">LIVE</a>
-       <a id=nav-replay onclick="show('replay')">REPLAY</a></nav>
+       <a id=nav-replay onclick="show('replay')">REPLAY</a>
+       <a id=nav-v2 onclick="show('v2')">V2 &#9879;</a></nav>
   <span class=conn><span id=cdot class=dot></span><span id=livestate>connecting…</span></span>
 </header>
 <main>
 <section id=live class=on><div id=live-body><p class=mut>connecting to live service…</p></div></section>
+<section id=v2><div id=v2-body><p class=mut>connecting to v2 (experimental) service…</p></div></section>
 <section id=replay>
   <div class=card>
     <h2 style="margin-top:0">run a simulation</h2>
@@ -263,7 +265,7 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
   <div class=imgwrap><img id=cmodal-img alt="chart"></div></div></div>
 <script>
 const $=s=>document.querySelector(s);
-function show(t){for(const s of ['live','replay']){$('#'+s).classList.toggle('on',s===t);$('#nav-'+s).classList.toggle('on',s===t);}}
+function show(t){for(const s of ['live','replay','v2']){$('#'+s).classList.toggle('on',s===t);$('#nav-'+s).classList.toggle('on',s===t);}}
 function fmt(v){return (v===null||v===undefined||v==='')?'—':v;}
 function num(v){return (v===null||v===undefined)?'—':v;}
 function cls(v){return (typeof v==='number')?(v>0?'pos':(v<0?'neg':'')):'';}
@@ -466,6 +468,39 @@ $('#cmodal').onclick=e=>{if(e.target.id==='cmodal')closeChart();};
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeReasoning();closeChart();}});
 setInterval(pollLive,4000);pollLive();
 
+// ---------------- V2 (experimental, advisory) ----------------
+function v2Tables(rep){
+  const syms=rep.symbols||{}; const names=Object.keys(syms).sort();
+  const banner='<div class=warn>&#9879; V2 (experimental) — ICT three-timeframe engine running side-by-side with v1, ADVISORY ONLY, not validated.</div>';
+  if(!names.length) return banner+'<div class="card mut">No v2 data yet — waiting for the shared feed to accumulate bars.</div>';
+  const cards=names.map(sym=>{
+    const s=syms[sym], c=s.context||{}, st=s.setup||{}, e=s.execution||{}, u=s.updated||{}, tfs=s.timeframes||{};
+    const dr=c.dealing_range; const drs=dr?`${num(dr.low)}–${num(dr.high)} CE ${num(dr.ce)} (${dr.direction})`:'—';
+    const obj=c.liquidity_objective; const objs=obj?`${obj.kind==='high'?'BSL':'SSL'} ${num(obj.price)}`:'—';
+    const top=e.top;
+    const exline=top?`${top.direction.toUpperCase()} entry ${num(top.entry)} · stop ${num(top.stop)} · target ${num(top.target)}${top.ltf_confirmed?' · LTF✓':''}`:fmt(e.decision);
+    const side=c.bias==='long'?'long':(c.bias==='short'?'short':'flat');
+    return `<div class="ticket ${side}">
+      <div class=thead><span class=sym>${sym}</span><span class="pill ${side==='flat'?'':'in'}">${(c.bias||'neutral').toUpperCase()}</span></div>
+      <div class=reads>
+        <div class="read ${side}"><div class=rhd><span class=rsy>HTF ${fmt(tfs.htf)}</span><span class=rnn>context</span></div>
+          <div class=why><span class=wc>dealing range <b>${drs}</b></span><span class=wc>liquidity draw <b>${objs}</b></span></div>
+          <div class=rfoot>updated ${fmt(u[tfs.htf])}</div></div>
+        <div class=read><div class=rhd><span class=rsy>MTF ${fmt(tfs.mtf)}</span><span class=rnn>setup</span></div>
+          <div class=rln>gated <b>${fmt(st.gated)}</b> of ${fmt(st.candidates)} candidates</div>
+          <div class=rfoot>updated ${fmt(u[tfs.mtf])}</div></div>
+        <div class="read ${side}"><div class=rhd><span class=rsy>LTF ${fmt(tfs.ltf)}</span><span class=rnn>execution</span></div>
+          <div class=rln>${exline}</div>
+          <div class=rfoot>updated ${fmt(u[tfs.ltf])}</div></div>
+      </div></div>`;}).join('');
+  return banner+'<div class=tickets>'+cards+'</div>';
+}
+async function pollV2(){
+  try{const d=await (await fetch('/v2/report')).json();$('#v2-body').innerHTML=v2Tables(d);}
+  catch(e){$('#v2-body').innerHTML='<div class="card mut">v2 (experimental) service not reachable — start it with <code>python -m ict_v2.serve</code>.</div>';}
+}
+setInterval(pollV2,5000);pollV2();
+
 // ---------------- REPLAY ----------------
 const COLS=[["scored","trades"],["win_rate","win%"],["expectancy_R","exp R"],["profit_factor","PF"],
  ["max_drawdown_R","maxDD"],["total_R","totR"],["longest_win_streak","Wstk"],["longest_loss_streak","Lstk"],
@@ -536,7 +571,7 @@ def _page(symbols: list[str]) -> bytes:
     return _PAGE.replace("__OPTS__", opts).encode()
 
 
-def make_handler(jobs: JobManager, symbols: list[str], live_fetch=None, live_url=None):
+def make_handler(jobs: JobManager, symbols: list[str], live_fetch=None, live_url=None, v2_url=None):
     live_fetch = live_fetch or (lambda: {"connected": False, "error": "no live url configured"})
 
     class H(BaseHTTPRequestHandler):
@@ -560,6 +595,14 @@ def make_handler(jobs: JobManager, symbols: list[str], live_fetch=None, live_url
                                   {"Cache-Control": "no-store, must-revalidate"})
             if u.path == "/live":
                 return self._send(200, live_fetch())
+            if u.path == "/v2/report":                        # proxy the experimental v2 service
+                if not v2_url:
+                    return self._send(200, {"symbols": {}, "v2": True})
+                try:
+                    with urllib.request.urlopen(v2_url.rstrip("/") + "/report", timeout=5) as r:
+                        return self._send(200, json.loads(r.read().decode()))
+                except Exception as e:
+                    return self._send(502, {"error": f"{type(e).__name__}: {e}", "symbols": {}})
             if u.path == "/live/reasoning":                    # proxy the live service's reasoning inspector
                 if not live_url:
                     return self._send(503, b"<p>no live url</p>", "text/html; charset=utf-8")
@@ -623,11 +666,13 @@ def main() -> None:
     ap.add_argument("--port", type=int, default=8010)
     ap.add_argument("--live-url", default="http://127.0.0.1:8000",
                     help="base URL of the running live service (for the LIVE area)")
+    ap.add_argument("--v2-url", default="http://127.0.0.1:8020",
+                    help="base URL of the experimental v2 service (for the V2 area)")
     ns = ap.parse_args()
     symbols = REPLAY.available_symbols() or ["MES", "MNQ"]
     jobs = JobManager()
     handler = make_handler(jobs, symbols, live_fetch=lambda: _fetch_live(ns.live_url),
-                           live_url=ns.live_url)
+                           live_url=ns.live_url, v2_url=ns.v2_url)
     port = ns.port
     for _ in range(20):
         try:

@@ -88,7 +88,11 @@ class V2Live:
             return None
         g0 = mtf.gated[0] if mtf.gated else None
         obj = g0.objective if (g0 and g0.objective is not None) else None
-        return {"available": len(mtf.candidates), "gated": len(mtf.gated), "total": len(mtf.cand_info),
+        ci = mtf.cand_info
+        return {"available": len(mtf.candidates), "gated": len(mtf.gated), "total": len(ci),
+                "passed": sum(1 for x in ci if x.get("status") == "passed"),
+                "incomplete": sum(1 for x in ci if x.get("status") == "incomplete"),
+                "rejected": sum(1 for x in ci if x.get("status") == "rejected"),
                 "direction": (g0.setup.direction if g0 else None),
                 "top": None if not g0 else {"direction": g0.setup.direction, "entry": _px(g0.setup.entry),
                                             "stop": _px(g0.setup.stop)},
@@ -119,6 +123,9 @@ class V2Live:
                 "decision": e.decision, "executables": len(e.executables), "fvgs": len(e.fvgs),
                 "available": sum(1 for x in e.cand_info if x.get("actionable")),
                 "gated": sum(1 for x in e.cand_info if x.get("passed")),
+                "passed": sum(1 for x in e.cand_info if x.get("status") == "passed"),
+                "incomplete": sum(1 for x in e.cand_info if x.get("status") == "incomplete"),
+                "rejected": sum(1 for x in e.cand_info if x.get("status") == "rejected"),
                 "total": len(e.cand_info), "candidates": list(e.cand_info),
                 "top": None if top is None else {"direction": top.direction, "entry": _px(top.entry),
                                                  "stop": _px(top.stop), "target": _px(top.target),

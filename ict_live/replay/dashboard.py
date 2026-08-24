@@ -188,6 +188,7 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
    gap:7px;line-height:1;transition:border-color .12s,color .12s}
  .candbtn:hover{border-color:var(--accent);color:var(--accent)}
  .candbtn b{font-weight:800}
+ .candbtn .g-pass{color:var(--long)} .candbtn .g-inc{color:var(--warn)} .candbtn .g-rej{color:var(--short)}
  .candbtn i{width:1px;height:11px;background:var(--line);display:inline-block}
  /* the pro candidate popup */
  .candbody{overflow:auto;padding:16px;display:flex;flex-direction:column;gap:14px}
@@ -553,7 +554,7 @@ function v2Tables(rep){
     const top=e.top; const execSide=top?sideOf(top.direction):'flat';
     const dec=top?execSide.toUpperCase():'NO-TRADE';
     const execLine=top?`${top.direction.toUpperCase()} entry ${num(top.entry)} · stop ${num(top.stop)} · target ${num(top.target)}${top.ltf_confirmed?' · ✓':''}`:fmt(e.decision);
-    const gline=(layer,x)=>`<button type=button class=candbtn onclick="openCandidates('${sym}','${layer}')"><b>${fmt(x.gated)}</b> gated<i></i>${fmt(x.available)} avail<i></i>${fmt(x.total)} total</button>`;
+    const gline=(layer,x)=>`<button type=button class=candbtn onclick="openCandidates('${sym}','${layer}')"><b class=g-pass>${fmt(x.passed)}</b> passed<i></i><b class=g-inc>${fmt(x.incomplete)}</b> incomplete<i></i><b class=g-rej>${fmt(x.rejected)}</b> rejected</button>`;
     return `<div class="ticket ${execSide}">
       <div class=thead><span class=sym>${sym}</span><span class="v2dec ${execSide}">${dec}</span></div>
       <div class=reads>

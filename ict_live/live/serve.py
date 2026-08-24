@@ -60,7 +60,9 @@ def build_service(cfg: Config | None = None):
     rec = runner.warmup()                                     # replay stored 1m -> rebuild state
     log.info("warmup complete: %s", rec)
     from ict_live.api.webhook import create_app
-    app = create_app(runner=runner)
+    from ict_live.live.control import TradeControl
+    control = TradeControl(data / "trade_control.json")       # persisted user-decision overlay
+    app = create_app(runner=runner, control=control)
     return app, runner, cfg
 
 

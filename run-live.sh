@@ -4,7 +4,7 @@
 # TradingView isn't reachable. The live service + dashboard run in Docker; the feed runs on the host
 # (TradingView Desktop is a GUI app that can't run in a container).
 #
-# Usage:   ./run-live.sh [SYMBOL ...]    (default: CME_MINI:MNQ1! CME_MINI:MES1!)
+# Usage:   ./run-live.sh [SYMBOL ...]    (default: CME_MINI:MES1! CME_MINI:MNQ1! COMEX_MINI:MGC1!)
 # Ctrl+C stops the feed and tears the Docker stack down.
 #
 # On start it WARMS UP the engine's history with a one-time yfinance backfill (WARMUP_DAYS, default 7)
@@ -15,12 +15,12 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# Default set includes the major commodities alongside the index micros. Pass your own to override,
+# Default set: Micro S&P, Micro Nasdaq, Micro Gold. Pass your own to override,
 # e.g.  ./run-live.sh CME_MINI:MNQ1! COMEX:GC1!
 if [ "$#" -gt 0 ]; then
   SYMBOLS=("$@")
 else
-  SYMBOLS=(CME_MINI:MNQ1! CME_MINI:MES1! COMEX:GC1! NYMEX:CL1! NYMEX:NG1! COMEX:SI1!)
+  SYMBOLS=(CME_MINI:MES1! CME_MINI:MNQ1! COMEX_MINI:MGC1!)
 fi
 COMPOSE="docker compose -f docker-compose.ict_live.yml"
 export TV_CLI="${TV_CLI:-node $HOME/dev/tradingview-mcp/src/cli/index.js}"

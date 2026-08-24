@@ -161,6 +161,13 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .read .rfoot{margin-top:9px;font-size:10.5px;color:var(--mut);display:flex;align-items:center;gap:8px}
  .whybtn{background:var(--panel2);color:var(--accent);border:1px solid var(--line);border-radius:7px;
    padding:3px 10px;font-size:11px;font-weight:700;cursor:pointer;margin-left:auto} .whybtn:hover{border-color:var(--accent)}
+ .tctl{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0 2px}
+ .tbtn{background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:8px;
+   padding:6px 13px;font-size:12px;font-weight:700;cursor:pointer} .tbtn:hover{border-color:var(--accent)}
+ .tbtn.go{color:var(--long);border-color:color-mix(in srgb,var(--long) 45%,var(--line))}
+ .tbtn.no{color:var(--short);border-color:color-mix(in srgb,var(--short) 45%,var(--line))}
+ .placedtag{background:var(--info-bg);color:var(--info);border-radius:999px;padding:3px 10px;font-size:11px;font-weight:800}
+ .decisions{color:var(--mut);font-size:12px;margin-top:10px}
  .modal{position:fixed;inset:0;background:#000a;display:none;z-index:50;padding:22px}
  .modal.on{display:flex} .modal-box{background:var(--panel);border:1px solid var(--line);border-radius:14px;
    margin:auto;width:min(1120px,96vw);height:90vh;display:flex;flex-direction:column;overflow:hidden}
@@ -268,10 +275,15 @@ function price(v,sym,rep){
 
 // ---------------- LIVE ----------------
 function tickets(rep){
-  const opens=rep.open_trades||[]; const byId={}; (rep.recent_signals||[]).forEach(s=>byId[s.ticket_id]=s);
-  if(!opens.length) return '<div class="ticket empty">No active trade right now — the engine is waiting for the next valid setup.<br><span class=mut>A ticket appears here the moment a TAKE signal fires.</span></div>';
+  const all=rep.open_trades||[]; const byId={}; (rep.recent_signals||[]).forEach(s=>byId[s.ticket_id]=s);
+  const ctrl=rep.control||{}; const stOf=id=>(ctrl[id]||{}).status||null;
+  const cvals=Object.values(ctrl), cnt=s=>cvals.filter(c=>c.status===s).length;
+  const summary=cvals.length?`<div class=decisions>Your decisions — placed <b>${cnt('placed')}</b> · skipped <b>${cnt('skipped')}</b> · cancelled <b>${cnt('cancelled')}</b> · closed <b>${cnt('closed')}</b></div>`:'';
+  const opens=all.filter(o=>{const s=stOf(o.ticket_id);return s===null||s==='placed';});   // actionable = undecided or placed
+  if(!opens.length) return '<div class="ticket empty">No active trade right now — the engine is waiting for the next valid setup.<br><span class=mut>A ticket appears here the moment a TAKE signal fires.</span></div>'+summary;
   const now=rep.server_time_ms||Date.now(); const lastp=rep.last_price||{};
   return '<div class=tickets>'+opens.map(o=>{
+    const st=stOf(o.ticket_id);
     const sig=byId[o.ticket_id]||{}; const long=o.direction==='long'; const dir=long?'LONG':'SHORT';
     const risk=Math.abs(o.entry-o.stop);
     const status=o.status==='OPEN'?'<span class="pill in">IN TRADE</span>':'<span class="pill place">PLACE ORDER</span>';
@@ -305,7 +317,15 @@ function tickets(rep){
       ${banner}
       <div class=meta>risk <b class=num>${risk.toFixed(2)}</b> pts (1R) · reward +2R · struct target <span class=num>${price(o.structural_target,o.symbol,rep)}</span>
         · exec score <span class=num>${o.execution_score!=null?Number(o.execution_score).toFixed(2):num(sig.confidence)}</span> · weakest ${fmt(o.weakest_factor||sig.weakest_factor)}</div>
-    </div>`;}).join('')+'</div>';
+      ${st==='placed'
+        ? `<div class=tctl><span class=placedtag>✓ you placed this</span><button class="tbtn no" onclick="tradeControl('${o.ticket_id}','${o.status==='OPEN'?'closed':'cancelled'}')">${o.status==='OPEN'?'Close trade':'Cancel pending'}</button></div>`
+        : `<div class=tctl><button class="tbtn go" onclick="tradeControl('${o.ticket_id}','placed')">I placed this</button><button class=tbtn onclick="tradeControl('${o.ticket_id}','skipped')">Skip</button></div>`}
+    </div>`;}).join('')+'</div>'+summary;
+}
+async function tradeControl(id,status){
+  try{await fetch('/live/trade-control',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ticket_id:id,status:status})});}catch(e){}
+  pollLive();
 }
 function kpis(s,opens){
   const t=[['trades',num(s.scored)],['win rate',num(s.win_rate)],['expectancy R',num(s.expectancy_R)],
@@ -552,11 +572,12 @@ def make_handler(jobs: JobManager, symbols: list[str], live_fetch=None, live_url
             path = urlparse(self.path).path
             n = int(self.headers.get("Content-Length", 0))
             raw = self.rfile.read(n) if n else b"{}"
-            if path == "/live/control":                        # forward symbol toggles to the live service
+            if path in ("/live/control", "/live/trade-control"):   # forward to the live service
                 if not live_url:
                     return self._send(503, {"error": "no live url"})
+                target = "/feed/control" if path == "/live/control" else "/trade/control"
                 try:
-                    req = urllib.request.Request(live_url.rstrip("/") + "/feed/control", data=raw,
+                    req = urllib.request.Request(live_url.rstrip("/") + target, data=raw,
                                                  headers={"Content-Type": "application/json"})
                     with urllib.request.urlopen(req, timeout=3) as r:
                         return self._send(200, json.loads(r.read().decode()))

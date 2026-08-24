@@ -28,9 +28,10 @@ from ict_live.live.runner import LiveRunner
 
 
 def create_app(ingestor: Optional[Ingestor] = None, runner: Optional[LiveRunner] = None,
-               store_dir: Optional[str] = None):
+               store_dir: Optional[str] = None, control=None):
     from fastapi import FastAPI, Header, Query, Request
-    from fastapi.responses import HTMLResponse, RedirectResponse
+    from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+    from ict_live.live.control import TradeControl
 
     if runner is not None:
         ing = runner.ingestor
@@ -40,6 +41,7 @@ def create_app(ingestor: Optional[Ingestor] = None, runner: Optional[LiveRunner]
     app = FastAPI(title="ict_live", version="1")
     app.state.ingestor = ing
     app.state.runner = runner
+    app.state.control = control or TradeControl()              # user decision overlay (advisory)
     # feed control/status plane (operational; a feed reports here, the dashboard drives it)
     app.state.feed = {"status": None, "enabled": None}         # enabled None => feed's own default
 
@@ -94,7 +96,23 @@ def create_app(ingestor: Optional[Ingestor] = None, runner: Optional[LiveRunner]
         rep["instrument_ticks"] = {k: v.tick_size for k, v in C.INSTRUMENTS.items()}  # for price rounding
         rep["server_time_ms"] = int(time.time() * 1000)        # for ticket-age display
         rep["last_price"] = {o["symbol"]: _last_price(o["symbol"]) for o in rep["open_trades"]}
+        rep["control"] = app.state.control.all()               # user decisions per ticket (overlay)
         return rep
+
+    @app.post("/trade/control")
+    async def trade_control(request: Request):
+        """Record the user's decision for a ticket (placed/skipped/cancelled/closed). Advisory overlay
+        — does NOT touch the simulated tracker; the engine ledger keeps running unbiased."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        try:
+            rec = app.state.control.set(body.get("ticket_id"), body.get("status"))
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        return {"ok": True, "ticket_id": body.get("ticket_id"), **rec}
 
     # ---- feed control/status (a feed producer reports here; the dashboard toggles symbols) ----
     @app.post("/feed/heartbeat")

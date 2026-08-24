@@ -98,3 +98,20 @@ def test_reasoning_endpoint_renders_for_a_live_symbol():
     # unknown symbol degrades gracefully (no 500), just says none yet
     r2 = c.get("/reasoning", params={"symbol": "NOPE"})
     assert r2.status_code == 200 and "No reasoning yet" in r2.text
+
+
+def test_trade_control_endpoint_records_decision_without_touching_tracker():
+    from starlette.testclient import TestClient
+    from ict_live.api.webhook import create_app
+    runner = _runner_with_state()
+    open_before = {s: len(t.open) for s, t in runner.trackers.items()}
+    closed_before = {s: len(t.closed) for s, t in runner.trackers.items()}
+    c = TestClient(create_app(runner=runner))
+    r = c.post("/trade/control", json={"ticket_id": "MNQ:1H:t0", "status": "placed"})
+    assert r.status_code == 200 and r.json()["status"] == "placed"
+    assert c.get("/report").json()["control"]["MNQ:1H:t0"]["status"] == "placed"
+    # the simulated tracker is untouched by a control action (overlay only)
+    assert {s: len(t.open) for s, t in runner.trackers.items()} == open_before
+    assert {s: len(t.closed) for s, t in runner.trackers.items()} == closed_before
+    # unknown status is rejected
+    assert c.post("/trade/control", json={"ticket_id": "X", "status": "nope"}).status_code == 400

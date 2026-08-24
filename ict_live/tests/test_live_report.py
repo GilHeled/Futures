@@ -117,14 +117,16 @@ def test_trade_control_endpoint_records_decision_without_touching_tracker():
     assert c.post("/trade/control", json={"ticket_id": "X", "status": "nope"}).status_code == 400
 
 
-def test_chart_store_and_serve():
+def test_chart_endpoint_renders_engine_png():
+    import pytest
+    pytest.importorskip("matplotlib")                                        # skip if the render dep is absent
     from starlette.testclient import TestClient
     from ict_live.api.webhook import create_app
-    c = TestClient(create_app(runner=_runner_with_state()))
-    assert c.get("/chart", params={"symbol": "MNQ"}).status_code == 404      # none stored yet
-    png = b"\x89PNG\r\n\x1a\n" + b"fake-image-bytes"
-    r = c.post("/chart", params={"symbol": "MNQ"}, content=png, headers={"Content-Type": "image/png"})
-    assert r.status_code == 200 and r.json()["bytes"] == len(png)
-    g = c.get("/chart", params={"symbol": "MNQ"})
-    assert g.status_code == 200 and g.content == png and g.headers["content-type"].startswith("image/png")
-    assert "MNQ" in c.get("/report").json()["charts"]                        # advertised in the report
+    runner = _runner_with_state()
+    assert runner.last_state and runner.last_bars                            # captured on live bars
+    c = TestClient(create_app(runner=runner))
+    r = c.get("/chart", params={"symbol": "MNQ"})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("image/png")
+    assert r.content[:8] == b"\x89PNG\r\n\x1a\n"                             # a real PNG, engine-rendered
+    assert c.get("/chart", params={"symbol": "NOPE"}).status_code == 404
+    assert "MNQ" in c.get("/report").json()["charts"]                        # advertised as renderable

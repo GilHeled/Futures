@@ -37,6 +37,7 @@ class LiveRunner:
         self.last_signal_bar: dict[str, str] = {}
         self.last_signal: dict[str, dict] = {}          # latest ticket per symbol (for the live "current read")
         self.last_state: dict = {}                       # latest MarketState per symbol (for the reasoning inspector)
+        self.last_bars: dict = {}                        # exact bar window each MarketState was computed on (for chart render)
         self.store_dir = Path(store_dir) if store_dir else None
         if self.store_dir:
             self.store_dir.mkdir(parents=True, exist_ok=True)
@@ -115,6 +116,7 @@ class LiveRunner:
                                                   symbol=symbol, signal_tf=self.signal_tf,
                                                   entry_tf=self.entry_tf, window=self.window)
         self.last_state[symbol] = ms                    # retained for the reasoning inspector
+        self.last_bars[symbol] = list(buf[self.signal_tf][-self.window:])   # exact window for chart render
         if ticket.action == "TAKE":
             opened = tr.open_from_ticket(ticket)
             if opened is not None and self.on_take:        # a genuinely NEW setup — notify once

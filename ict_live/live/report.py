@@ -78,6 +78,7 @@ def build_report(runner) -> dict:
     return {
         "health": runner.health(),
         "open_trades": open_trades,
+        "current": dict(getattr(runner, "last_signal", {})),      # latest ticket per symbol
         "recent_signals": runner.recent_signals[-RECENT:][::-1],
         "closed_summary": aggregate_closed(closed),
         "closed_trades": closed_sorted[-RECENT:][::-1],

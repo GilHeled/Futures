@@ -142,6 +142,23 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .rage.ok{color:var(--long)} .rage.stale{color:var(--warn)}
  .feednote{color:var(--mut);font-size:11.5px;margin-top:12px;line-height:1.6}
  .feednote .rdot{margin:0 3px -1px 8px}
+ /* ---- per-symbol current read ---- */
+ .reads{display:grid;grid-template-columns:repeat(auto-fill,minmax(258px,1fr));gap:10px}
+ .read{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--mut);
+   border-radius:12px;padding:11px 13px}
+ .read.long{border-left-color:var(--long)} .read.short{border-left-color:var(--short)}
+ .read.flat{border-left-color:var(--line)}
+ .read .rhd{display:flex;align-items:center;gap:8px}
+ .read .rsy{font-family:"SF Mono",ui-monospace,Menlo,monospace;font-weight:700;font-size:13px}
+ .read .rnn{color:var(--mut);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ .read .rtag{margin-left:auto}
+ .read .rln{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:9px;font-size:12px;color:var(--mut)}
+ .read .rln b{color:var(--ink);font-weight:600}
+ .read .bias.long{color:var(--long)} .read .bias.short{color:var(--short)}
+ .read .why{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}
+ .read .why .wc{background:var(--panel2);border:1px solid var(--line);border-radius:7px;
+   padding:2px 7px;font-size:10.5px;color:var(--mut)} .read .why .wc b{color:var(--ink);font-weight:600}
+ .read .rfoot{margin-top:9px;font-size:10.5px;color:var(--mut)}
  /* ---- actionable trade tickets (the hero) ---- */
  .tickets{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
  .ticket{background:var(--panel);border:1px solid var(--line);border-left:6px solid var(--mut);
@@ -300,6 +317,40 @@ async function postControl(){
   const en=[...document.querySelectorAll('#toggles input:checked')].map(c=>c.value);
   try{await fetch('/live/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:en})});}catch(e){}
 }
+function currentRead(rep){
+  const nm=rep.instrument_names||{};
+  const active=(rep.enabled!=null)?rep.enabled:(((rep.feed||{}).symbols)||[]);
+  // latest signal per symbol: prefer the service's per-symbol map, else newest-first recent_signals
+  let cur=Object.assign({},rep.current||{});
+  (rep.recent_signals||[]).forEach(x=>{ if(x&&x.symbol&&!(x.symbol in cur)) cur[x.symbol]=x; });
+  const syms=(active.length?active:Object.keys(cur)).slice().sort();
+  if(!syms.length) return '<div class="card mut">No symbols streaming yet — enable one in the Feed card above.</div>';
+  const now=rep.server_time_ms||Date.now(); const bars=(rep.feed||{}).bars||{};
+  const cards=syms.map(sym=>{
+    const c=cur[sym];
+    if(!c) return `<div class="read flat"><div class=rhd><span class=rsy>${sym}</span>
+      <span class=rnn>${fmt(nm[sym]||'')}</span></div>
+      <div class=rfoot>awaiting first 1H close…</div></div>`;
+    const st=(c.structural||'').toUpperCase();
+    const side=st.indexOf('LONG')>=0?'long':(st.indexOf('SHORT')>=0?'short':'flat');
+    const r=c.reasoning||{};
+    const why=[['manip',r.manipulation],['MSS',r.mss],['FVG',r.fvg],['DR',r.dealing_range]]
+      .filter(([k,v])=>v!=null&&v!=='').map(([k,v])=>`<span class=wc>${k} <b>${fmt(v)}</b></span>`).join('');
+    const t=bars[sym]; const a=t?Math.round((now-t)/60000):null;
+    const age=a==null?'':(a<1?'<1m ago':a+'m ago');
+    const execTxt=(c.execution&&c.execution!=='N/A')?`exec <b>${fmt(c.execution)}</b>`
+      +(c.confidence!=null?` (${num(c.confidence)})`:''):'';
+    return `<div class="read ${side}">
+      <div class=rhd><span class=rsy>${sym}</span><span class=rnn>${fmt(nm[sym]||'')}</span>
+        <span class="tag ${c.action} rtag">${fmt(c.action)}</span></div>
+      <div class=rln><span class="bias ${side}">bias <b>${fmt(c.structural)}</b></span>
+        ${execTxt?'<span>'+execTxt+'</span>':''}
+        ${c.weakest_factor?'<span>weakest <b>'+fmt(c.weakest_factor)+'</b></span>':''}</div>
+      ${why?'<div class=why>'+why+'</div>':''}
+      <div class=rfoot>1H bar ${fmt(c.time)}${age?' · updated '+age:''}</div>
+    </div>`;}).join('');
+  return '<div class=reads>'+cards+'</div>';
+}
 function liveTables(rep){
   const s=rep.closed_summary||{}, h=rep.health||{};
   const strip=`<div class=strip>
@@ -318,6 +369,7 @@ function liveTables(rep){
     <td>${fmt(r.manipulation)}</td><td>${fmt(r.mss)}</td><td>${fmt(r.fvg)}</td><td>${fmt(r.dealing_range)}</td></tr>`;}).join('')
     ||'<tr><td colspan=13 class=mut>no signals yet</td></tr>';
   return `${feedPanel(rep)}
+    <h2>Current read</h2>${currentRead(rep)}
     <h2>Actionable now</h2>${tickets(rep)}
     <h2>Performance (closed trades)</h2>${kpis(s,(rep.open_trades||[]).length)}
     <h2>Closed trades</h2><div class=scroll><table>

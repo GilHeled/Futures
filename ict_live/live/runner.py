@@ -34,6 +34,7 @@ class LiveRunner:
         self.trackers: dict[str, TradeTracker] = {}
         self.recent_signals: list[dict] = []
         self.last_signal_bar: dict[str, str] = {}
+        self.last_signal: dict[str, dict] = {}          # latest ticket per symbol (for the live "current read")
         self.store_dir = Path(store_dir) if store_dir else None
         if self.store_dir:
             self.store_dir.mkdir(parents=True, exist_ok=True)
@@ -114,6 +115,7 @@ class LiveRunner:
         if ticket.action == "TAKE":
             tr.open_from_ticket(ticket)
         self.last_signal_bar[symbol] = sig_bar.open_time.isoformat()
+        self.last_signal[symbol] = ticket.to_dict()
         self.recent_signals.append(ticket.to_dict())
         if len(self.recent_signals) > RECENT_SIGNALS:
             del self.recent_signals[:-RECENT_SIGNALS]

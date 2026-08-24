@@ -419,25 +419,33 @@ def execution_for(bars, tf: str, context, setup, confirmation) -> LTFExecution:
     """Stage 4 — the 1m execution trigger. It GENERATES 1m candidates that must confirm the 15m
     confirmation (own structure, HTF-aligned, same direction as a gated 15m confirmation), exactly the
     same candidate+reasons+pipeline model as the higher stages. The trade fires only for a gated 1m
-    candidate; otherwise the top-line decision reports how far the cascade got. Every 1m candidate
-    still carries its explicit reasons/checks so the trigger stage is as transparent as the rest."""
-    # cheap cascade preconditions first (no bars needed) — the 1m candidate universe is only built
-    # once the higher layers are actually gated (also avoids running v1 on 1m every bar for nothing)
+    candidate; the top-line decision still reports how far the cascade got. Like the 1H and 15m stages,
+    the 1m candidate list is ALWAYS generated (whenever a directional context exists) so the stage is
+    just as transparent — every 1m candidate carries its explicit reasons/checks and the '1m trigger'
+    node — instead of staying empty until the cascade happens to be gated."""
     if context is None or context.bias == "neutral":
         return LTFExecution(tf=tf, decision="NO-TRADE (no context bias)")
+    # top-line decision from the cascade state (independent of the 1m candidate universe)
     if not (setup and setup.gated):
-        return LTFExecution(tf=tf, decision="NO-TRADE (no 1H setup)")
-    if not (confirmation and confirmation.gated):
-        return LTFExecution(tf=tf, decision="NO-TRADE (awaiting 15m confirmation)")
-    conf = confirm_setup(bars, tf, context, confirmation, against="15m confirmation", node="1m trigger")
-    if not conf.gated:
-        decision, executables = "NO-TRADE (awaiting 1m trigger)", []
+        decision = "NO-TRADE (no 1H setup)"
+    elif not (confirmation and confirmation.gated):
+        decision = "NO-TRADE (awaiting 15m confirmation)"
     else:
-        decision = "LONG" if conf.gated[0].setup.direction == "long" else "SHORT"
-        executables = [Executable(direction=g.setup.direction, entry=g.setup.entry, stop=g.setup.stop,
-                                  target=(getattr(g.objective, "price", None) if g.objective is not None
-                                          else g.setup.target), ltf_confirmed=True, objective=g.objective)
-                       for g in conf.gated]
+        decision = None                                      # resolved after generating the 1m candidates
+    if not bars:                                             # degenerate/unit-test path: no bars to analyse
+        return LTFExecution(tf=tf, decision=decision or "NO-TRADE (awaiting 1m trigger)")
+    # ALWAYS generate the 1m candidate list (transparency parity with the higher stages)
+    conf = confirm_setup(bars, tf, context, confirmation, against="15m confirmation", node="1m trigger")
+    executables = []
+    if decision is None:                                     # cascade reached the 1m: fire iff a gated 1m trigger
+        if conf.gated:
+            decision = "LONG" if conf.gated[0].setup.direction == "long" else "SHORT"
+            executables = [Executable(direction=g.setup.direction, entry=g.setup.entry, stop=g.setup.stop,
+                                      target=(getattr(g.objective, "price", None) if g.objective is not None
+                                              else g.setup.target), ltf_confirmed=True, objective=g.objective)
+                           for g in conf.gated]
+        else:
+            decision = "NO-TRADE (awaiting 1m trigger)"
     return LTFExecution(tf=tf, fvgs=[], executables=executables, decision=decision,
                         cand_info=conf.cand_info, candidate_objs=conf.candidate_objs)
 

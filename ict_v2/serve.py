@@ -88,7 +88,8 @@ def main() -> None:
     port = int(os.environ.get("ICT_V2_PORT", "8020"))
     interval = float(os.environ.get("ICT_V2_POLL_SEC", "10"))
     svc = V2Service(data_dir)
-    svc.poll()                                               # prime once at startup
+    # Prime in the BACKGROUND (the poll loop polls immediately) so the server is reachable at once;
+    # /report returns empty symbols until the first poll finishes replaying the store.
     stop = threading.Event()
     threading.Thread(target=_run_poll_loop, args=(svc, interval, stop), daemon=True).start()
     httpd = ThreadingHTTPServer((host, port), make_handler(svc))

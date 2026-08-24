@@ -36,7 +36,7 @@ if [ "${RESET:-0}" = "1" ]; then
 fi
 
 echo "==> building + starting live service and dashboard (Docker)…"
-$COMPOSE up -d --build live dashboard
+$COMPOSE up -d --build live dashboard v2
 
 echo "==> waiting for the live service to be healthy…"
 until curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1; do sleep 2; done

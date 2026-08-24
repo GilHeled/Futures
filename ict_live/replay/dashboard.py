@@ -240,6 +240,8 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .cfacts{display:flex;flex-wrap:wrap;gap:5px 14px;font-size:12px;font-variant-numeric:tabular-nums}
  .cfact{font-family:"SF Mono",ui-monospace,Menlo,monospace}
  .cfact i{color:var(--mut);font-style:normal;font-family:inherit;margin-right:5px;font-size:10px;text-transform:uppercase;letter-spacing:.4px}
+ .cfact b{font-size:9px;text-transform:uppercase;letter-spacing:.4px;padding:1px 5px;border-radius:4px;margin-left:3px;font-weight:700}
+ .rrq-low{color:var(--warn);background:var(--warn-bg)} .rrq-good{color:var(--info);background:var(--info-bg)} .rrq-high{color:var(--long);background:var(--long-bg)}
  .cleg{font-size:11px;color:var(--mut);display:flex;flex-wrap:wrap;gap:5px;padding-top:2px}
  /* status colours: green = passed, amber = incomplete (still developing), red = rejected (permanent) */
  .ccard.passed{border-color:color-mix(in srgb,var(--long) 45%,var(--line))}
@@ -599,8 +601,10 @@ function _candCard(c){
   const badge=st==='passed'?'<span class="cbadge pass">✓ Passed</span>'
     :(st==='incomplete'?'<span class="cbadge inc">⏳ Incomplete</span>':'<span class="cbadge rej">❌ Rejected</span>');
   const hd=st==='passed'?'Confirmed':(st==='incomplete'?'Still developing — waiting for':'Rejected — reason');
+  const rrq=c.rr_quality; // RR is a QUALITY grade, not a gate: low/good/high (reject only ≤1)
+  const rrtxt=c.rr==null?'—':num(c.rr)+(rrq&&rrq!=='reject'?` <b class=rrq-${rrq}>${rrq}</b>`:'');
   const facts=[['entry',num(c.entry)],['stop',num(c.stop)],['target',num(c.target)],
-               ['RR',num(c.rr)],['P/D',c.pd_location||'—'],['draw',objtxt]]
+               ['RR',rrtxt],['P/D',c.pd_location||'—'],['draw',objtxt]]
     .map(([k,v])=>`<span class=cfact><i>${k}</i>${v}</span>`).join('');
   const rblock=st==='passed'
     ? '<div class="creason ok">All checks passed — promoted to the next stage.</div>'

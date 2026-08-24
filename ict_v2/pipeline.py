@@ -66,6 +66,30 @@ def _short_reject(txt: str) -> str:
     return (txt or "invalid")[:24]
 
 
+def _v1_reject_kind(reject_reason: str) -> str:
+    """Classify a v1 rejection. 'rr' = the (course-inspired, [RES]-labelled) 3R minimum, which ICT
+    teaches as a QUALITY guideline, not a validity rule — v2 does NOT treat it as a veto. Anything
+    else (mitigated FVG / degenerate stop / bad geometry / no liquidity target) is a genuine
+    structural/execution invalidation v2 keeps. NB v1 checks RR last, so a pure 'rr' reject means the
+    setup already passed every structural check."""
+    t = (reject_reason or "").lower()
+    return "rr" if ("min_rr" in t or t.startswith("rr ")) else "structural"
+
+
+def rr_quality(rr):
+    """RR as a QUALITY grade, not a validity gate — v2 separates 'valid ICT setup' from 'good trade'.
+    reject (≤1, reward ≤ risk) · low (1–2) · good (2–3) · high (≥3), per the user's RR guidance."""
+    if rr is None:
+        return None
+    if rr <= 1.0:
+        return "reject"
+    if rr < 2.0:
+        return "low"
+    if rr < 3.0:
+        return "good"
+    return "high"
+
+
 def _short_gate(reasons: list) -> str:
     r = (reasons[0] if reasons else "").lower()
     if "bias mismatch" in r:
@@ -81,11 +105,12 @@ def _short_gate(reasons: list) -> str:
     return (reasons[0] if reasons else "")[:24]
 
 
-def structural_checks(sw, disp, mss, fvg, setup, actionable):
+def structural_checks(sw, disp, mss, fvg, setup, actionable, entry_note=""):
     """The ICT chain rendered as ordered checks — sweep → displacement → MSS → FVG → entry — marking
     the exact point it stopped progressing. Returns (checks, complete, status): `status` is None when
     the chain is complete AND the setup is actionable (ready for the HTF gate), else 'incomplete'
-    (still developing, could still become valid) or 'rejected' (permanently invalid)."""
+    (still developing, could still become valid) or 'rejected' (permanently invalid). `entry_note`
+    overrides the entry-node failure label (v2 supplies its own, e.g. an RR≤1 reject)."""
     fvg_mit = fvg is not None and getattr(fvg, "status", None) == "mitigated"
     checks = [_mk("sweep", "ok")]                                         # the manipulation = the anchor
     if disp is None:
@@ -104,7 +129,8 @@ def structural_checks(sw, disp, mss, fvg, setup, actionable):
     if setup is None:
         return checks + [_mk("entry", "fail", "no valid setup yet")], False, "incomplete"
     if not actionable:
-        return checks + [_mk("entry", "fail", _short_reject(getattr(setup, "reject_reason", "")), True)], False, "rejected"
+        note = entry_note or _short_reject(getattr(setup, "reject_reason", ""))
+        return checks + [_mk("entry", "fail", note, True)], False, "rejected"
     checks.append(_mk("entry", "ok"))
     return checks, True, None
 
@@ -130,7 +156,8 @@ class Candidate:
     stop: Optional[float] = None
     target: Optional[float] = None
     rr: Optional[float] = None
-    actionable: bool = False               # v1 assembled a tradeable setup for it
+    rr_quality: Optional[str] = None       # reject | low | good | high — QUALITY grade, not a gate
+    actionable: bool = False               # a VALID ICT setup in v2's sense (structure ok, RR>1)
     passed: bool = False                   # cleared the HTF gate (fully validated on this TF)
     status: str = "incomplete"             # passed | incomplete (still developing) | rejected (permanently invalid)
     reasons: list = field(default_factory=list)   # EXPLICIT reasons it did not fully validate (empty ⇒ passed)
@@ -145,6 +172,7 @@ class Candidate:
             "direction": self.direction, "state": self.state, "status": self.status,
             "entry": px(self.entry), "stop": px(self.stop), "target": px(self.target),
             "rr": (None if self.rr is None else round(float(self.rr), 2)),
+            "rr_quality": self.rr_quality,
             "pd_location": self.pd_location,
             "objective": None if obj is None else {"kind": getattr(obj, "kind", None),
                                                    "price": px(getattr(obj, "price", None))},
@@ -285,25 +313,37 @@ def generate_candidates(ms, context: HTFContext) -> list:
         target = getattr(objective, "price", None) if objective is not None else None
 
         actionable = passed = False
-        reasons = []
-        if setup is not None:                                            # adopt v1's authoritative setup
+        reasons, entry_note, rr, quality = [], "", None, None
+        if setup is not None:
             entry, stop = setup.entry, setup.stop
             if target is None:
                 target = setup.target
             rr = getattr(setup, "rr", None)
-            actionable = bool(getattr(setup, "actionable", False))
+            quality = rr_quality(rr)
+            if bool(getattr(setup, "actionable", False)):                # v1 says fully actionable (RR≥3)
+                actionable = True
+            elif _v1_reject_kind(getattr(setup, "reject_reason", "")) == "rr":
+                # v2 separates VALID SETUP from GOOD TRADE: the 3R minimum is a QUALITY guideline, not a
+                # validity veto. A structurally sound setup (v1 rejected ONLY on RR) stays valid as long
+                # as reward exceeds risk (RR > 1); RR is surfaced as a quality grade. Only RR ≤ 1 rejects.
+                if rr is not None and rr > 1.0:
+                    actionable = True
+                else:
+                    entry_note = f"RR {rr:g} ≤ 1" if rr is not None else "reward ≤ risk"
+                    reasons = [f"Reward does not exceed risk — RR {('%g' % rr) if rr is not None else '?'} ≤ 1"]
+            else:                                                        # a genuine structural/execution reject
+                entry_note = _short_reject(getattr(setup, "reject_reason", ""))
+                reasons = [f"Setup not valid — {getattr(setup, 'reject_reason', '') or 'invalid'}"]
             if actionable:
                 passed, gate_reasons, obj2 = align.gate_setup(setup, context)
                 if obj2 is not None:
                     objective, target = obj2, getattr(obj2, "price", target)
                 reasons = list(gate_reasons)                             # HTF-gate failures (empty ⇒ passed)
-            else:                                                        # v1 rejected the assembled setup
-                rr_txt = getattr(setup, "reject_reason", "") or "not a valid setup"
-                reasons = [f"Setup not valid — {rr_txt}"]
         else:
             risk = abs(stop - entry) if entry is not None else 0.0
             reward = abs(entry - target) if (entry is not None and target is not None) else 0.0
             rr = round(reward / risk, 2) if risk > 0 else None
+            quality = rr_quality(rr)
 
         if disp is None:
             state = "swept"
@@ -322,7 +362,7 @@ def generate_candidates(ms, context: HTFContext) -> list:
                         "fvg": "Incomplete — entry FVG present, not yet a valid setup"}.get(state, "Incomplete")]
 
         # build the step-by-step pipeline: structural chain + the HTF-context gate node
-        checks, complete, sstatus = structural_checks(sw, disp, mss, fvg, setup, actionable)
+        checks, complete, sstatus = structural_checks(sw, disp, mss, fvg, setup, actionable, entry_note)
         if not complete:
             status = sstatus
             checks.append(_mk("HTF context", "pending"))
@@ -336,8 +376,8 @@ def generate_candidates(ms, context: HTFContext) -> list:
         cands.append(Candidate(direction=direction, state=state, status=status, checks=checks,
                                sweep=sw, displacement=disp, mss=mss,
                                fvg=fvg, dealing_range=dr, pd_location=pd, objective=objective,
-                               entry=entry, stop=stop, target=target, rr=rr, actionable=actionable,
-                               passed=passed, reasons=reasons, setup=setup))
+                               entry=entry, stop=stop, target=target, rr=rr, rr_quality=quality,
+                               actionable=actionable, passed=passed, reasons=reasons, setup=setup))
     return cands
 
 

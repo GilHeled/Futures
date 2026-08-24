@@ -544,7 +544,9 @@ def make_handler(jobs: JobManager, symbols: list[str], live_fetch=None, live_url
             u = urlparse(self.path)
             q = parse_qs(u.query)
             if u.path in ("/", "/index.html"):
-                return self._send(200, _page(symbols), "text/html; charset=utf-8")
+                # no-store so a rebuilt dashboard is picked up immediately (no stale cached page/JS)
+                return self._send(200, _page(symbols), "text/html; charset=utf-8",
+                                  {"Cache-Control": "no-store, must-revalidate"})
             if u.path == "/live":
                 return self._send(200, live_fetch())
             if u.path == "/live/reasoning":                    # proxy the live service's reasoning inspector

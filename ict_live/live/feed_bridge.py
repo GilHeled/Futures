@@ -95,6 +95,17 @@ def get_last_bars(url: str) -> dict:
         return {}
 
 
+def get_last_closes(url: str) -> dict:
+    """{tv_symbol: last stored close} from the service — seeds the feed's plausibility guard from the
+    authoritative store (so a bad first read can't set a wrong reference). {} if unreachable."""
+    try:
+        with urllib.request.urlopen(url.rstrip("/") + "/status", timeout=5) as r:
+            syms = (json.loads(r.read().decode()).get("symbols") or {})
+        return {s: v["last_close"] for s, v in syms.items() if v.get("last_close") is not None}
+    except Exception:
+        return {}
+
+
 def _period_for_gap(last_open_ms: int, now_ms: int, default: str) -> str:
     """A yfinance period that just covers the gap since the last stored bar (1..7d; 7d is yfinance's
     1-minute limit). Small gaps download a small window; an empty/old store uses the full default."""

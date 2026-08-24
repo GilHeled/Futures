@@ -67,3 +67,28 @@ def test_run_rejects_unknown_symbol(monkeypatch):
     monkeypatch.setattr(LF, "_reachable", lambda url, timeout=3.0: True)
     with pytest.raises(SystemExit):
         LF.run("http://127.0.0.1:8000", symbols=["FX:EURUSD"], once=True, log=lambda *a: None)
+
+
+def test_push_new_rejects_wrong_symbol_bar(monkeypatch):
+    # a MES-priced bar (~7675) read while the chart is on MNQ (~29000) must NOT be posted
+    now = int(time.time())
+    bars = [{"time": now - 120, "open": 7674, "high": 7676, "low": 7673, "close": 7675, "volume": 5}]
+    posted = []
+    monkeypatch.setattr(LF, "_post", lambda url, p, token: (posted.append(p), {"status": "accepted"})[1])
+    tv = _fake_tv(bars, symbol="CME_MINI:MNQ1!")
+    last_ms, last_close = {}, {"CME_MINI:MNQ1!": 29000.0}      # seeded from the store (real MNQ level)
+    n = LF.push_new(tv, "http://x", "CME_MINI:MNQ1!", token=None, last_ms=last_ms,
+                    last_close=last_close, log=lambda *a: None)
+    assert n == 0 and posted == []                            # 7675 is ~74% off 29000 -> rejected
+    assert last_close["CME_MINI:MNQ1!"] == 29000.0            # reference unchanged by a rejected bar
+
+
+def test_push_new_accepts_plausible_bar_and_updates_ref(monkeypatch):
+    now = int(time.time())
+    bars = [{"time": now - 120, "open": 29010, "high": 29050, "low": 28990, "close": 29040, "volume": 5}]
+    monkeypatch.setattr(LF, "_post", lambda url, p, token: {"status": "accepted"})
+    tv = _fake_tv(bars, symbol="CME_MINI:MNQ1!")
+    last_ms, last_close = {}, {"CME_MINI:MNQ1!": 29000.0}
+    n = LF.push_new(tv, "http://x", "CME_MINI:MNQ1!", token=None, last_ms=last_ms,
+                    last_close=last_close, log=lambda *a: None)
+    assert n == 1 and last_close["CME_MINI:MNQ1!"] == 29040.0  # accepted + reference advanced

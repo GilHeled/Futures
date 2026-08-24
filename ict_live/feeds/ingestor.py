@@ -125,6 +125,7 @@ class Ingestor:
                 s: {
                     "bars_1m": self.store.count(s),
                     "last_open_ms": (_open_ms(self.store.last(s)) if self.store.last(s) else None),
+                    "last_close": (self.store.last(s).close if self.store.last(s) else None),
                     "forming": {tf: (self._builders[s].forming(tf) is not None)
                                 for tf in self._timeframes} if s in self._builders else {},
                 }

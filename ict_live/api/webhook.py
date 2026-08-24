@@ -18,8 +18,10 @@ persisted store dir)
 # NOTE: no `from __future__ import annotations` — FastAPI must resolve the real Request/Header
 # types for dependency injection; stringized annotations break it.
 import os
+import time
 from typing import Optional
 
+from ict_live import config as C
 from ict_live.feeds.ingestor import ACCEPTED, Ingestor
 from ict_live.live import report as REPORT
 from ict_live.live.runner import LiveRunner
@@ -38,6 +40,8 @@ def create_app(ingestor: Optional[Ingestor] = None, runner: Optional[LiveRunner]
     app = FastAPI(title="ict_live", version="1")
     app.state.ingestor = ing
     app.state.runner = runner
+    # feed control/status plane (operational; a feed reports here, the dashboard drives it)
+    app.state.feed = {"status": None, "enabled": None}         # enabled None => feed's own default
 
     def _token(authorization: Optional[str], token_q: Optional[str]) -> Optional[str]:
         if authorization and authorization.lower().startswith("bearer "):
@@ -73,7 +77,37 @@ def create_app(ingestor: Optional[Ingestor] = None, runner: Optional[LiveRunner]
 
     @app.get("/report")
     async def report():
-        return REPORT.build_report(runner)
+        rep = REPORT.build_report(runner)
+        rep["feed"] = app.state.feed["status"]                 # which feed, freshness (dashboard shows this)
+        rep["enabled"] = app.state.feed["enabled"]
+        rep["instruments"] = sorted(C.INSTRUMENTS)
+        return rep
+
+    # ---- feed control/status (a feed producer reports here; the dashboard toggles symbols) ----
+    @app.post("/feed/heartbeat")
+    async def feed_heartbeat(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        app.state.feed["status"] = {**(body if isinstance(body, dict) else {}),
+                                    "received_ms": int(time.time() * 1000)}
+        return {"ok": True}
+
+    @app.get("/feed/control")
+    async def feed_control_get():
+        return {"enabled": app.state.feed["enabled"], "instruments": sorted(C.INSTRUMENTS)}
+
+    @app.post("/feed/control")
+    async def feed_control_set(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        en = body.get("enabled")
+        app.state.feed["enabled"] = ([s for s in en if s in C.INSTRUMENTS] if isinstance(en, list)
+                                     else None)
+        return {"ok": True, "enabled": app.state.feed["enabled"]}
 
     @app.get("/report.html", response_class=HTMLResponse)
     async def report_html():

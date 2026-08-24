@@ -43,10 +43,31 @@ def test_push_new_only_new_and_closed(monkeypatch):
 
 def test_run_once_backfills(monkeypatch):
     monkeypatch.setattr(FB, "_reachable", lambda url, timeout=3.0: True)
+    monkeypatch.setattr(FB, "get_enabled", lambda url, default: default)   # no control-plane network
+    monkeypatch.setattr(FB, "heartbeat", lambda *a, **k: None)
     monkeypatch.setattr(FB, "fetch_1m", lambda root, period="2d": [_bar(0, 100), _bar(1, 101)])
     monkeypatch.setattr(FB, "_post", lambda url, payload, token: {"status": "accepted"})
     rep = FB.run("http://x", ["MES", "MNQ", "UNKNOWN"], once=True, log=lambda *a: None)
     assert rep["symbols"] == ["MES", "MNQ"] and rep["posted"] == 4    # 2 bars x 2 known symbols
+
+
+def test_get_enabled_falls_back(monkeypatch):
+    # unreachable control endpoint -> returns the default set (never raises)
+    assert FB.get_enabled("http://127.0.0.1:9", ["CME_MINI:MNQ1!"]) == ["CME_MINI:MNQ1!"]
+
+
+def test_run_respects_disabled_symbols(monkeypatch):
+    # dashboard disabled MNQ -> only MES is fed
+    monkeypatch.setattr(FB, "_reachable", lambda url, timeout=3.0: True)
+    monkeypatch.setattr(FB, "get_enabled", lambda url, default: ["CME_MINI:MES1!"])
+    beats = []
+    monkeypatch.setattr(FB, "heartbeat", lambda url, source, bars, token=None: beats.append((source, sorted(bars))))
+    monkeypatch.setattr(FB, "fetch_1m", lambda root, period="2d": [_bar(0, 100)])
+    posted = []
+    monkeypatch.setattr(FB, "_post", lambda url, p, token: (posted.append(p["symbol"]), {"status": "accepted"})[1])
+    rep = FB.run("http://x", ["MES", "MNQ"], once=True, log=lambda *a: None)
+    assert set(posted) == {"CME_MINI:MES1!"}          # MNQ disabled by the dashboard
+    assert beats and "delayed" in beats[0][0].lower()
 
 
 def test_run_errors_clearly_when_service_down(monkeypatch):

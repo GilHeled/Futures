@@ -43,22 +43,27 @@ def test_push_new_skips_forming_and_dedupes(monkeypatch):
     assert LF.push_new(tv, "http://x", "CME_MINI:MNQ1!", token=None, last_ms=last, log=lambda *a: None) == 0
 
 
-def test_run_once_uses_chart_symbol(monkeypatch):
+def test_run_feeds_requested_symbols(monkeypatch):
     now = int(time.time())
     bars = [{"time": now - 120, "open": 1, "high": 2, "low": 0.5, "close": 1.5, "volume": 10},
-            {"time": now, "open": 1.5, "high": 1.6, "low": 1.4, "close": 1.5, "volume": 1}]
+            {"time": now, "open": 1.5, "high": 1.6, "low": 1.4, "close": 1.5, "volume": 1}]  # forming
     monkeypatch.setattr(LF, "TvClient", lambda **k: _fake_tv(bars))
     monkeypatch.setattr(LF, "_reachable", lambda url, timeout=3.0: True)
+    monkeypatch.setattr(LF, "get_enabled", lambda url, default: default)   # no control-plane network
+    beats = []
+    monkeypatch.setattr(LF, "heartbeat", lambda url, source, bars, token=None: beats.append(source))
     posted = []
     monkeypatch.setattr(LF, "_post", lambda url, p, token: (posted.append(p), {"status": "accepted"})[1])
-    rep = LF.run("http://127.0.0.1:8000", once=True, log=lambda *a: None)
-    assert rep["symbol"] == "CME_MINI:MNQ1!" and rep["posted"] == 1
-    assert posted[0]["symbol"] == "CME_MINI:MNQ1!"
+    rep = LF.run("http://127.0.0.1:8000", symbols=["CME_MINI:MNQ1!"], once=True, load_wait=0,
+                 log=lambda *a: None)
+    assert rep["symbols"] == ["CME_MINI:MNQ1!"]
+    assert [p["symbol"] for p in posted] == ["CME_MINI:MNQ1!"]             # 1 closed bar, forming skipped
+    assert beats and "real-time" in beats[0].lower()                      # heartbeat reports source
 
 
 def test_run_rejects_unknown_symbol(monkeypatch):
     import pytest
-    monkeypatch.setattr(LF, "TvClient", lambda **k: _fake_tv([], symbol="FX:EURUSD"))
+    monkeypatch.setattr(LF, "TvClient", lambda **k: _fake_tv([]))
     monkeypatch.setattr(LF, "_reachable", lambda url, timeout=3.0: True)
     with pytest.raises(SystemExit):
-        LF.run("http://127.0.0.1:8000", once=True, log=lambda *a: None)
+        LF.run("http://127.0.0.1:8000", symbols=["FX:EURUSD"], once=True, log=lambda *a: None)

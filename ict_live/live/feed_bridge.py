@@ -24,6 +24,7 @@ import urllib.request
 from ict_live import config as C
 
 SCHEMA = "ict_live.bar.v1"
+SOURCE = "yfinance (continuous-contract proxy, ~10-15 min delayed)"
 
 
 def _instruments():
@@ -54,14 +55,37 @@ def _reachable(url: str, timeout: float = 3.0) -> bool:
         return False
 
 
-def _post(url: str, payload: dict, token: str | None):
+def _post_json(full_url: str, payload: dict, token: str | None):
     data = json.dumps(payload).encode()
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    req = urllib.request.Request(url.rstrip("/") + "/webhook/tradingview", data=data, headers=headers)
+    req = urllib.request.Request(full_url, data=data, headers=headers)
     with urllib.request.urlopen(req, timeout=10) as r:
         return json.loads(r.read().decode())
+
+
+def _post(url: str, payload: dict, token: str | None):
+    return _post_json(url.rstrip("/") + "/webhook/tradingview", payload, token)
+
+
+def get_enabled(url: str, default: list) -> list:
+    """The dashboard-selected symbol set from the service; falls back to `default` if unset/unreachable."""
+    try:
+        with urllib.request.urlopen(url.rstrip("/") + "/feed/control", timeout=3) as r:
+            en = json.loads(r.read().decode()).get("enabled")
+            return list(en) if en else list(default)
+    except Exception:
+        return list(default)
+
+
+def heartbeat(url: str, source: str, bars: dict, token: str | None = None) -> None:
+    """Report the active feed source + per-symbol last-bar time so the dashboard can show provenance."""
+    try:
+        _post_json(url.rstrip("/") + "/feed/heartbeat",
+                   {"source": source, "symbols": sorted(bars), "bars": bars}, token)
+    except Exception:
+        pass
 
 
 def push_new(url, root, tv_symbol, *, period, token, last_ms: dict, now_ms: int) -> int:
@@ -91,20 +115,30 @@ def run(url, symbols, *, token=None, backfill="2d", poll_period="1d", interval=6
     if not _reachable(url):
         raise SystemExit(f"live service not reachable at {url} — start it first (in another "
                          f"terminal):\n  python3 -m ict_live.live.serve")
+    default_keys = [inst[r] for r in roots]                    # control vocabulary = INSTRUMENTS keys
     last_ms: dict[str, int] = {}
+
+    def active_roots():
+        enabled = get_enabled(url, default_keys)               # dashboard-selected subset (or default)
+        return [r for r in roots if inst[r] in enabled]
+
+    def beat():
+        heartbeat(url, SOURCE, {inst[r]: last_ms[inst[r]] for r in roots if inst[r] in last_ms}, token)
+
     # initial backfill so LIVE populates immediately from real recent bars
     total = 0
-    for root in roots:
+    for root in active_roots():
         n = push_new(url, root, inst[root], period=backfill, token=token, last_ms=last_ms,
                      now_ms=int(time.time() * 1000))
         total += n
         log(f"backfill {root} ({inst[root]}): {n} bars")
+    beat()
     if once:
         return {"posted": total, "symbols": roots}
     log(f"streaming every {interval}s (Ctrl+C to stop)…")
     while True:
         time.sleep(interval)
-        for root in roots:
+        for root in active_roots():
             try:
                 n = push_new(url, root, inst[root], period=poll_period, token=token,
                              last_ms=last_ms, now_ms=int(time.time() * 1000))
@@ -113,6 +147,7 @@ def run(url, symbols, *, token=None, backfill="2d", poll_period="1d", interval=6
                     total += n
             except Exception as e:
                 log(f"{root}: poll error {type(e).__name__}: {e}")
+        beat()
 
 
 def main() -> None:

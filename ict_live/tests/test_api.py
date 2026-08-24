@@ -37,6 +37,22 @@ def test_root_redirects_to_report():
     assert r.status_code in (307, 308) and r.headers["location"] == "/report.html"
 
 
+def test_feed_control_and_heartbeat():
+    c = _client()
+    # default: no restriction, and /report advertises the known instruments
+    assert c.get("/feed/control").json()["enabled"] is None
+    rep = c.get("/report").json()
+    assert "CME_MINI:MNQ1!" in rep["instruments"] and rep["feed"] is None
+    # dashboard sets an enabled subset (unknown symbols filtered out)
+    c.post("/feed/control", json={"enabled": ["CME_MINI:MNQ1!", "BOGUS"]})
+    assert c.get("/feed/control").json()["enabled"] == ["CME_MINI:MNQ1!"]
+    # a feed heartbeat shows up in /report so the dashboard can display provenance
+    c.post("/feed/heartbeat", json={"source": "TradingView Desktop (MCP, real-time)",
+                                    "symbols": ["CME_MINI:MNQ1!"], "bars": {"CME_MINI:MNQ1!": 1}})
+    fed = c.get("/report").json()["feed"]
+    assert fed["source"].startswith("TradingView") and "received_ms" in fed
+
+
 def test_webhook_accepts_and_auth():
     c = _client(token="tok")
     p = _payload(datetime(2026, 6, 1, 20, 0, tzinfo=ET))

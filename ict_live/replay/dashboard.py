@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import tempfile
 import threading
+import urllib.error
 import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -217,6 +218,30 @@ function kpis(s,opens){
     ['open',opens]];
   return '<div class=kpis>'+t.map(([k,v])=>`<div class=kpi><span>${k}</span><b class="${cls(typeof v==='number'?v:0)}">${v}</b></div>`).join('')+'</div>';
 }
+function sourcePanel(rep){
+  const f=rep.feed;
+  if(!f) return '<div class=card><h2 style=margin-top:0>Data source</h2><span class=mut>No feed connected — start a real-time (MCP) or yfinance feed.</span></div>';
+  const now=Date.now();
+  const ages=(f.symbols||[]).map(s=>{const t=(f.bars||{})[s];const a=t?Math.round((now-t)/60000):null;
+    return '<span class=chip>'+s+' <b>'+(a==null?'—':a+'m ago')+'</b></span>';}).join('');
+  const beat=f.received_ms?Math.round((now-f.received_ms)/1000):null;
+  return '<h2>Data source</h2><div class=card><div class=strip>'+
+    '<span class=chip>source <b>'+fmt(f.source)+'</b></span>'+
+    '<span class=chip>heartbeat <b>'+(beat==null?'—':beat+'s ago')+'</b></span></div>'+
+    '<div class=strip style=margin-top:6px>'+(ages||'<span class=mut>waiting for bars…</span>')+'</div></div>';
+}
+function togglePanel(rep){
+  const inst=rep.instruments||[]; const en=rep.enabled;      // null = all enabled
+  if(!inst.length) return '';
+  const boxes=inst.map(s=>{const on=(en==null)||en.includes(s);
+    return '<label class=sym><input type=checkbox '+(on?'checked':'')+' value="'+s+'" onchange="postControl()"> '+s+'</label>';}).join('');
+  return '<h2>Symbols (feed)</h2><div class=card><div class=strip id=toggles>'+boxes+'</div>'+
+    '<div class=mut style=margin-top:6px>toggle which symbols the feed streams</div></div>';
+}
+async function postControl(){
+  const en=[...document.querySelectorAll('#toggles input:checked')].map(c=>c.value);
+  try{await fetch('/live/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:en})});}catch(e){}
+}
 function liveTables(rep){
   const s=rep.closed_summary||{}, h=rep.health||{};
   const strip=`<div class=strip>
@@ -234,7 +259,8 @@ function liveTables(rep){
     <td class=num>${num(x.exit_target)}</td><td class=num>${num(x.confidence)}</td><td>${fmt(x.weakest_factor)}</td>
     <td>${fmt(r.manipulation)}</td><td>${fmt(r.mss)}</td><td>${fmt(r.fvg)}</td><td>${fmt(r.dealing_range)}</td></tr>`;}).join('')
     ||'<tr><td colspan=13 class=mut>no signals yet</td></tr>';
-  return `<h2>Actionable now</h2>${tickets(rep)}
+  return `${sourcePanel(rep)}${togglePanel(rep)}
+    <h2>Actionable now</h2>${tickets(rep)}
     <h2>Performance (closed trades)</h2>${kpis(s,(rep.open_trades||[]).length)}
     <h2>Closed trades</h2><div class=scroll><table>
       <tr><th>closed<th>symbol<th>dir<th>result<th>R<th>MFE<th>MAE<th>bars</tr>${closedR}</table></div>
@@ -308,7 +334,7 @@ def _page(symbols: list[str]) -> bytes:
     return _PAGE.replace("__OPTS__", opts).encode()
 
 
-def make_handler(jobs: JobManager, symbols: list[str], live_fetch=None):
+def make_handler(jobs: JobManager, symbols: list[str], live_fetch=None, live_url=None):
     live_fetch = live_fetch or (lambda: {"connected": False, "error": "no live url configured"})
 
     class H(BaseHTTPRequestHandler):
@@ -343,10 +369,22 @@ def make_handler(jobs: JobManager, symbols: list[str], live_fetch=None):
             return self._send(404, {"error": "not found"})
 
         def do_POST(self):
-            if urlparse(self.path).path != "/run":
-                return self._send(404, {"error": "not found"})
+            path = urlparse(self.path).path
             n = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+            raw = self.rfile.read(n) if n else b"{}"
+            if path == "/live/control":                        # forward symbol toggles to the live service
+                if not live_url:
+                    return self._send(503, {"error": "no live url"})
+                try:
+                    req = urllib.request.Request(live_url.rstrip("/") + "/feed/control", data=raw,
+                                                 headers={"Content-Type": "application/json"})
+                    with urllib.request.urlopen(req, timeout=3) as r:
+                        return self._send(200, json.loads(r.read().decode()))
+                except Exception as e:
+                    return self._send(502, {"error": f"{type(e).__name__}: {e}"})
+            if path != "/run":
+                return self._send(404, {"error": "not found"})
+            body = json.loads(raw or b"{}")
             syms = [s for s in body.get("symbols", []) if s in symbols]
             if not syms:
                 return self._send(400, {"error": "no valid symbols"})
@@ -365,7 +403,8 @@ def main() -> None:
     ns = ap.parse_args()
     symbols = REPLAY.available_symbols() or ["MES", "MNQ"]
     jobs = JobManager()
-    handler = make_handler(jobs, symbols, live_fetch=lambda: _fetch_live(ns.live_url))
+    handler = make_handler(jobs, symbols, live_fetch=lambda: _fetch_live(ns.live_url),
+                           live_url=ns.live_url)
     port = ns.port
     for _ in range(20):
         try:

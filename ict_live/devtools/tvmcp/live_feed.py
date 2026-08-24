@@ -26,9 +26,12 @@ import time
 
 from ict_live import config as C
 from ict_live.devtools.tvmcp.client import TvClient
-from ict_live.live.feed_bridge import _post, _reachable   # reuse POST + preflight (allowed direction)
+# reuse POST + preflight + control/heartbeat (devtools→live is the allowed import direction)
+from ict_live.live.feed_bridge import _post, _reachable, get_enabled, heartbeat
 
 SCHEMA = "ict_live.bar.v1"
+SOURCE = "TradingView Desktop (MCP, real-time)"
+DEFAULT_SYMBOLS = ["CME_MINI:MNQ1!", "CME_MINI:MES1!"]
 
 
 def chart_symbol(tv: TvClient) -> str | None:
@@ -66,8 +69,17 @@ def push_new(tv, url, symbol, *, token, last_ms: dict, log=print) -> int:
     return posted
 
 
-def run(url, *, symbol=None, token=None, interval=15, once=False, tv_binary=None, tv_cwd=None,
-        log=print) -> dict:
+def _pump(tv, url, sym, *, token, last_ms, load_wait, log) -> int:
+    """Switch the chart to `sym` (1m) and POST its newly-closed bars. Returns count posted."""
+    tv.set_symbol(sym)
+    tv.set_timeframe("1")
+    if load_wait:
+        time.sleep(load_wait)                                     # let the chart load the new symbol
+    return push_new(tv, url, sym, token=token, last_ms=last_ms, log=log)
+
+
+def run(url, *, symbols=None, token=None, interval=15, once=False, load_wait=1.5,
+        tv_binary=None, tv_cwd=None, log=print) -> dict:
     tv = TvClient(binary=tv_binary, cwd=tv_cwd)
     if not tv.available():
         raise SystemExit("TradingView MCP `tv` CLI not reachable — set TV_CLI and ensure TradingView "
@@ -75,38 +87,48 @@ def run(url, *, symbol=None, token=None, interval=15, once=False, tv_binary=None
     if not _reachable(url):
         raise SystemExit(f"live service not reachable at {url} — start it first: "
                          f"python -m ict_live.live.serve")
-    if symbol:
-        tv.set_symbol(symbol)
-    sym = symbol or chart_symbol(tv)
-    if sym not in C.INSTRUMENTS:
-        raise SystemExit(f"chart symbol {sym!r} is not a known instrument {sorted(C.INSTRUMENTS)} — "
-                         f"chart one of them (e.g. CME_MINI:MNQ1!)")
-    tv.set_timeframe("1")                                          # feed needs 1-minute bars
-    log(f"TradingView live feed: {sym} -> {url}  (real-time via MCP)")
+    wanted = symbols or DEFAULT_SYMBOLS
+    unknown = [s for s in wanted if s not in C.INSTRUMENTS]
+    if unknown:
+        raise SystemExit(f"unknown symbols {unknown}; must be in {sorted(C.INSTRUMENTS)} "
+                         f"(e.g. CME_MINI:MNQ1!)")
+    if len(wanted) > 1:
+        log(f"NOTE: feeding {len(wanted)} symbols round-robin flips the TradingView chart between "
+            f"them each cycle — dedicate this chart to the feed.")
+    log(f"TradingView real-time feed: {wanted} -> {url}")
     last_ms: dict[str, int] = {}
-    n = push_new(tv, url, sym, token=token, last_ms=last_ms, log=log)
-    log(f"seeded {n} closed bars")
+
+    def cycle():
+        enabled = [s for s in get_enabled(url, wanted) if s in C.INSTRUMENTS]   # dashboard toggles
+        for sym in enabled:
+            try:
+                k = _pump(tv, url, sym, token=token, last_ms=last_ms, load_wait=load_wait, log=log)
+                if k:
+                    log(f"{sym}: +{k} bars")
+            except Exception as e:
+                log(f"{sym}: error {type(e).__name__}: {e}")
+        heartbeat(url, SOURCE, dict(last_ms), token)
+        return enabled
+
+    en = cycle()
+    log(f"seeded from {en}")
     if once:
-        return {"symbol": sym, "posted": n}
+        return {"symbols": en, "posted": sum(1 for _ in last_ms)}
     while True:
         time.sleep(interval)
-        try:
-            k = push_new(tv, url, sym, token=token, last_ms=last_ms, log=log)
-            if k:
-                log(f"{sym}: +{k} bars")
-        except Exception as e:
-            log(f"poll error {type(e).__name__}: {e}")
+        cycle()
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Real-time TradingView (MCP) feed into the live webhook.")
     ap.add_argument("--url", default="http://127.0.0.1:8000")
-    ap.add_argument("--symbol", default=None, help="chart this symbol (default: use current chart)")
+    ap.add_argument("--symbols", nargs="+", default=None,
+                    help=f"chart symbols to round-robin (default {DEFAULT_SYMBOLS})")
     ap.add_argument("--token", default=None)
     ap.add_argument("--interval", type=int, default=15, help="poll seconds")
     ap.add_argument("--once", action="store_true")
     ns = ap.parse_args()
-    run(ns.url, symbol=ns.symbol, token=ns.token, interval=ns.interval, once=ns.once)
+    run(ns.url, symbols=ns.symbols, token=ns.token, interval=ns.interval, once=ns.once)
 
 
 if __name__ == "__main__":

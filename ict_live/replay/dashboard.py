@@ -118,6 +118,30 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .chip{background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:4px 12px;font-size:12px;color:var(--mut)}
  .chip b{color:var(--ink)}
  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin:10px 0}
+ /* ---- feed panel (data source + per-symbol streaming, merged) ---- */
+ .feedhead{display:flex;align-items:center;gap:11px;padding-bottom:13px;border-bottom:1px solid var(--line)}
+ .feedname{font-weight:700;color:var(--ink);font-size:14px}
+ .feedsub{color:var(--mut);font-size:12px;margin-top:2px}
+ .fdot{width:10px;height:10px;border-radius:50%;background:var(--mut);flex:none}
+ .fdot.ok{background:var(--long);box-shadow:0 0 0 3px var(--long-bg)}
+ .fdot.no{background:var(--warn);box-shadow:0 0 0 3px var(--warn-bg)}
+ @media(prefers-reduced-motion:no-preference){.fdot.ok{animation:pulse 2s ease-in-out infinite}}
+ @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+ .feedgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:8px;margin-top:12px}
+ .feedrow{display:flex;align-items:center;gap:9px;padding:9px 12px;border:1px solid var(--line);
+   border-radius:10px;background:var(--panel2);cursor:pointer;transition:border-color .12s,background .12s;user-select:none}
+ .feedrow:hover{border-color:var(--mut)}
+ .feedrow.on{border-color:var(--accent)}
+ @supports(background:color-mix(in srgb,red,blue)){.feedrow.on{background:color-mix(in srgb,var(--accent) 9%,var(--panel2))}}
+ .feedrow input{position:absolute;opacity:0;width:0;height:0}
+ .rdot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block;background:#5b6474}
+ .rdot.ok{background:var(--long)} .rdot.stale{background:var(--warn)} .rdot.wait{background:var(--info)}
+ .rsym{font-family:"SF Mono",ui-monospace,Menlo,monospace;font-weight:600;font-size:12.5px;color:var(--ink)}
+ .rname{color:var(--mut);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ .rage{margin-left:auto;font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:11px;color:var(--mut);flex:none}
+ .rage.ok{color:var(--long)} .rage.stale{color:var(--warn)}
+ .feednote{color:var(--mut);font-size:11.5px;margin-top:12px;line-height:1.6}
+ .feednote .rdot{margin:0 3px -1px 8px}
  /* ---- actionable trade tickets (the hero) ---- */
  .tickets{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
  .ticket{background:var(--panel);border:1px solid var(--line);border-left:6px solid var(--mut);
@@ -239,29 +263,38 @@ function kpis(s,opens){
     ['open',opens]];
   return '<div class=kpis>'+t.map(([k,v])=>`<div class=kpi><span>${k}</span><b class="${cls(typeof v==='number'?v:0)}">${v}</b></div>`).join('')+'</div>';
 }
-function sourcePanel(rep){
-  const f=rep.feed;
-  if(!f) return '<div class=card><h2 style=margin-top:0>Data source</h2><span class=mut>No feed connected — start a real-time (MCP) or yfinance feed.</span></div>';
-  const now=Date.now(); const nm=rep.instrument_names||{};
-  const ages=(f.symbols||[]).map(s=>{const t=(f.bars||{})[s];const a=t?Math.round((now-t)/60000):null;
-    return '<span class=chip>'+s+(nm[s]?' ('+nm[s]+')':'')+' <b>'+(a==null?'—':a+'m ago')+'</b></span>';}).join('');
-  const beat=f.received_ms?Math.round((now-f.received_ms)/1000):null;
-  return '<h2>Data source</h2><div class=card><div class=strip>'+
-    '<span class=chip>source <b>'+fmt(f.source)+'</b></span>'+
-    '<span class=chip>heartbeat <b>'+(beat==null?'—':beat+'s ago')+'</b></span></div>'+
-    '<div class=strip style=margin-top:6px>'+(ages||'<span class=mut>waiting for bars…</span>')+'</div></div>';
-}
-function togglePanel(rep){
-  const inst=rep.instruments||[]; if(!inst.length) return '';
-  const nm=rep.instrument_names||{};
-  // effective active set: an explicit dashboard selection if set, else what the feed reports streaming
-  const active = (rep.enabled!=null) ? rep.enabled : (((rep.feed||{}).symbols)||[]);
-  const boxes=inst.map(s=>{const on=active.includes(s);
-    return '<label class=sym><input type=checkbox '+(on?'checked':'')+' value="'+s+'" onchange="postControl()"> '+
-      s+(nm[s]?' <span class=mut>'+nm[s]+'</span>':'')+'</label>';}).join('');
-  return '<h2>Symbols (feed)</h2><div class=card><div class=strip id=toggles>'+boxes+'</div>'+
-    '<div class=mut style=margin-top:6px>checked = actually streaming. Toggling adds/removes a symbol '+
-    'from the feed (the real-time TradingView feed round-robins one chart, so more symbols = slower cycle).</div></div>';
+// Merged "Feed" card: the data source + heartbeat on top, then one row per symbol combining its
+// streaming toggle with a live freshness dot + last-bar age (previously two separate sections).
+function feedPanel(rep){
+  const f=rep.feed; const inst=rep.instruments||[]; const nm=rep.instrument_names||{};
+  const now=Date.now();
+  const active = (rep.enabled!=null) ? rep.enabled : ((f&&f.symbols)||[]);
+  const bars=(f&&f.bars)||{};
+  const beat=(f&&f.received_ms!=null)?Math.round((now-f.received_ms)/1000):null;
+  const live = f && beat!=null && beat<90;                          // heartbeat fresh within 90s
+  const sub = f ? ('heartbeat '+(beat==null?'—':beat+'s ago')+' · '+active.length+' of '+inst.length+' symbols streaming')
+                : 'start a real-time (MCP) or yfinance feed';
+  const head = '<div class=feedhead><span class="fdot '+(f?(live?'ok':'no'):'')+'"></span>'+
+    '<div><div class=feedname>'+(f?fmt(f.source):'No feed connected')+'</div>'+
+    '<div class=feedsub>'+sub+'</div></div></div>';
+  if(!inst.length) return '<h2>Feed</h2><div class=card>'+head+'</div>';
+  const rows=inst.map(s=>{
+    const on=active.includes(s);
+    const t=bars[s]; const a=(on&&t)?Math.round((now-t)/60000):null;
+    const state = !on ? 'off' : (a==null ? 'wait' : (a<=3 ? 'ok' : 'stale'));
+    const age   = !on ? 'off' : (a==null ? '…' : (a<1 ? '<1m' : a+'m ago'));
+    return '<label class="feedrow '+(on?'on':'')+'">'+
+      '<input type=checkbox '+(on?'checked':'')+' value="'+s+'" onchange="postControl()">'+
+      '<span class="rdot '+state+'"></span>'+
+      '<span class=rsym>'+s+'</span>'+
+      '<span class=rname>'+fmt(nm[s]||'')+'</span>'+
+      '<span class="rage '+state+'">'+age+'</span></label>';}).join('');
+  return '<h2>Feed</h2><div class=card>'+head+
+    '<div class=feedgrid id=toggles>'+rows+'</div>'+
+    '<div class=feednote>Click a symbol to start or stop streaming it. Freshness: '+
+    '<span class="rdot ok"></span> live · <span class="rdot stale"></span> stale (&gt;3m) · '+
+    '<span class="rdot off"></span> off. The real-time TradingView feed round-robins one chart, '+
+    'so more symbols means a slower cycle.</div></div>';
 }
 async function postControl(){
   const en=[...document.querySelectorAll('#toggles input:checked')].map(c=>c.value);
@@ -284,7 +317,7 @@ function liveTables(rep){
     <td class=num>${num(x.exit_target)}</td><td class=num>${num(x.confidence)}</td><td>${fmt(x.weakest_factor)}</td>
     <td>${fmt(r.manipulation)}</td><td>${fmt(r.mss)}</td><td>${fmt(r.fvg)}</td><td>${fmt(r.dealing_range)}</td></tr>`;}).join('')
     ||'<tr><td colspan=13 class=mut>no signals yet</td></tr>';
-  return `${sourcePanel(rep)}${togglePanel(rep)}
+  return `${feedPanel(rep)}
     <h2>Actionable now</h2>${tickets(rep)}
     <h2>Performance (closed trades)</h2>${kpis(s,(rep.open_trades||[]).length)}
     <h2>Closed trades</h2><div class=scroll><table>

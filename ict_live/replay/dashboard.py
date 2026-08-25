@@ -529,7 +529,10 @@ async function pollLive(){
       <p class=mut>Start it with <code>python -m ict_live.live.serve</code> and (for data) the feed bridge,
       then this fills in automatically.<br>${fmt(d.error)}</p></div>`;return;}
     $('#cdot').className='dot ok';$('#livestate').textContent='live · connected';
-    $('#live-body').innerHTML=liveTables(d.report);
+    const rep=d.report||{};
+    // the symbols that are ON in the LIVE tab (enabled/streaming) — V2 mirrors this set
+    window._liveActive=(rep.enabled!=null)?rep.enabled:(((rep.feed||{}).symbols)||[]);
+    $('#live-body').innerHTML=liveTables(rep);
   }catch(e){$('#cdot').className='dot no';$('#livestate').textContent='poll error';}
 }
 function openReasoning(sym){$('#rmodal-title').textContent=sym+' — reasoning';
@@ -546,9 +549,19 @@ setInterval(pollLive,4000);pollLive();
 
 // ---------------- V2 (experimental, advisory) ----------------
 function v2Tables(rep){
-  const syms=rep.symbols||{}; const names=Object.keys(syms).sort();
+  const syms=rep.symbols||{};
+  // mirror the LIVE tab: show ONLY the symbols enabled/streaming there (fall back to all if the live
+  // tab hasn't reported its enabled set yet)
+  const act=window._liveActive;
+  let names=Object.keys(syms).sort();
+  if(Array.isArray(act)) names=names.filter(n=>act.includes(n));
   const banner='<div class=warn>&#9879; V2 (experimental) — ICT cascade 4H context → 1H setup → 15m confirmation → 1m execution, side-by-side with v1, ADVISORY ONLY, not validated.</div>';
-  if(!names.length) return banner+'<div class="card mut">No v2 data yet — waiting for the shared feed to accumulate bars.</div>';
+  if(!names.length){
+    const why=(Array.isArray(act)&&act.length===0)
+      ? 'No symbols are streaming in the Live tab — enable one there and it appears here.'
+      : 'No v2 data yet — waiting for the shared feed to accumulate bars.';
+    return banner+`<div class="card mut">${why}</div>`;
+  }
   const sideOf=d=>d==='long'?'long':(d==='short'?'short':'flat');
   const cards=names.map(sym=>{
     const s=syms[sym], c=s.context||{}, st=s.setup||{}, cf=s.confirmation||{}, e=s.execution||{}, u=s.updated||{}, tf=s.timeframes||{};

@@ -169,7 +169,7 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .placedtag{background:var(--info-bg);color:var(--info);border-radius:999px;padding:3px 10px;font-size:11px;font-weight:800}
  .decisions{color:var(--mut);font-size:12px;margin-top:10px}
  .v2dec{border-radius:999px;padding:2px 10px;font-size:11px;font-weight:800;letter-spacing:.03em;
-   background:var(--panel2);color:var(--mut);border:1px solid var(--line)}
+   background:var(--panel2);color:var(--mut);border:1px solid var(--line);white-space:nowrap}
  .v2dec.long{color:var(--long);background:var(--long-bg);border-color:transparent}
  .v2dec.short{color:var(--short);background:var(--short-bg);border-color:transparent}
  .modal{position:fixed;inset:0;background:#000a;display:none;z-index:50;padding:22px}
@@ -258,15 +258,18 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .badge{font-weight:800;font-size:18px;letter-spacing:.03em;padding:2px 10px;border-radius:8px}
  .badge.long{color:var(--long);background:var(--long-bg)} .badge.short{color:var(--short);background:var(--short-bg)}
  .thead .sym{font-weight:700;font-size:16px} .thead .tf{color:var(--mut);font-size:12px}
- .thead .lastpx{font-family:"SF Mono",ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;
-   font-size:13px;font-weight:700;color:var(--mut);display:inline-flex;align-items:center;gap:3px}
- .thead .lastpx.up{color:var(--long)} .thead .lastpx.down{color:var(--short)}
- .thead .lastpx i{font-style:normal;font-size:11px}
- .thead .dirtag{font-size:10px;font-weight:800;letter-spacing:.04em;padding:2px 7px;border-radius:5px;
+ /* V2 card header: symbol · last price+arrow · (bias when NO-TRADE) · decision — one tidy row */
+ .v2head{gap:9px;flex-wrap:nowrap;min-width:0}
+ .v2head .sym{font-size:14px;white-space:nowrap;flex:none}
+ .v2head .lastpx{font-family:"SF Mono",ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;
+   font-size:13px;font-weight:700;color:var(--mut);display:inline-flex;align-items:center;gap:2px;white-space:nowrap;flex:none}
+ .v2head .lastpx.up{color:var(--long)} .v2head .lastpx.down{color:var(--short)}
+ .v2head .lastpx i{font-style:normal;font-size:10px}
+ .v2head .thead-right{margin-left:auto;display:flex;align-items:center;gap:6px;flex:none}
+ .v2head .dirtag{font-size:10px;font-weight:800;letter-spacing:.04em;padding:2px 8px;border-radius:999px;white-space:nowrap;
    color:var(--mut);background:var(--panel2);border:1px solid var(--line)}
- .thead .dirtag.long{color:var(--long);background:var(--long-bg);border-color:transparent}
- .thead .dirtag.short{color:var(--short);background:var(--short-bg);border-color:transparent}
- .ticket .thead .v2dec{margin-left:auto}
+ .v2head .dirtag.long{color:var(--long);background:var(--long-bg);border-color:transparent}
+ .v2head .dirtag.short{color:var(--short);background:var(--short-bg);border-color:transparent}
  .pill{padding:2px 9px;border-radius:999px;font-size:11px;font-weight:800;letter-spacing:.03em}
  .pill.place{background:var(--warn-bg);color:var(--warn)} .pill.in{background:var(--info-bg);color:var(--info)}
  .instr{color:var(--mut);font-size:12.5px;margin:10px 0 8px}
@@ -582,14 +585,16 @@ function v2Tables(rep){
     const confSide=(cf.gated>0)?sideOf(cf.direction):'flat';
     const top=e.top; const execSide=top?sideOf(top.direction):'flat';
     const dec=top?execSide.toUpperCase():'NO-TRADE';
-    // last traded price + its tick direction, and the 4H context bias, shown next to the symbol
+    // last traded price + its tick direction, shown next to the symbol
     const lst=s.last; const larr=lst?(lst.dir==='up'?'▲':lst.dir==='down'?'▼':'·'):'';
     const lastHtml=lst?`<span class="lastpx ${lst.dir||''}">${num(lst.price)}<i>${larr}</i></span>`:'';
-    const biasHtml=`<span class="dirtag ${biasSide}">${(c.bias||'—').toUpperCase()}</span>`;
+    // direction: when there IS a trade the decision pill already shows it; otherwise show the 4H bias
+    const biasHtml=(execSide==='flat'&&c.bias)?`<span class="dirtag ${biasSide}">${c.bias.toUpperCase()}</span>`:'';
     const execLine=top?`${top.direction.toUpperCase()} entry ${num(top.entry)} · stop ${num(top.stop)} · target ${num(top.target)}${top.ltf_confirmed?' · ✓':''}`:fmt(e.decision);
     const gline=(layer,x)=>`<button type=button class=candbtn onclick="openCandidates('${sym}','${layer}')"><b class=g-pass>${fmt(x.passed)}</b> passed<i></i><b class=g-inc>${fmt(x.incomplete)}</b> incomplete<i></i><b class=g-rej>${fmt(x.rejected)}</b> rejected</button>`;
     return `<div class="ticket ${execSide}">
-      <div class=thead><span class=sym>${sym}</span>${lastHtml}${biasHtml}<span class="v2dec ${execSide}">${dec}</span></div>
+      <div class="thead v2head"><span class=sym title="${sym}">${sym.includes(':')?sym.split(':')[1]:sym}</span>${lastHtml}
+        <span class=thead-right>${biasHtml}<span class="v2dec ${execSide}">${dec}</span></span></div>
       <div class=reads>
         <div class="read ${biasSide}"><div class=rhd><span class=rsy>4H</span><span class=rnn>context</span></div>
           <div class=why><span class=wc>bias <b>${fmt(c.bias)}</b></span><span class=wc>range <b>${drs}</b></span><span class=wc>draw <b>${objs}</b></span></div>

@@ -9,23 +9,43 @@
 #
 # On start it WARMS UP the engine's history with a one-time yfinance backfill (WARMUP_DAYS, default 7)
 # so signals can form immediately, then switches to the real-time source. Set WARMUP_DAYS=0 to skip.
+# Warm-up primes the FULL instrument universe (all config.INSTRUMENTS), not just the streamed symbols,
+# so every symbol has history at startup; override the warm-up set with WARMUP_SYMBOLS="A B C".
 #
 # For real-time TradingView, launch TradingView Desktop with the debug port once:
 #   open -a TradingView --args --remote-debugging-port=9222
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# Default set: Micro S&P, Micro Nasdaq, Micro Gold. Pass your own to override,
+# Default STREAMING set: Micro S&P, Micro Nasdaq, Micro Gold. Pass your own to override,
 # e.g.  ./run-live.sh CME_MINI:MNQ1! COMEX:GC1!
 if [ "$#" -gt 0 ]; then
   SYMBOLS=("$@")
+  USER_SYMBOLS=1
 else
   SYMBOLS=(CME_MINI:MES1! CME_MINI:MNQ1! COMEX_MINI:MGC1!)
+  USER_SYMBOLS=0
 fi
 COMPOSE="docker compose -f docker-compose.ict_live.yml"
 export TV_CLI="${TV_CLI:-node $HOME/dev/tradingview-mcp/src/cli/index.js}"
 PY="${PY:-.venv/bin/python}"; [ -x "$PY" ] || PY="python3"
 WARMUP_DAYS="${WARMUP_DAYS:-7}"
+
+# WARM-UP set = the FULL instrument universe (config.INSTRUMENTS), so every symbol the service knows
+# is primed with history at startup — not just the streamed defaults. If the user passed an explicit
+# symbol list, honour it for warm-up too; otherwise warm up everything. Override with WARMUP_SYMBOLS.
+if [ -n "${WARMUP_SYMBOLS:-}" ]; then
+  read -r -a WARMUP_SYMS <<< "$WARMUP_SYMBOLS"
+elif [ "$USER_SYMBOLS" = "1" ]; then
+  WARMUP_SYMS=("${SYMBOLS[@]}")
+else
+  ALL_SYMBOLS_STR="$("$PY" -c 'from ict_live import config as c; print(" ".join(c.INSTRUMENTS))' 2>/dev/null || true)"
+  if [ -n "$ALL_SYMBOLS_STR" ]; then
+    read -r -a WARMUP_SYMS <<< "$ALL_SYMBOLS_STR"
+  else
+    WARMUP_SYMS=("${SYMBOLS[@]}")   # fallback if config can't be read
+  fi
+fi
 
 # The store PERSISTS across runs; warm-up fetches only the delta since the last stored bar (always
 # forward of it, so the ingestor accepts it — no reset needed). Set RESET=1 to wipe and re-seed
@@ -57,8 +77,9 @@ curl -sf -X POST http://127.0.0.1:8000/live/mark-now -H 'Content-Type: applicati
 # fetches ONLY the delta since the last stored bar — the first run pulls ~${WARMUP_DAYS}d, later
 # runs pull just the gap. Historical bars aren't delayed, so this is safe.
 if [ "$WARMUP_DAYS" != "0" ]; then
-  echo "==> warming up history (yfinance delta backfill; up to ${WARMUP_DAYS}d on a fresh store)…"
-  "$PY" -m ict_live.live.feed_bridge --url http://127.0.0.1:8000 --symbols "${SYMBOLS[@]}" \
+  echo "==> warming up history for ALL ${#WARMUP_SYMS[@]} symbols (yfinance delta backfill; up to ${WARMUP_DAYS}d on a fresh store)…"
+  echo "    ${WARMUP_SYMS[*]}"
+  "$PY" -m ict_live.live.feed_bridge --url http://127.0.0.1:8000 --symbols "${WARMUP_SYMS[@]}" \
     --backfill "${WARMUP_DAYS}d" --once || echo "   (warm-up skipped/failed — continuing)"
 fi
 

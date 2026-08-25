@@ -108,10 +108,17 @@ class V2Live:
             p = s.gated[0].objective
             obj = {"kind": p.kind, "price": _px(p.price)}
         top = e.executables[0] if (e and e.executables) else None
+        tb = self.buf.get(self.trigger_tf) or []                  # last 1m bar = the latest price
+        last = tb[-1] if tb else None
+        last_dir = None
+        if last is not None:
+            last_dir = "up" if last.close > last.open else "down" if last.close < last.open else "flat"
         return {
             "timeframes": {"context": self.context_tf, "setup": self.setup_tf,
                            "confirm": self.confirm_tf, "trigger": self.trigger_tf},
             "updated": dict(self.updated),
+            "last": None if last is None else {"price": _px(last.close), "dir": last_dir,
+                                               "time": _et_iso(last.close_time)},
             "context": None if not c else {
                 "bias": c.bias,
                 "dealing_range": None if dr is None else {"low": _px(dr.low), "high": _px(dr.high),

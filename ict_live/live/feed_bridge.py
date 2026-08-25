@@ -179,10 +179,13 @@ def run(url, symbols, *, token=None, backfill="2d", poll_period="1d", interval=6
     # Warm-up: seed only the DELTA. Ask the service what it already stored and fetch only bars newer
     # than that (always forward of the last stored bar, so the ingestor accepts them — no reset). An
     # empty/unknown store falls back to the full `backfill` window.
+    # Prime EVERY requested symbol here (all `roots`), NOT just the dashboard-enabled/streaming subset:
+    # warm-up exists to give every symbol history at startup; the streaming loop below still respects
+    # the enabled toggles.
     last_store = get_last_bars(url)
     now0 = int(time.time() * 1000)
     total = 0
-    for root in active_roots():
+    for root in roots:
         tv = inst[root]
         ls = last_store.get(tv)
         if ls is not None:

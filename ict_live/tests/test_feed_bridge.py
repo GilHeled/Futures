@@ -80,17 +80,20 @@ def test_post_chart_never_raises_when_unreachable():
     assert FB.post_chart("http://127.0.0.1:9", "CME_MINI:MNQ1!", b"x") is False
 
 
-def test_run_respects_disabled_symbols(monkeypatch):
-    # dashboard disabled MNQ -> only MES is fed
+def test_warmup_primes_all_requested_even_when_disabled(monkeypatch):
+    # WARM-UP primes EVERY requested symbol for history, regardless of the dashboard's streaming
+    # toggle — priming history is the whole point. (The continuous streaming loop still respects the
+    # enabled subset via active_roots; only the one-shot backfill ignores it.)
     monkeypatch.setattr(FB, "_reachable", lambda url, timeout=3.0: True)
-    monkeypatch.setattr(FB, "get_enabled", lambda url, default: ["CME_MINI:MES1!"])
+    monkeypatch.setattr(FB, "get_enabled", lambda url, default: ["CME_MINI:MES1!"])   # MNQ disabled
+    monkeypatch.setattr(FB, "get_last_bars", lambda url: {})
     beats = []
     monkeypatch.setattr(FB, "heartbeat", lambda url, source, bars, token=None: beats.append((source, sorted(bars))))
     monkeypatch.setattr(FB, "fetch_1m", lambda root, period="2d": [_bar(0, 100)])
     posted = []
     monkeypatch.setattr(FB, "_post", lambda url, p, token: (posted.append(p["symbol"]), {"status": "accepted"})[1])
     rep = FB.run("http://x", ["MES", "MNQ"], once=True, log=lambda *a: None)
-    assert set(posted) == {"CME_MINI:MES1!"}          # MNQ disabled by the dashboard
+    assert set(posted) == {"CME_MINI:MES1!", "CME_MINI:MNQ1!"}    # warm-up backfills BOTH, disabled or not
     assert beats and "delayed" in beats[0][0].lower()
 
 

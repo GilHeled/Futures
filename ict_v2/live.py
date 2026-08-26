@@ -42,18 +42,22 @@ def _px(x):
 class V2Live:
     def __init__(self, context_tf: str = "4H", setup_tf: str = "1H", confirm_tf: str = "15m",
                  trigger_tf: str = "1m", window: int = _WINDOW, exec_window: int = _EXEC_WINDOW,
-                 refine_tf: str | None = None, min_stop: float | None = None):
+                 refine_tf: str | None = None, min_stop: float | None = None,
+                 anchor_tf: str | None = None):
         self.context_tf, self.setup_tf = context_tf, setup_tf
         self.confirm_tf, self.trigger_tf = confirm_tf, trigger_tf
         self.window, self.exec_window = window, exec_window
         self.refine_tf = refine_tf                           # None = MTF entry-refinement OFF (default)
-        # build every intraday TF we need, incl. the optional refine TF (e.g. 5m) for entry refinement
-        built = tuple(dict.fromkeys(tf for tf in (setup_tf, context_tf, confirm_tf, refine_tf)
+        self.anchor_tf = anchor_tf                           # None = no Daily/Weekly anchor (default); else "D"/"W"
+        # build every TF we need: intraday (5m/15m/1H/4H) + optional Daily/Weekly anchor (D/W need the
+        # session calendar, which BarBuilder supplies by default)
+        built = tuple(dict.fromkeys(tf for tf in (setup_tf, context_tf, confirm_tf, refine_tf, anchor_tf)
                                     if tf and tf != "1m"))
-        self.builder = BarBuilder(timeframes=built)          # reuse existing bar builder (1m -> 5m/15m/1H/4H)
+        self.builder = BarBuilder(timeframes=built)
         self.engine = MTFEngine(context_tf, setup_tf, confirm_tf, trigger_tf,
-                                refine_tf=refine_tf, min_stop=min_stop)
-        tfs = tuple(dict.fromkeys(tf for tf in (context_tf, setup_tf, confirm_tf, trigger_tf, refine_tf) if tf))
+                                refine_tf=refine_tf, min_stop=min_stop, anchor_tf=anchor_tf)
+        tfs = tuple(dict.fromkeys(tf for tf in (context_tf, setup_tf, confirm_tf, trigger_tf,
+                                                refine_tf, anchor_tf) if tf))
         self.buf = {tf: [] for tf in tfs}
         self.updated = {tf: None for tf in tfs}              # last-update time per timeframe (ISO)
 
@@ -64,12 +68,19 @@ class V2Live:
             del b[:-cap]
 
     def push_1m(self, bar):
-        """Feed one 1m bar. Order: context (4H) → setup (1H) → confirmation (15m) → trigger (1m)."""
+        """Feed one 1m bar. Order: [Daily/Weekly anchor] → context (4H) → setup (1H) → confirmation
+        (15m) → trigger (1m)."""
         closed = self.builder.add_1m(bar)
-        for cb in closed:                                    # context
+        if self.anchor_tf and self.anchor_tf not in (self.context_tf, self.setup_tf, self.confirm_tf):
+            for cb in closed:                                # Daily/Weekly anchor — update BEFORE context
+                if cb.timeframe == self.anchor_tf:
+                    self._append(self.anchor_tf, cb, self.window)
+                    self.updated[self.anchor_tf] = _et_iso(cb.close_time)
+        for cb in closed:                                    # context (optionally anchored by Daily/Weekly)
             if cb.timeframe == self.context_tf:
                 self._append(self.context_tf, cb, self.window)
-                self.engine.on_context_close(self.buf[self.context_tf])
+                ab = self.buf.get(self.anchor_tf) if self.anchor_tf else None
+                self.engine.on_context_close(self.buf[self.context_tf], anchor_bars=ab)
                 self.updated[self.context_tf] = _et_iso(cb.close_time)
         if self.refine_tf and self.refine_tf not in (self.context_tf, self.setup_tf, self.confirm_tf):
             for cb in closed:                                # refine TF (e.g. 5m) — update BEFORE setup
@@ -128,12 +139,13 @@ class V2Live:
         return {
             "timeframes": {"context": self.context_tf, "setup": self.setup_tf,
                            "confirm": self.confirm_tf, "trigger": self.trigger_tf,
-                           "refine": self.refine_tf},
+                           "refine": self.refine_tf, "anchor": self.anchor_tf},
             "updated": dict(self.updated),
             "last": None if last is None else {"price": _px(last.close), "dir": last_dir,
                                                "time": _et_iso(last.close_time)},
             "context": None if not c else {
-                "bias": c.bias,
+                "bias": c.bias, "anchor_bias": getattr(c, "anchor_bias", ""),
+                "anchor_tf": getattr(c, "anchor_tf", ""),
                 "dealing_range": None if dr is None else {"low": _px(dr.low), "high": _px(dr.high),
                                                           "ce": _px(dr.ce), "direction": dr.direction},
                 "liquidity_draws": len(c.liquidity), "liquidity_objective": obj},

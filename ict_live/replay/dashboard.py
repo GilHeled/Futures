@@ -567,8 +567,8 @@ function v2Tables(rep){
   const act=window._liveActive;
   let names=Object.keys(syms).sort();
   if(Array.isArray(act)) names=names.filter(n=>act.includes(n));
-  const rtf=(((syms[names[0]]||{}).timeframes)||{}).refine;
-  const banner=`<div class=warn>&#9879; V2 (experimental) — ICT cascade 4H context → 1H setup → 15m confirmation → 1m execution${rtf?` · <b>entry-refine ${rtf}</b>`:''}, side-by-side with v1, ADVISORY ONLY, not validated.</div>`;
+  const _tf0=((syms[names[0]]||{}).timeframes)||{}; const rtf=_tf0.refine, atf=_tf0.anchor;
+  const banner=`<div class=warn>&#9879; V2 (experimental) — ICT cascade 4H context → 1H setup → 15m confirmation → 1m execution${atf?` · <b>${atf}-anchor</b>`:''}${rtf?` · <b>entry-refine ${rtf}</b>`:''}, side-by-side with v1, ADVISORY ONLY, not validated.</div>`;
   if(!names.length){
     const why=(Array.isArray(act)&&act.length===0)
       ? 'No symbols are streaming in the Live tab — enable one there and it appears here.'
@@ -598,7 +598,7 @@ function v2Tables(rep){
         <span class=thead-right>${biasHtml}<span class="v2dec ${execSide}">${dec}</span></span></div>
       <div class=reads>
         <div class="read ${biasSide}"><div class=rhd><span class=rsy>4H</span><span class=rnn>context</span></div>
-          <div class=why><span class=wc>bias <b>${fmt(c.bias)}</b></span><span class=wc>range <b>${drs}</b></span><span class=wc>draw <b>${objs}</b></span></div>
+          <div class=why><span class=wc>bias <b>${fmt(c.bias)}</b></span>${c.anchor_tf?`<span class=wc>${c.anchor_tf}-anchor <b>${fmt(c.anchor_bias||'neutral')}</b></span>`:''}<span class=wc>range <b>${drs}</b></span><span class=wc>draw <b>${objs}</b></span></div>
           <div class=rfoot>updated ${fmt(u[tf.context])}</div></div>
         <div class="read ${setupSide}"><div class=rhd><span class=rsy>1H</span><span class=rnn>setup</span></div>
           <div class=rln>${gline('setup',st)}</div>

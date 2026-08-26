@@ -25,9 +25,11 @@ from ict_v2 import align
 class HTFContext:
     """Stage 1 — the higher-timeframe context: bias, dealing range, and the liquidity draw."""
     tf: str
-    bias: str                              # "long" | "short" | "neutral"
+    bias: str                              # "long" | "short" | "neutral" (after any anchor veto)
     dealing_range: object = None           # v1 DealingRange (premium/discount/EQ) or None
     liquidity: list = field(default_factory=list)   # active ERL pools = the draw on liquidity
+    anchor_bias: str = ""                  # Daily/Weekly anchor bias ("" if no anchor); vetoes the 4H bias
+    anchor_tf: str = ""                    # the anchor timeframe ("D"/"W"), "" if none
 
     def zone(self, price: float) -> Optional[str]:
         """premium / discount / equilibrium of `price` within the HTF dealing range (None if no range)."""
@@ -252,13 +254,31 @@ class MTFState:
 
 
 # ---- the three stages -------------------------------------------------------------------------
-def htf_context(bars, tf: str) -> HTFContext:
+def _bias_from_range(dr) -> str:
+    return "long" if (dr and dr.direction == "up") else "short" if (dr and dr.direction == "down") else "neutral"
+
+
+def htf_bias_of(bars, tf: str) -> str:
+    """Directional bias from a timeframe's dealing-range leg — used for the Daily/Weekly ANCHOR."""
+    ms = v1.analyze(bars, tf)
+    return _bias_from_range(ms.ranges[0] if ms.ranges else None)
+
+
+def htf_context(bars, tf: str, *, anchor: str = "", anchor_tf: str = "") -> HTFContext:
     """Stage 1: run the engine on the HTF and keep the context layer (bias + dealing range + draw).
-    Bias = the direction of the last completed structural leg (up→long, down→short, else neutral)."""
+    Bias = the direction of the last completed structural leg (up→long, down→short, else neutral).
+
+    OPTIONAL DAILY/WEEKLY ANCHOR: if `anchor` (a higher-TF bias 'long'/'short' from Daily or Weekly)
+    is given, the 4H bias must AGREE with it — a 4H bias that OPPOSES the anchor is downgraded to
+    NEUTRAL ("trade only with the higher timeframe"). A neutral/empty anchor leaves the 4H bias as-is
+    (it never forces a direction the 4H doesn't have). Default off → standard behaviour unchanged."""
     ms = v1.analyze(bars, tf)
     dr = ms.ranges[0] if ms.ranges else None
-    bias = "long" if (dr and dr.direction == "up") else "short" if (dr and dr.direction == "down") else "neutral"
-    return HTFContext(tf=tf, bias=bias, dealing_range=dr, liquidity=list(ms.active_erl))
+    bias = _bias_from_range(dr)
+    if anchor in ("long", "short") and bias in ("long", "short") and bias != anchor:
+        bias = "neutral"                                 # 4H opposes the Daily/Weekly anchor → stand aside
+    return HTFContext(tf=tf, bias=bias, dealing_range=dr, liquidity=list(ms.active_erl),
+                      anchor_bias=(anchor or ""), anchor_tf=(anchor_tf or ""))
 
 
 def generate_candidates(ms, context: HTFContext) -> list:
@@ -503,9 +523,13 @@ def execution_for(bars, tf: str, context, setup, confirmation, *, min_stop=None)
 
 
 def analyze_mtf(context_bars, setup_bars, confirm_bars, trigger_bars, *, context_tf: str = "4H",
-                setup_tf: str = "1H", confirm_tf: str = "15m", trigger_tf: str = "1m") -> MTFState:
-    """Run the four-layer cascade in order and return the combined state (stateless convenience)."""
-    ctx = htf_context(context_bars, context_tf)
+                setup_tf: str = "1H", confirm_tf: str = "15m", trigger_tf: str = "1m",
+                anchor_bars=None, anchor_tf: str = "") -> MTFState:
+    """Run the four-layer cascade in order and return the combined state (stateless convenience).
+    Optional Daily/Weekly anchor: pass `anchor_bars` on `anchor_tf` ("D"/"W") to veto a counter-trend
+    4H bias to neutral."""
+    anchor = htf_bias_of(anchor_bars, anchor_tf) if (anchor_bars and anchor_tf) else ""
+    ctx = htf_context(context_bars, context_tf, anchor=anchor, anchor_tf=(anchor_tf if anchor else ""))
     stp = mtf_setup(setup_bars, setup_tf, ctx)
     cf = confirm_setup(confirm_bars, confirm_tf, ctx, stp)  # 15m confirmation of the 1H setup
     exe = execution_for(trigger_bars, trigger_tf, ctx, stp, cf)

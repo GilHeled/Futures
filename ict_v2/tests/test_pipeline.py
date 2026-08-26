@@ -6,6 +6,22 @@ from ict_live.market.bar import Bar
 from ict_v2 import pipeline as v2
 
 
+def test_daily_weekly_anchor_vetoes_counter_trend_bias(monkeypatch):
+    """A Daily/Weekly anchor downgrades a 4H bias that OPPOSES it to neutral; an aligned or absent
+    anchor leaves the 4H bias intact (the anchor never forces a direction)."""
+    def fake_ms(direction):
+        dr = SimpleNamespace(direction=direction, low=100.0, high=110.0, ce=105.0)
+        return SimpleNamespace(ranges=[dr], active_erl=[])
+    # 4H says up→long
+    monkeypatch.setattr(v2.v1, "analyze", lambda bars, tf: fake_ms("up"))
+    assert v2.htf_context([], "4H").bias == "long"                       # no anchor → unchanged
+    assert v2.htf_context([], "4H", anchor="long").bias == "long"        # aligned anchor → kept
+    assert v2.htf_context([], "4H", anchor="short", anchor_tf="D").bias == "neutral"  # opposed → veto
+    # htf_bias_of reads a TF's leg direction (used to compute the anchor)
+    monkeypatch.setattr(v2.v1, "analyze", lambda bars, tf: fake_ms("down"))
+    assert v2.htf_bias_of([], "D") == "short"
+
+
 def test_four_layer_cascade_runs():
     st = v2.demo_state(seed=7)
     assert st.context.tf == "4H" and st.setup.tf == "1H" and st.confirmation.tf == "15m"

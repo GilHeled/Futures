@@ -62,8 +62,8 @@ def test_refine_mode_is_optional_and_off_by_default():
 def test_snapshot_is_persistable(tmp_path):
     v = run_bars(_1m(1200))
     snap = v.snapshot()
-    assert snap["timeframes"] == {"context": "4H", "setup": "1H", "confirm": "15m",
-                                  "trigger": "1m", "refine": None}   # refinement OFF by default
+    assert snap["timeframes"] == {"context": "4H", "setup": "1H", "confirm": "15m", "trigger": "1m",
+                                  "refine": None, "anchor": None}     # refine + anchor OFF by default
     assert "setup" in snap and "confirmation" in snap and "execution" in snap
     assert snap["updated"]["1m"] is not None
     p = tmp_path / "v2_state.json"

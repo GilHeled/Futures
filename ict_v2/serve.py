@@ -33,6 +33,10 @@ class V2Service:
         # OPTIONAL MTF entry-refinement mode: ICT_V2_REFINE=5m refines the 1H entry FVG onto 5m
         # (fresh, unmitigated gaps for fast instruments). Unset/empty = OFF (standard v2 behaviour).
         self.refine_tf = (os.environ.get("ICT_V2_REFINE", "").strip() or None)
+        # OPTIONAL Daily/Weekly context anchor: ICT_V2_ANCHOR=D (or W) vetoes a counter-trend 4H bias
+        # to neutral (trade only with the higher timeframe). Unset/empty = OFF. NB needs weeks/months
+        # of history to actually engage — a Daily range needs several session-days of structure.
+        self.anchor_tf = (os.environ.get("ICT_V2_ANCHOR", "").strip() or None)
 
     def ingest_new(self) -> int:
         """Feed any NEW 1m bars appended to the shared store through each symbol's V2Live. Returns the
@@ -52,7 +56,8 @@ class V2Service:
                             mstop = _C.min_stop_for(sym)
                         except Exception:
                             mstop = None
-                    live = self.lives.setdefault(sym, V2Live(refine_tf=self.refine_tf, min_stop=mstop))
+                    live = self.lives.setdefault(sym, V2Live(refine_tf=self.refine_tf, min_stop=mstop,
+                                                             anchor_tf=self.anchor_tf))
                 last = self.last_ms.get(sym, -1)
                 for b in store.bars(sym):                    # chronological
                     ms = int(b.open_time.timestamp() * 1000)

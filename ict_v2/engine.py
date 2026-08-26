@@ -19,18 +19,25 @@ from ict_v2 import pipeline as P
 
 class MTFEngine:
     def __init__(self, context_tf: str = "4H", setup_tf: str = "1H", confirm_tf: str = "15m",
-                 trigger_tf: str = "1m", refine_tf: str | None = None, min_stop: float | None = None):
+                 trigger_tf: str = "1m", refine_tf: str | None = None, min_stop: float | None = None,
+                 anchor_tf: str | None = None):
         self.context_tf, self.setup_tf = context_tf, setup_tf
         self.confirm_tf, self.trigger_tf = confirm_tf, trigger_tf
         self.refine_tf = refine_tf     # None = MTF entry-refinement OFF (default); else the entry TF
         self.min_stop = min_stop       # degenerate-stop floor (price), used with refinement
+        self.anchor_tf = anchor_tf     # None = no Daily/Weekly anchor (default); else "D"/"W"
         self.context = None            # HTFContext — fixed until the next 4H close
         self.setup = None              # 1H MTFSetup (gated by context) — fixed until the next 1H close
         self.confirmation = None       # 15m MTFSetup (its own gated setup) — fixed until the next 15m close
         self.execution = None          # 1m LTFExecution (the final trigger)
 
-    def on_context_close(self, bars):
-        self.context = P.htf_context(bars, self.context_tf)
+    def on_context_close(self, bars, anchor_bars=None):
+        """4H context. If a Daily/Weekly anchor is configured, its bias vetoes a counter-trend 4H
+        bias to neutral (trade only with the higher timeframe)."""
+        anchor = (P.htf_bias_of(anchor_bars, self.anchor_tf)
+                  if (self.anchor_tf and anchor_bars) else "")
+        self.context = P.htf_context(bars, self.context_tf, anchor=anchor,
+                                     anchor_tf=(self.anchor_tf if anchor else ""))
         return self.context
 
     def on_setup_close(self, bars, refine_bars=None):

@@ -28,6 +28,7 @@ class HTFContext:
     bias: str                              # "long" | "short" | "neutral"
     dealing_range: object = None           # v1 DealingRange (premium/discount/EQ) or None
     liquidity: list = field(default_factory=list)   # active ERL pools = the draw on liquidity
+    bias_note: str = ""                    # why the bias was neutralised, if it was (range-breach)
 
     def zone(self, price: float) -> Optional[str]:
         """premium / discount / equilibrium of `price` within the HTF dealing range (None if no range)."""
@@ -253,11 +254,27 @@ class MTFState:
 
 # ---- the three stages -------------------------------------------------------------------------
 def htf_context(bars, tf: str) -> HTFContext:
-    """Stage 1: run the engine on the HTF and keep the context layer (bias + dealing range + draw)."""
+    """Stage 1: run the engine on the HTF and keep the context layer (bias + dealing range + draw).
+
+    RANGE-BREACH INVALIDATION: the last-completed-leg bias goes STALE once price closes beyond the
+    range that defines it — the new opposing leg lags by the fractal-confirmation delay, so the engine
+    would otherwise keep reporting the old direction while price is expanding the other way. A body
+    CLOSE below the range low voids an up-leg (long) bias; a close above the range high voids a
+    down-leg (short) bias. On breach the bias drops to NEUTRAL (the leg's premise is gone; we don't
+    guess the new direction until fresh structure confirms). v2-only; v1 is untouched."""
     ms = v1.analyze(bars, tf)
     dr = ms.ranges[0] if ms.ranges else None
     bias = "long" if (dr and dr.direction == "up") else "short" if (dr and dr.direction == "down") else "neutral"
-    return HTFContext(tf=tf, bias=bias, dealing_range=dr, liquidity=list(ms.active_erl))
+    note = ""
+    if dr is not None and bars:
+        last_close = bars[-1].close
+        if bias == "long" and last_close < dr.low:
+            bias, note = "neutral", (f"bias neutralised — 4H closed {last_close:g} BELOW the dealing-range "
+                                     f"low {dr.low:g}; the up-leg is void (sellside taken)")
+        elif bias == "short" and last_close > dr.high:
+            bias, note = "neutral", (f"bias neutralised — 4H closed {last_close:g} ABOVE the dealing-range "
+                                     f"high {dr.high:g}; the down-leg is void (buyside taken)")
+    return HTFContext(tf=tf, bias=bias, dealing_range=dr, liquidity=list(ms.active_erl), bias_note=note)
 
 
 def generate_candidates(ms, context: HTFContext) -> list:

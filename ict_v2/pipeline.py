@@ -425,14 +425,16 @@ def mtf_setup(bars, tf: str, context: HTFContext, *, refine_bars=None, min_stop=
 
 
 def confirm_setup(bars, tf: str, context: HTFContext, setup: MTFSetup, *,
-                  against: str = "1H setup", node: str = "confirms 1H") -> MTFSetup:
+                  against: str = "1H setup", node: str = "confirms 1H",
+                  refine_bars=None, min_stop=None) -> MTFSetup:
     """A CONFIRMATION stage. Generate candidates on `tf` with their OWN structure, HTF-gate them like
     the 1H stage, THEN require they confirm the higher layer (`setup`): a confirmation is valid only if
     it is a complete, HTF-aligned setup in the direction of a gated setup on that higher layer. Each
     candidate keeps EXPLICIT reasons AND its step-by-step pipeline, with a final `node` check
     ("confirms 1H" for 15m, "1m trigger" for 1m) that fails as INCOMPLETE ("No gated ... to confirm")
-    or REJECTED ("Direction mismatch")."""
-    mtf = mtf_setup(bars, tf, context)                       # generate + HTF-gate (checks/reasons attached)
+    or REJECTED ("Direction mismatch"). `refine_bars` optionally refines THIS stage's entry FVG onto a
+    lower TF (e.g. the 15m confirmation onto 5m); `min_stop` rejects degenerate stops."""
+    mtf = mtf_setup(bars, tf, context, refine_bars=refine_bars, min_stop=min_stop)  # generate + HTF-gate
     setup_dirs = sorted({g.setup.direction for g in (setup.gated if setup else [])})
     gated, candidates, cand_info = [], [], []
     for c in mtf.candidate_objs:                             # the rich Candidate objects from the generate
@@ -478,14 +480,16 @@ def ltf_execution(bars, tf: str, setup: MTFSetup, context: HTFContext) -> LTFExe
     return LTFExecution(tf=tf, fvgs=fvgs, executables=executables, decision=decision)
 
 
-def execution_for(bars, tf: str, context, setup, confirmation) -> LTFExecution:
+def execution_for(bars, tf: str, context, setup, confirmation, *, min_stop=None) -> LTFExecution:
     """Stage 4 — the 1m execution trigger. It GENERATES 1m candidates that must confirm the 15m
     confirmation (own structure, HTF-aligned, same direction as a gated 15m confirmation), exactly the
     same candidate+reasons+pipeline model as the higher stages. The trade fires only for a gated 1m
     candidate; the top-line decision still reports how far the cascade got. Like the 1H and 15m stages,
     the 1m candidate list is ALWAYS generated (whenever a directional context exists) so the stage is
     just as transparent — every 1m candidate carries its explicit reasons/checks and the '1m trigger'
-    node — instead of staying empty until the cascade happens to be gated."""
+    node — instead of staying empty until the cascade happens to be gated. NB the 1m entry FVG is
+    already the finest timeframe, so there is no lower TF to refine it onto — `min_stop` (degenerate-
+    stop floor) is the only refinement-mode parameter that applies here."""
     if context is None or context.bias == "neutral":
         return LTFExecution(tf=tf, decision="NO-TRADE (no context bias)")
     # top-line decision from the cascade state (independent of the 1m candidate universe)
@@ -498,7 +502,8 @@ def execution_for(bars, tf: str, context, setup, confirmation) -> LTFExecution:
     if not bars:                                             # degenerate/unit-test path: no bars to analyse
         return LTFExecution(tf=tf, decision=decision or "NO-TRADE (awaiting 1m trigger)")
     # ALWAYS generate the 1m candidate list (transparency parity with the higher stages)
-    conf = confirm_setup(bars, tf, context, confirmation, against="15m confirmation", node="1m trigger")
+    conf = confirm_setup(bars, tf, context, confirmation, against="15m confirmation", node="1m trigger",
+                         min_stop=min_stop)
     executables = []
     if decision is None:                                     # cascade reached the 1m: fire iff a gated 1m trigger
         if conf.gated:

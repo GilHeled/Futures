@@ -82,10 +82,11 @@ class V2Live:
                 rb = self.buf.get(self.refine_tf) if self.refine_tf else None
                 self.engine.on_setup_close(self.buf[self.setup_tf], refine_bars=rb)
                 self.updated[self.setup_tf] = _et_iso(cb.close_time)
-        for cb in closed:                                    # confirmation
+        for cb in closed:                                    # confirmation (optionally entry-refined too)
             if cb.timeframe == self.confirm_tf:
                 self._append(self.confirm_tf, cb, self.window)
-                self.engine.on_confirm_close(self.buf[self.confirm_tf])
+                rb = self.buf.get(self.refine_tf) if self.refine_tf else None
+                self.engine.on_confirm_close(self.buf[self.confirm_tf], refine_bars=rb)
                 self.updated[self.confirm_tf] = _et_iso(cb.close_time)
         self._append(self.trigger_tf, bar, self.exec_window)  # 1m trigger = every bar
         self.engine.on_trigger_close(self.buf[self.trigger_tf])

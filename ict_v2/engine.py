@@ -40,19 +40,24 @@ class MTFEngine:
         self.setup = P.mtf_setup(bars, self.setup_tf, self.context, refine_bars=rb, min_stop=self.min_stop)
         return self.setup
 
-    def on_confirm_close(self, bars):
+    def on_confirm_close(self, bars, refine_bars=None):
         """15m confirmation: its OWN actionable setup that must confirm the 1H setup (same direction as
         a gated 1H setup). Computed whenever a context exists (so the dashboard can show what is
-        developing and WHY each 15m candidate is rejected); it only promotes when the 1H setup is gated."""
+        developing and WHY each 15m candidate is rejected); it only promotes when the 1H setup is gated.
+        When refinement is on, the 15m entry FVG is refined onto the lower TF too."""
         if self.context is None:
             return None
-        self.confirmation = P.confirm_setup(bars, self.confirm_tf, self.context, self.setup)
+        rb = refine_bars if self.refine_tf else None
+        self.confirmation = P.confirm_setup(bars, self.confirm_tf, self.context, self.setup,
+                                            refine_bars=rb, min_stop=self.min_stop)
         return self.confirmation
 
     def on_trigger_close(self, bars):
         """1m trigger — fires only when the full cascade holds; otherwise a NO-TRADE that says how far
-        the cascade got."""
-        self.execution = P.execution_for(bars, self.trigger_tf, self.context, self.setup, self.confirmation)
+        the cascade got. The 1m entry is already the finest TF (no lower to refine onto); the
+        degenerate-stop floor still applies via min_stop."""
+        self.execution = P.execution_for(bars, self.trigger_tf, self.context, self.setup,
+                                         self.confirmation, min_stop=self.min_stop)
         return self.execution
 
     def state(self) -> P.MTFState:

@@ -30,6 +30,9 @@ class V2Service:
         self.state: dict[str, dict] = {}
         self.updated_ms = 0
         self._lock = threading.Lock()
+        # OPTIONAL MTF entry-refinement mode: ICT_V2_REFINE=5m refines the 1H entry FVG onto 5m
+        # (fresh, unmitigated gaps for fast instruments). Unset/empty = OFF (standard v2 behaviour).
+        self.refine_tf = (os.environ.get("ICT_V2_REFINE", "").strip() or None)
 
     def ingest_new(self) -> int:
         """Feed any NEW 1m bars appended to the shared store through each symbol's V2Live. Returns the
@@ -40,7 +43,16 @@ class V2Service:
             store = MarketStore(path=self.store_path)        # re-read the append-only jsonl
             n = 0
             for sym in list(store._bars.keys()):
-                live = self.lives.get(sym) or self.lives.setdefault(sym, V2Live())
+                live = self.lives.get(sym)
+                if live is None:
+                    mstop = None
+                    if self.refine_tf:                       # degenerate-stop floor only matters w/ refinement
+                        try:
+                            from ict_live import config as _C
+                            mstop = _C.min_stop_for(sym)
+                        except Exception:
+                            mstop = None
+                    live = self.lives.setdefault(sym, V2Live(refine_tf=self.refine_tf, min_stop=mstop))
                 last = self.last_ms.get(sym, -1)
                 for b in store.bars(sym):                    # chronological
                     ms = int(b.open_time.timestamp() * 1000)

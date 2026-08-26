@@ -72,6 +72,9 @@ services:
       ICT_V2_DATA_DIR: /data
       ICT_V2_HOST: 0.0.0.0
       ICT_V2_PORT: "8020"
+      # OPTIONAL MTF entry-refinement: set ICT_V2_REFINE=5m to refine the 1H entry FVG onto 5m
+      # (fresh gaps for fast instruments). Empty = OFF (standard v2). Overridable from the host env.
+      ICT_V2_REFINE: "${ICT_V2_REFINE:-}"
     command: ["python", "-m", "ict_v2.serve"]
     ports:
       - "127.0.0.1:8020:8020"

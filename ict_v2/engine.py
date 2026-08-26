@@ -19,9 +19,11 @@ from ict_v2 import pipeline as P
 
 class MTFEngine:
     def __init__(self, context_tf: str = "4H", setup_tf: str = "1H", confirm_tf: str = "15m",
-                 trigger_tf: str = "1m"):
+                 trigger_tf: str = "1m", refine_tf: str | None = None, min_stop: float | None = None):
         self.context_tf, self.setup_tf = context_tf, setup_tf
         self.confirm_tf, self.trigger_tf = confirm_tf, trigger_tf
+        self.refine_tf = refine_tf     # None = MTF entry-refinement OFF (default); else the entry TF
+        self.min_stop = min_stop       # degenerate-stop floor (price), used with refinement
         self.context = None            # HTFContext — fixed until the next 4H close
         self.setup = None              # 1H MTFSetup (gated by context) — fixed until the next 1H close
         self.confirmation = None       # 15m MTFSetup (its own gated setup) — fixed until the next 15m close
@@ -31,10 +33,11 @@ class MTFEngine:
         self.context = P.htf_context(bars, self.context_tf)
         return self.context
 
-    def on_setup_close(self, bars):
+    def on_setup_close(self, bars, refine_bars=None):
         if self.context is None:
             return None
-        self.setup = P.mtf_setup(bars, self.setup_tf, self.context)
+        rb = refine_bars if self.refine_tf else None      # only refine when the mode is enabled
+        self.setup = P.mtf_setup(bars, self.setup_tf, self.context, refine_bars=rb, min_stop=self.min_stop)
         return self.setup
 
     def on_confirm_close(self, bars):

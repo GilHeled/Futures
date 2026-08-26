@@ -45,10 +45,25 @@ def test_per_timeframe_cadence_from_1m_stream():
     assert 1 <= counts["4H"] < counts["1H"] < counts["15m"] < counts["1m"]
 
 
+def test_refine_mode_is_optional_and_off_by_default():
+    # default: no refine TF, standard 3-TF builder (4H/1H/15m from 1m)
+    v = V2Live("4H", "1H", "15m", "1m")
+    assert v.refine_tf is None and v.engine.refine_tf is None
+    assert "5m" not in v.buf and v.snapshot()["timeframes"]["refine"] is None
+    # opt-in: a refine TF is built + buffered and the engine carries the min_stop floor
+    vr = V2Live("4H", "1H", "15m", "1m", refine_tf="5m", min_stop=2.0)
+    for b in _1m(1500):
+        vr.push_1m(b)
+    assert vr.refine_tf == "5m" and vr.engine.refine_tf == "5m" and vr.engine.min_stop == 2.0
+    assert len(vr.buf["5m"]) > 0                       # the 5m refine buffer accumulates
+    assert vr.snapshot()["timeframes"]["refine"] == "5m"
+
+
 def test_snapshot_is_persistable(tmp_path):
     v = run_bars(_1m(1200))
     snap = v.snapshot()
-    assert snap["timeframes"] == {"context": "4H", "setup": "1H", "confirm": "15m", "trigger": "1m"}
+    assert snap["timeframes"] == {"context": "4H", "setup": "1H", "confirm": "15m",
+                                  "trigger": "1m", "refine": None}   # refinement OFF by default
     assert "setup" in snap and "confirmation" in snap and "execution" in snap
     assert snap["updated"]["1m"] is not None
     p = tmp_path / "v2_state.json"

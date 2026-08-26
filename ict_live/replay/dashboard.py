@@ -568,7 +568,8 @@ function v2Tables(rep){
   const act=window._liveActive;
   let names=Object.keys(syms).sort();
   if(Array.isArray(act)) names=names.filter(n=>act.includes(n));
-  const banner='<div class=warn>&#9879; V2 (experimental) — ICT cascade 4H context → 1H setup → 15m confirmation → 1m execution, side-by-side with v1, ADVISORY ONLY, not validated.</div>';
+  const rtf=(((syms[names[0]]||{}).timeframes)||{}).refine;
+  const banner=`<div class=warn>&#9879; V2 (experimental) — ICT cascade 4H context → 1H setup → 15m confirmation → 1m execution${rtf?` · <b>entry-refine ${rtf}</b>`:''}, side-by-side with v1, ADVISORY ONLY, not validated.</div>`;
   if(!names.length){
     const why=(Array.isArray(act)&&act.length===0)
       ? 'No symbols are streaming in the Live tab — enable one there and it appears here.'

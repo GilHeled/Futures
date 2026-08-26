@@ -398,13 +398,19 @@ def generate_candidates(ms, context: HTFContext) -> list:
     return cands
 
 
-def mtf_setup(bars, tf: str, context: HTFContext) -> MTFSetup:
+def mtf_setup(bars, tf: str, context: HTFContext, *, refine_bars=None, min_stop=None) -> MTFSetup:
     """Stage 2: GENERATE trade candidates on this timeframe (manipulation → full ICT idea), then GATE
     the tradeable ones by the HTF context (bias + premium/discount + liquidity objective). Every
     candidate is retained (with its workflow `state`) so the next timeframe can reject / refine /
     promote it; cand_info carries all of them so the UI shows all-possible (grey) / available (white,
-    reached `actionable`) / passed-gate (bold)."""
-    ms = v1.analyze(bars, tf)
+    reached `actionable`) / passed-gate (bold).
+
+    OPTIONAL MTF ENTRY REFINEMENT: if `refine_bars` (a LOWER-TF bar window covering the same span,
+    already truncated at the cursor) is given, the entry FVG is ALSO sought on that lower TF inside
+    each displacement (v1's built-in mechanism; the HTF sweep/MSS are never redefined) — this gives a
+    fast instrument a fresh, unmitigated entry gap. `min_stop` rejects degenerate stops. Both default
+    off, so the standard v2 behaviour is unchanged."""
+    ms = v1.analyze(bars, tf, refine_bars=refine_bars, min_stop=min_stop)
     all_cands = generate_candidates(ms, context)
     gated, candidates, cand_info = [], [], []
     for c in all_cands:

@@ -41,14 +41,19 @@ def _px(x):
 
 class V2Live:
     def __init__(self, context_tf: str = "4H", setup_tf: str = "1H", confirm_tf: str = "15m",
-                 trigger_tf: str = "1m", window: int = _WINDOW, exec_window: int = _EXEC_WINDOW):
+                 trigger_tf: str = "1m", window: int = _WINDOW, exec_window: int = _EXEC_WINDOW,
+                 refine_tf: str | None = None, min_stop: float | None = None):
         self.context_tf, self.setup_tf = context_tf, setup_tf
         self.confirm_tf, self.trigger_tf = confirm_tf, trigger_tf
         self.window, self.exec_window = window, exec_window
-        built = tuple(dict.fromkeys(tf for tf in (setup_tf, context_tf, confirm_tf) if tf != "1m"))
-        self.builder = BarBuilder(timeframes=built)          # reuse existing bar builder (1m -> 15m/1H/4H)
-        self.engine = MTFEngine(context_tf, setup_tf, confirm_tf, trigger_tf)
-        tfs = (context_tf, setup_tf, confirm_tf, trigger_tf)
+        self.refine_tf = refine_tf                           # None = MTF entry-refinement OFF (default)
+        # build every intraday TF we need, incl. the optional refine TF (e.g. 5m) for entry refinement
+        built = tuple(dict.fromkeys(tf for tf in (setup_tf, context_tf, confirm_tf, refine_tf)
+                                    if tf and tf != "1m"))
+        self.builder = BarBuilder(timeframes=built)          # reuse existing bar builder (1m -> 5m/15m/1H/4H)
+        self.engine = MTFEngine(context_tf, setup_tf, confirm_tf, trigger_tf,
+                                refine_tf=refine_tf, min_stop=min_stop)
+        tfs = tuple(dict.fromkeys(tf for tf in (context_tf, setup_tf, confirm_tf, trigger_tf, refine_tf) if tf))
         self.buf = {tf: [] for tf in tfs}
         self.updated = {tf: None for tf in tfs}              # last-update time per timeframe (ISO)
 
@@ -66,10 +71,16 @@ class V2Live:
                 self._append(self.context_tf, cb, self.window)
                 self.engine.on_context_close(self.buf[self.context_tf])
                 self.updated[self.context_tf] = _et_iso(cb.close_time)
-        for cb in closed:                                    # setup
+        if self.refine_tf and self.refine_tf not in (self.context_tf, self.setup_tf, self.confirm_tf):
+            for cb in closed:                                # refine TF (e.g. 5m) — update BEFORE setup
+                if cb.timeframe == self.refine_tf:
+                    self._append(self.refine_tf, cb, self.exec_window)
+                    self.updated[self.refine_tf] = _et_iso(cb.close_time)
+        for cb in closed:                                    # setup (optionally entry-refined on refine_tf)
             if cb.timeframe == self.setup_tf:
                 self._append(self.setup_tf, cb, self.window)
-                self.engine.on_setup_close(self.buf[self.setup_tf])
+                rb = self.buf.get(self.refine_tf) if self.refine_tf else None
+                self.engine.on_setup_close(self.buf[self.setup_tf], refine_bars=rb)
                 self.updated[self.setup_tf] = _et_iso(cb.close_time)
         for cb in closed:                                    # confirmation
             if cb.timeframe == self.confirm_tf:
@@ -115,7 +126,8 @@ class V2Live:
             last_dir = "up" if last.close > last.open else "down" if last.close < last.open else "flat"
         return {
             "timeframes": {"context": self.context_tf, "setup": self.setup_tf,
-                           "confirm": self.confirm_tf, "trigger": self.trigger_tf},
+                           "confirm": self.confirm_tf, "trigger": self.trigger_tf,
+                           "refine": self.refine_tf},
             "updated": dict(self.updated),
             "last": None if last is None else {"price": _px(last.close), "dir": last_dir,
                                                "time": _et_iso(last.close_time)},

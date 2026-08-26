@@ -249,7 +249,6 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .ccard.rejected{opacity:.82}
  .ccard.passed .cfact{font-weight:700}
  .lg-pass{color:var(--long);font-weight:700} .lg-inc{color:var(--warn);font-weight:700} .lg-rej{color:var(--short);font-weight:700}
- .biasflag{font-style:normal;color:var(--warn);font-size:10px;font-weight:700;margin-left:4px;cursor:help}
  /* ---- actionable trade tickets (the hero) ---- */
  .tickets{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
  .ticket{background:var(--panel);border:1px solid var(--line);border-left:6px solid var(--mut);
@@ -599,7 +598,7 @@ function v2Tables(rep){
         <span class=thead-right>${biasHtml}<span class="v2dec ${execSide}">${dec}</span></span></div>
       <div class=reads>
         <div class="read ${biasSide}"><div class=rhd><span class=rsy>4H</span><span class=rnn>context</span></div>
-          <div class=why><span class=wc${c.bias_note?` title="${c.bias_note.replace(/"/g,'&quot;')}"`:''}>bias <b>${fmt(c.bias)}</b>${c.bias_note?' <i class=biasflag>⚠ neutralised</i>':''}</span><span class=wc>range <b>${drs}</b></span><span class=wc>draw <b>${objs}</b></span></div>
+          <div class=why><span class=wc>bias <b>${fmt(c.bias)}</b></span><span class=wc>range <b>${drs}</b></span><span class=wc>draw <b>${objs}</b></span></div>
           <div class=rfoot>updated ${fmt(u[tf.context])}</div></div>
         <div class="read ${setupSide}"><div class=rhd><span class=rsy>1H</span><span class=rnn>setup</span></div>
           <div class=rln>${gline('setup',st)}</div>

@@ -133,7 +133,7 @@ class V2Live:
             "last": None if last is None else {"price": _px(last.close), "dir": last_dir,
                                                "time": _et_iso(last.close_time)},
             "context": None if not c else {
-                "bias": c.bias, "bias_note": getattr(c, "bias_note", ""),
+                "bias": c.bias,
                 "dealing_range": None if dr is None else {"low": _px(dr.low), "high": _px(dr.high),
                                                           "ce": _px(dr.ce), "direction": dr.direction},
                 "liquidity_draws": len(c.liquidity), "liquidity_objective": obj},

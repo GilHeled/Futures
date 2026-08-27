@@ -80,6 +80,78 @@ def enumerate_setups(symbol, start, end, *, stage="setup", relaxed=False,
     return out
 
 
+def _simulate_one(row, bars_after, *, fill_bars=48, horizon_bars=288):
+    """Simulate ONE setup on the 5m bars that follow it: rest a limit at the entry (FVG CE), fill on
+    the retrace, then run to stop or target. Returns R (reward multiple; -1 = full stop) or None if it
+    never fills / invalidates pre-fill. Conservative tie-break: a bar touching BOTH stop and target is
+    a LOSS. `fill_bars` = how long the limit rests; `horizon_bars` = max hold (288×5m = 24h)."""
+    d, entry, stop, target = row["direction"], row["entry"], row["stop"], row["target"]
+    if None in (entry, stop, target):
+        return None
+    risk = abs(stop - entry)
+    if risk <= 0:
+        return None
+    rmult = abs(target - entry) / risk
+    filled = False
+    for i, b in enumerate(bars_after):
+        if not filled:
+            if i >= fill_bars:
+                return None                                  # limit expired unfilled
+            touched = (b.low <= entry <= b.high)
+            if not touched:
+                continue
+            filled = True                                    # fill on this bar; evaluate outcome from here on
+        hit_stop = (b.high >= stop) if d == "short" else (b.low <= stop)
+        hit_tgt = (b.low <= target) if d == "short" else (b.high >= target)
+        if hit_stop and hit_tgt:
+            return -1.0                                       # ambiguous same bar → assume stop (pessimistic)
+        if hit_stop:
+            return -1.0
+        if hit_tgt:
+            return rmult
+        if filled and i >= horizon_bars:
+            return (entry - b.close) / risk if d == "short" else (b.close - entry) / risk   # time exit
+    return None
+
+
+def simulate(symbol, start, end, *, tfs=("4H", "15m", "5m", "5m"), stage="setup",
+             relaxed_retrace=True, min_rr=2.0, killzone=True):
+    """Enumerate setups then simulate each. Returns (results, matched_random) — lists of R. Setups use
+    the faithful ≥min_rr + killzone filters but count ARMED (retrace off) as tradeable (we simulate the
+    actual fill). matched_random flips each setup's direction (same fills) as a no-skill control."""
+    REC.configure(min_rr=min_rr, killzone=killzone, require_retrace=not relaxed_retrace)
+    rows = enumerate_setups(symbol, start, end, stage=stage, want=("TAKE",),
+                            step_min=15, tfs=tfs)
+    REC.configure(min_rr=2.0, killzone=True, require_retrace=True)
+    import pandas as pd
+    pad = (pd.Timestamp(start, tz="UTC") - pd.Timedelta(days=2)).strftime("%Y-%m-%d")
+    bars5 = D.load_5m(symbol, start=pad, end=(pd.Timestamp(end, tz="UTC") + pd.Timedelta(days=5)).strftime("%Y-%m-%d"))
+    times = [b.open_time for b in bars5]
+    res, rnd = [], []
+    for r in rows:
+        j = bisect.bisect_right(times, r["time"])
+        after = bars5[j:j + 400]
+        R = _simulate_one(r, after)
+        if R is None:
+            continue
+        res.append(R)
+        flip = dict(r); flip["direction"] = "long" if r["direction"] == "short" else "short"
+        flip["stop"], flip["target"] = 2 * r["entry"] - r["stop"], 2 * r["entry"] - r["target"]   # mirror geometry
+        Rr = _simulate_one(flip, after)
+        rnd.append(Rr if Rr is not None else 0.0)
+    return res, rnd
+
+
+def _agg(rs):
+    if not rs:
+        return "n=0"
+    n = len(rs); wins = [x for x in rs if x > 0]; losses = [x for x in rs if x <= 0]
+    tot = sum(rs); win = 100 * len(wins) / n
+    pf = (sum(wins) / -sum(losses)) if losses and sum(losses) < 0 else float("inf")
+    return (f"n={n}  win%={win:.0f}  avgR={tot/n:+.2f}  totalR={tot:+.1f}  "
+            f"PF={pf:.2f}  best={max(rs):+.1f} worst={min(rs):+.1f}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--symbol", default="MES", help="MES / MNQ / MYM / M2K (cached Databento 5m)")
@@ -95,9 +167,20 @@ def main() -> None:
     ap.add_argument("--setup", default="1H", choices=["1H", "15m"])
     ap.add_argument("--confirm", default="15m", choices=["15m", "5m"])
     ap.add_argument("--trigger", default="5m", choices=["5m"])
+    ap.add_argument("--money", action="store_true", help="simulate each setup (fill→stop/target) and total the R")
+    ap.add_argument("--no-killzone", action="store_true", help="money: drop the killzone filter (more trades)")
     a = ap.parse_args()
     want = tuple(x.strip().upper() for x in a.want.split(","))
     tfs = (a.context, a.setup, a.confirm, a.trigger)
+    if a.money:
+        res, rnd = simulate(a.symbol, a.start, a.end, tfs=tfs, stage=a.stage,
+                            relaxed_retrace=True, min_rr=2.0, killzone=not a.no_killzone)
+        kz = "off" if a.no_killzone else "on"
+        print(f"# {a.symbol}  MONEY  {a.start}→{a.end}  cascade {'/'.join(tfs)}  (≥2R, killzone {kz}, "
+              f"armed=tradeable; target = the draw, stop = manip extreme)")
+        print(f"  ICT setups   : {_agg(res)}")
+        print(f"  matched-random: {_agg(rnd)}   <- same fills, flipped direction (no-skill control)")
+        return
     rows = enumerate_setups(a.symbol, a.start, a.end, stage=a.stage, relaxed=a.relaxed,
                             want=want, step_min=a.step_min, tfs=tfs)
     mode = "RELAXED (killzone/retrace off, RR≥1)" if a.relaxed else "FAITHFUL (killzone/retrace on, RR≥2)"

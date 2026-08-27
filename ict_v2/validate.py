@@ -80,17 +80,20 @@ def enumerate_setups(symbol, start, end, *, stage="setup", relaxed=False,
     return out
 
 
-def _simulate_one(row, bars_after, *, fill_bars=48, horizon_bars=288):
+def _simulate_one(row, bars_after, *, fill_bars=48, horizon_bars=288, target_r=None):
     """Simulate ONE setup on the 5m bars that follow it: rest a limit at the entry (FVG CE), fill on
     the retrace, then run to stop or target. Returns R (reward multiple; -1 = full stop) or None if it
     never fills / invalidates pre-fill. Conservative tie-break: a bar touching BOTH stop and target is
-    a LOSS. `fill_bars` = how long the limit rests; `horizon_bars` = max hold (288×5m = 24h)."""
+    a LOSS. `fill_bars` = how long the limit rests; `horizon_bars` = max hold (288×5m = 24h).
+    `target_r`: if set, take profit at a FIXED R multiple (entry ± target_r·risk) instead of the draw."""
     d, entry, stop, target = row["direction"], row["entry"], row["stop"], row["target"]
     if None in (entry, stop, target):
         return None
     risk = abs(stop - entry)
     if risk <= 0:
         return None
+    if target_r is not None:                                  # override the far draw with a fixed R target
+        target = (entry - target_r * risk) if d == "short" else (entry + target_r * risk)
     rmult = abs(target - entry) / risk
     filled = False
     for i, b in enumerate(bars_after):
@@ -115,13 +118,13 @@ def _simulate_one(row, bars_after, *, fill_bars=48, horizon_bars=288):
 
 
 def simulate(symbol, start, end, *, tfs=("4H", "15m", "5m", "5m"), stage="setup",
-             relaxed_retrace=True, min_rr=2.0, killzone=True):
+             relaxed_retrace=True, min_rr=2.0, killzone=True, step_min=30, target_r=None):
     """Enumerate setups then simulate each. Returns (results, matched_random) — lists of R. Setups use
     the faithful ≥min_rr + killzone filters but count ARMED (retrace off) as tradeable (we simulate the
     actual fill). matched_random flips each setup's direction (same fills) as a no-skill control."""
     REC.configure(min_rr=min_rr, killzone=killzone, require_retrace=not relaxed_retrace)
     rows = enumerate_setups(symbol, start, end, stage=stage, want=("TAKE",),
-                            step_min=15, tfs=tfs)
+                            step_min=step_min, tfs=tfs)
     REC.configure(min_rr=2.0, killzone=True, require_retrace=True)
     import pandas as pd
     pad = (pd.Timestamp(start, tz="UTC") - pd.Timedelta(days=2)).strftime("%Y-%m-%d")
@@ -131,13 +134,13 @@ def simulate(symbol, start, end, *, tfs=("4H", "15m", "5m", "5m"), stage="setup"
     for r in rows:
         j = bisect.bisect_right(times, r["time"])
         after = bars5[j:j + 400]
-        R = _simulate_one(r, after)
+        R = _simulate_one(r, after, target_r=target_r)
         if R is None:
             continue
         res.append(R)
         flip = dict(r); flip["direction"] = "long" if r["direction"] == "short" else "short"
         flip["stop"], flip["target"] = 2 * r["entry"] - r["stop"], 2 * r["entry"] - r["target"]   # mirror geometry
-        Rr = _simulate_one(flip, after)
+        Rr = _simulate_one(flip, after, target_r=target_r)
         rnd.append(Rr if Rr is not None else 0.0)
     return res, rnd
 

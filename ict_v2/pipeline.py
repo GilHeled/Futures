@@ -283,7 +283,7 @@ def htf_context(bars, tf: str, *, anchor: str = "", anchor_tf: str = "") -> HTFC
                       anchor_bias=(anchor or ""), anchor_tf=(anchor_tf or ""))
 
 
-def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=None) -> list:
+def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=None, bars=None) -> list:
     """GENERATE trade candidates from the manipulation, do NOT "find FVGs and filter".
 
     Every liquidity sweep is a possible trade idea (its direction is set by which side was raided).
@@ -337,8 +337,8 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
 
         entries = []                                                     # ask every enabled model
         if disp is not None:
-            for name in models:
-                entries += EM.detect(name, disp, mss, ms, direction)
+            for name in models:                                          # `bars` handed to EVERY model
+                entries += EM.detect(name, disp, mss, ms, direction, bars)
         if not entries:
             cands.append(_partial(sw, disp, mss, direction, dr, objective))
             continue
@@ -408,7 +408,7 @@ def mtf_setup(bars, tf: str, context: HTFContext, *, refine_bars=None, min_stop=
     fast instrument a fresh, unmitigated entry gap. `min_stop` rejects degenerate stops. Both default
     off, so the standard v2 behaviour is unchanged."""
     ms = v1.analyze(bars, tf, refine_bars=refine_bars, min_stop=min_stop)
-    all_cands = generate_candidates(ms, context, entry_models=entry_models, min_stop=min_stop)
+    all_cands = generate_candidates(ms, context, entry_models=entry_models, min_stop=min_stop, bars=bars)
     gated, candidates, cand_info = [], [], []
     for c in all_cands:
         cand_info.append(c.to_dict())

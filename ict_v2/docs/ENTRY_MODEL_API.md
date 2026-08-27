@@ -1,4 +1,14 @@
-# v2 Execution-Model Plugin Contract  — **FROZEN v1.0 (2026-08-26)**
+# v2 Execution-Model Plugin Contract  — **FROZEN v1.1 (2026-08-27)**
+
+> **v1.1 change (2026-08-27).** `detect()` gains a final `bars` argument:
+> `detect(disp, mss, ms, direction, bars) -> list[Entry]`. The engine hands the raw OHLC window (same
+> cursor) to **every** model, generically — no `if model ==`. It was surfaced by the first from-scratch
+> plugin (Order Block): a candle-body model needs the actual candles, which v1 never pre-computes onto
+> `ms` (FVG only worked because v1 pre-detects gaps). A model that reads pre-computed objects off `ms`
+> (FVG) ignores `bars`. Verified inert for FVG: threading real bars vs `None` gives byte-identical
+> candidates (0 diffs / 8267 candidates / 59 seeds; regression test `test_detect_v11_bars_arg_is_inert_for_fvg`).
+> This is a legitimate contract gap found by a real plugin, not an Order-Block exception; the freeze
+> otherwise stands — no further changes without another real plugin exposing another genuine gap.
 
 This document freezes the API that **every** ICT execution / entry model in v2 must implement
 (FVG, Order Block, Breaker, Mitigation Block, IFVG, IOFED, and any future model). It exists so that
@@ -17,7 +27,7 @@ All symbols below live in **`ict_v2/entry_models.py`**.
 ## The engine's four verbs (per manipulation → displacement)
 
 ```
-generate  →  entries = EM.detect(model, disp, mss, ms, direction)     # ask each enabled model
+generate  →  entries = EM.detect(model, disp, mss, ms, direction, bars)  # ask each enabled model
 assemble  →  geom    = EM.assemble(entry, sweep_extreme, active_erl, min_stop)   # uniform geometry
 validate  →  ok,why  = EM.validate(model, entry, geom, context)       # universal + model-specific
 execute   →  engine gates by HTF context and builds a Candidate tagged entry.model
@@ -73,13 +83,16 @@ Every detector returns a list of `Entry`. This is the ONLY entry type the engine
 ## 2. `detect()` — the model's detector
 
 ```python
-def detect_fn(disp, mss, ms, direction) -> list[Entry]: ...
+def detect_fn(disp, mss, ms, direction, bars) -> list[Entry]: ...
 ```
 
 * Registered as `REGISTRY["<model>"]["detect"]`; the engine calls it via
-  `EM.detect(model, disp, mss, ms, direction)`.
+  `EM.detect(model, disp, mss, ms, direction, bars)`.
 * Inputs: the displacement `disp` (leg off the manipulation), its `mss` (may be `None`), the v1
-  `MarketState` `ms` (read-only — for structure/bars/`active_erl`), and the chain `direction`.
+  `MarketState` `ms` (read-only — for structure/`active_erl`), the chain `direction`, and `bars` —
+  the raw OHLC window up to the cursor (v1.1). A candle-body model (Order Block, Breaker, …) reads
+  `bars` for the candles v1 does not pre-compute; a model that sources pre-detected objects off `ms`
+  (FVG) ignores `bars`. The engine passes the SAME `bars` to every model — never a per-model branch.
 * Output: zero or more `Entry` objects that this model finds **within that displacement**. Set each
   entry's `model`, `direction`, `ref`, `invalidation`, and `lifecycle` (state derives itself).
 * **Causal / no-repaint.** Only use data up to the cursor; once emitted, an entry's identity/ref must
@@ -172,7 +185,14 @@ Rules:
 
 ## 7. Freeze
 
-This contract is **frozen at v1.0**. Changing it (new required field, changed verb signature, changed
+This contract is **frozen at v1.1**. Changing it (new required field, changed verb signature, changed
 common-state vocabulary) is a deliberate, versioned change to this document + the tests — not an
-incidental edit. Adding a *model* never touches this contract. The first model to be built against it
-is **Order Block**, as the proof that the architecture is as generic as intended.
+incidental edit, and only when a real plugin exposes a genuine missing capability (as v1.1's `bars`
+argument was). Adding a *model* never touches this contract. **Order Block** is the first model built
+against it, and the plugin that surfaced the v1.1 gap — the proof that the architecture is as generic
+as intended.
+
+### Changelog
+* **v1.1 (2026-08-27)** — `detect()` gains `bars` (raw OHLC, passed generically to every model) so
+  from-scratch candle-body models work. Inert for FVG (byte-for-byte verified).
+* **v1.0 (2026-08-26)** — initial frozen contract (four verbs, Entry contract, two-level state).

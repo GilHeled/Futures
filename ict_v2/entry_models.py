@@ -89,7 +89,7 @@ REGISTRY: dict[str, dict] = {
         "desc": "Fair Value Gap — 3-candle imbalance; entry at CE (50%). The B8 default entry.",
     },
     "order_block": {
-        "implemented": False, "detect": None,
+        "implemented": True, "detect": None,   # detector assigned below (order_block_entries)
         "desc": "Order Block — last opposing-close candle before the displacement; entry at its 50%.",
     },
     "breaker": {
@@ -116,11 +116,14 @@ DEFAULT_MODELS: tuple[str, ...] = ("fvg",)          # only FVG is on by default
 _FVG_STATUS = {"unfilled": "waiting", "touched": "valid", "mitigated": "mitigated"}
 
 
-def detect(model: str, disp, mss, ms, direction) -> list:
+def detect(model: str, disp, mss, ms, direction, bars) -> list:
     """Ask a model for its entries on one displacement leg — the engine calls THIS, never a
-    model-specific function. Returns [] for models without a detector (planned)."""
+    model-specific function. `bars` is the raw OHLC window (same cursor) every model receives, so a
+    from-scratch, candle-body model (Order Block, Breaker, …) can read candles v1 never pre-computed;
+    a model that sources pre-detected objects off `ms` (FVG) simply ignores it. Returns [] for models
+    without a detector (planned)."""
     fn = REGISTRY.get(model, {}).get("detect")
-    return fn(disp, mss, ms, direction) if fn else []
+    return fn(disp, mss, ms, direction, bars) if fn else []
 
 
 def validate(model: str, entry: Entry, geom: dict, context) -> tuple:
@@ -130,10 +133,11 @@ def validate(model: str, entry: Entry, geom: dict, context) -> tuple:
     return fn(entry, geom, context) if fn else (True, "")
 
 
-def fvg_entries(disp, mss, ms, direction) -> list:
+def fvg_entries(disp, mss, ms, direction, bars=None) -> list:
     """The FVG entry(ies) on one displacement leg, as generic Entry objects. Sources v1's frozen FVG
     detector (`ms.ranked_fvgs`, linked to the displacement); prefers an unmitigated gap. Entry ref =
-    the gap CE (B8); invalidation = the far edge of the gap."""
+    the gap CE (B8); invalidation = the far edge of the gap. `bars` is unused here — FVGs are already
+    pre-computed on `ms` — but is accepted so every detector shares the one v1.1 signature."""
     fvgs = [r.item for r in ms.ranked_fvgs
             if getattr(r.item, "depends_on", None) and r.item.depends_on[0] == disp.id]
     if not fvgs:
@@ -148,6 +152,68 @@ def fvg_entries(disp, mss, ms, direction) -> list:
 
 
 REGISTRY["fvg"]["detect"] = fvg_entries
+
+
+# --- Order Block detector: the first from-scratch, candle-body model (needs raw bars, v1.1) --------
+_OB_LOOKBACK = 10          # scan at most this many bars back from the impulse origin for the OB candle
+
+
+def order_block_entries(disp, mss, ms, direction, bars) -> list:
+    """The Order Block entry on one displacement leg, as a generic Entry.
+
+    OB (course B8) = the LAST opposing-close candle immediately before the impulse: a down-close
+    candle before a bullish displacement (→ long), an up-close candle before a bearish one (→ short).
+    Entry ref = the OB's 50% (mean threshold (high+low)/2); invalidation = the OB low (long) / high
+    (short). Causal / no-repaint: the OB is fixed at its formation bar, and its lifecycle is read only
+    from realised bars up to the cursor:
+      identified → (impulse exhausts) awaiting_retest → (price returns into the zone) validated;
+      a close beyond the invalidation before the retest ⇒ invalidated.
+    Needs the raw `bars` (v1.1) — v1 never pre-computes order blocks onto `ms`."""
+    if not bars:
+        return []
+    j = getattr(disp, "start_index", -1)                      # manipulation-extreme bar = impulse origin
+    if j < 0 or j >= len(bars):
+        return []
+    bullish = disp.direction == "bullish"
+    ob_i = None                                               # last opposing-body candle at/ before origin
+    for i in range(j, max(-1, j - _OB_LOOKBACK) - 1, -1):
+        b = bars[i]
+        if bullish and b.close < b.open:                     # down candle before an up impulse
+            ob_i = i; break
+        if not bullish and b.close > b.open:                 # up candle before a down impulse
+            ob_i = i; break
+    if ob_i is None:
+        return []
+    ob = bars[ob_i]
+    d = "long" if bullish else "short"
+    ref = (ob.high + ob.low) / 2.0                            # mean threshold (50%)
+    inval = ob.low if bullish else ob.high
+
+    inval_i = retest_i = None                                 # earliest decisive events after formation
+    for i in range(ob_i + 1, len(bars)):
+        b = bars[i]
+        if inval_i is None and ((bullish and b.close < ob.low) or (not bullish and b.close > ob.high)):
+            inval_i = i                                       # a close beyond the OB kills it
+    if getattr(disp, "exhausted", False):                    # only look for a retest once the impulse ends
+        for i in range(disp.end_index + 1, len(bars)):
+            b = bars[i]
+            if (bullish and b.low <= ob.high) or (not bullish and b.high >= ob.low):
+                retest_i = i; break                           # price traded back into the OB zone
+
+    if retest_i is not None and (inval_i is None or retest_i <= inval_i):
+        lifecycle = "validated"
+    elif inval_i is not None:
+        lifecycle = "invalidated"
+    elif getattr(disp, "exhausted", False):
+        lifecycle = "awaiting_retest"
+    else:
+        lifecycle = "identified"
+
+    return [Entry(model="order_block", direction=d, ref=ref, invalidation=inval,
+                  lifecycle=lifecycle, id=f"ob-{ob_i}-{disp.direction}", origin_index=ob_i, source=ob)]
+
+
+REGISTRY["order_block"]["detect"] = order_block_entries
 
 
 def assemble(entry: Entry, sweep_extreme: float, active_erl, min_stop=None) -> dict:

@@ -1,21 +1,28 @@
 # v2 Execution-Model Plugin Contract  — **FROZEN v1.1 (2026-08-27)**
 
-> **v1.1 change (2026-08-27).** `detect()` gains a final `bars` argument:
-> `detect(disp, mss, ms, direction, bars) -> list[Entry]`. The engine hands the raw OHLC window (same
-> cursor) to **every** model, generically — no `if model ==`. It was surfaced by the first from-scratch
-> plugin (Order Block): a candle-body model needs the actual candles, which v1 never pre-computes onto
-> `ms` (FVG only worked because v1 pre-detects gaps). A model that reads pre-computed objects off `ms`
-> (FVG) ignores `bars`. Verified inert for FVG: threading real bars vs `None` gives byte-identical
-> candidates (0 diffs / 8267 candidates / 59 seeds; regression test `test_detect_v11_bars_arg_is_inert_for_fvg`).
-> This is a legitimate contract gap found by a real plugin, not an Order-Block exception; the freeze
-> otherwise stands — no further changes without another real plugin exposing another genuine gap.
+> **SCOPE — this course, not ICT in general.** v2 faithfully implements the specific course
+> methodology in `ict_live/docs/METHODOLOGY_SPEC.md` (+ `ict_faithful/SPEC.md`). In that methodology
+> the entry PD array is the **Fair Value Gap** (§13/§14: sweep → displacement → confirmed MSS →
+> same-leg FVG → retrace → entry); the only other PD-arrays named are NWOG/ORG, as context/targets.
+> The course does **not** define Order Blocks, Breakers, or Mitigation Blocks as execution models —
+> those are broader-ICT constructs, out of scope here. **FVG is the sole execution model.** This
+> contract exists so that IF authoritative course material later defines another entry array, adding
+> it is a plugin, not a rebuild — not as an invitation to import general-ICT models.
 
-This document freezes the API that **every** ICT execution / entry model in v2 must implement
-(FVG, Order Block, Breaker, Mitigation Block, IFVG, IOFED, and any future model). It exists so that
-adding a model is a **plugin**, never an engine change.
+> **v1.1 change (2026-08-27).** `detect()` carries a final `bars` argument:
+> `detect(disp, mss, ms, direction, bars) -> list[Entry]`. The engine hands the raw OHLC window (same
+> cursor) to **every** model, generically — no `if model ==`. It was added when an exploratory
+> candle-based detector needed the actual candles (v1 pre-computes only FVGs onto `ms`); that detector
+> was later removed as out-of-course-scope, but the argument is retained as general, model-agnostic
+> plumbing a future course-defined candle model may use. A model that reads pre-computed objects off
+> `ms` (FVG) ignores `bars`. Verified inert for FVG: threading real bars vs `None` gives byte-identical
+> candidates (0 diffs / 8267 candidates / 59 seeds; `test_detect_v11_bars_arg_is_inert_for_fvg`).
+
+This document freezes the API that every v2 execution / entry model must implement. It exists so that
+adding a (course-defined) model is a **plugin**, never an engine change.
 
 > **The invariant.** The engine (`ict_v2/pipeline.py`) MUST NOT contain model-specific logic — no
-> `if model == "fvg"`, no `if model == "order_block"`. The engine only ever runs the four generic
+> `if model == "fvg"`, no `if model == "<any model>"`. The engine only ever runs the four generic
 > verbs below and reads the common `Entry` contract. All model-specific knowledge lives in the
 > model's registry entry. Verified: the data-driven engine is byte-for-byte identical to the prior
 > FVG-only implementation (0 diffs / 8267 candidates / 59 seeds).
@@ -44,7 +51,7 @@ Every detector returns a list of `Entry`. This is the ONLY entry type the engine
 
 | field | type | meaning |
 |---|---|---|
-| `model` | str | registry key that produced it (`"fvg"`, `"order_block"`, …) |
+| `model` | str | registry key that produced it (the course's entry model is `"fvg"`) |
 | `direction` | `"long"`/`"short"` | trade side |
 | `ref` | float | **reference entry price** (where the order rests) |
 | `invalidation` | float | **invalidation level** (price beyond which the entry object is void) |
@@ -73,10 +80,11 @@ Every detector returns a list of `Entry`. This is the ONLY entry type the engine
   }
   ```
   `Entry.__post_init__` derives `state = common_state(model, lifecycle)` when `state` is omitted, so a
-  detector normally sets only `lifecycle`. Examples (frozen defaults):
+  detector normally sets only `lifecycle`. The one defined model:
   * FVG: `waiting → valid → mitigated`   (mitigated ⇒ `completed`)
-  * Order Block: `identified → awaiting_retest → validated` (+ `invalidated`/`mitigated`)
-  * Breaker: `formed → confirmed` (+ `invalidated`/`mitigated`)
+
+  A future course-defined model registers its own `vocab` + `map` the same way; the mechanism does not
+  privilege FVG (a model/sub-state absent from `LIFECYCLE` falls back to the safe `waiting`).
 
 ---
 
@@ -90,9 +98,9 @@ def detect_fn(disp, mss, ms, direction, bars) -> list[Entry]: ...
   `EM.detect(model, disp, mss, ms, direction, bars)`.
 * Inputs: the displacement `disp` (leg off the manipulation), its `mss` (may be `None`), the v1
   `MarketState` `ms` (read-only — for structure/`active_erl`), the chain `direction`, and `bars` —
-  the raw OHLC window up to the cursor (v1.1). A candle-body model (Order Block, Breaker, …) reads
-  `bars` for the candles v1 does not pre-compute; a model that sources pre-detected objects off `ms`
-  (FVG) ignores `bars`. The engine passes the SAME `bars` to every model — never a per-model branch.
+  the raw OHLC window up to the cursor (v1.1). A future candle-based model would read `bars` for the
+  candles v1 does not pre-compute; the course model (FVG) sources pre-detected gaps off `ms` and
+  ignores `bars`. The engine passes the SAME `bars` to every model — never a per-model branch.
 * Output: zero or more `Entry` objects that this model finds **within that displacement**. Set each
   entry's `model`, `direction`, `ref`, `invalidation`, and `lifecycle` (state derives itself).
 * **Causal / no-repaint.** Only use data up to the cursor; once emitted, an entry's identity/ref must
@@ -134,8 +142,8 @@ def validate_fn(entry, geom, context) -> (ok: bool, reason: str)
 * Registered as the optional `REGISTRY["<model>"]["validate"]`; engine calls
   `EM.validate(model, entry, geom, context)`. **Default (no validator) = `(True, "")`.**
 * Runs AFTER the universal `assemble()` reject and BEFORE the RR-quality floor. Use it only for a rule
-  the universal geometry can't express (e.g. an Order Block must be the last opposing-close candle, a
-  Breaker must have taken a specific liquidity pool first). Return `(False, "<reason>")` to reject.
+  the universal geometry can't express that a course-defined model requires. Return `(False,
+  "<reason>")` to reject.
 * Must be pure/causal and must not mutate `entry`, `geom`, or `context`.
 
 ---
@@ -158,27 +166,31 @@ introduced it follows the same rules as `validate()` (pure, causal, default `(Tr
 
 ## 6. Registering a model (the whole checklist)
 
-A model is one registry entry + (optionally) one lifecycle entry. **No engine edit.**
+A model is one registry entry + (optionally) one lifecycle entry. **No engine edit.** Register a model
+ONLY when authoritative course material defines it as an entry array (see SCOPE at the top).
 
 ```python
-LIFECYCLE["order_block"] = {"vocab": [...], "map": {...}}          # sub-states → common states
-REGISTRY["order_block"] = {
+LIFECYCLE["<model>"] = {"vocab": [...], "map": {...}}          # sub-states → common states
+REGISTRY["<model>"] = {
     "implemented": True,                 # False until built + verified → inert
-    "detect": order_block_entries,       # detect_fn above
-    "validate": order_block_validate,    # optional
-    "desc": "Order Block — ...",         # shown in the dashboard catalog
+    "detect": <model>_entries,           # detect_fn above
+    "validate": <model>_validate,        # optional
+    "desc": "<model> — ...",             # shown in the dashboard catalog
 }
 ```
 
 Rules:
 
-1. **Off by default.** New models are enabled only via `ICT_V2_ENTRY_MODELS="fvg,order_block"` (serve)
-   or the `entry_models=` parameter. `DEFAULT_MODELS = ("fvg",)`.
-2. **Inert until implemented.** `resolve()` drops any model whose `implemented` is False (and always
+1. **Course-defined only.** A model is registered only if the captured course methodology defines it.
+   FVG is the course's entry array (`DEFAULT_MODELS = ("fvg",)`). General-ICT models the course does
+   not teach (Order Block, Breaker, Mitigation Block, IFVG, IOFED) are deliberately NOT registered.
+2. **Off by default.** Any additional model is enabled only via `ICT_V2_ENTRY_MODELS=...` (serve) or
+   the `entry_models=` parameter.
+3. **Inert until implemented.** `resolve()` drops any model whose `implemented` is False (and always
    keeps at least `fvg`), so a declared-but-unbuilt model can never run.
-3. **No PnL / tuning to add a model.** A model is added for *faithfulness*; validating whether a model
-   has edge is a separate, pre-registered study — never a reason to change the detector.
-4. **Tag + verify.** Every candidate is tagged `entry.model`; add tests asserting the model conforms
+4. **No PnL / tuning to add a model.** A model is added for *faithfulness to the course*; validating
+   whether it has edge is a separate, pre-registered study — never a reason to change the detector.
+5. **Tag + verify.** Every candidate is tagged `entry.model`; add tests asserting the model conforms
    to this contract (fields, lifecycle vocab, common-state mapping) and that the engine stays generic.
 
 ---
@@ -187,19 +199,17 @@ Rules:
 
 This contract is **frozen at v1.1**. Changing it (new required field, changed verb signature, changed
 common-state vocabulary) is a deliberate, versioned change to this document + the tests — not an
-incidental edit, and only when a real plugin exposes a genuine missing capability (as v1.1's `bars`
-argument was). Adding a *model* never touches this contract. **Order Block** is the first model built
-against it, and the plugin that surfaced the v1.1 gap — the proof that the architecture is as generic
-as intended.
+incidental edit, and only when a real, course-defined plugin exposes a genuine missing capability.
+Adding a *model* never touches this contract.
 
-### Models built against this contract
-* **FVG** (default) — sources v1's pre-computed gaps off `ms`.
-* **Order Block** (v1.1) — first from-scratch candle-body plugin; surfaced the `bars` gap.
-* **Breaker Block** — second from-scratch plugin; a failed OB that flips polarity after a confirmed
-  MSS. Fit the v1.1 contract with **no** contract change (evidence the contract holds).
-* Planned: Mitigation Block, IFVG, IOFED.
+### Models registered against this contract
+* **FVG** (default, the course's entry PD array) — sources v1's pre-computed gaps off `ms`.
+* No others. Order Block / Breaker / Mitigation Block / IFVG / IOFED are broader-ICT constructs the
+  captured course does not teach; they are intentionally absent (see SCOPE). Register a new model only
+  when authoritative course material defines it.
 
 ### Changelog
-* **v1.1 (2026-08-27)** — `detect()` gains `bars` (raw OHLC, passed generically to every model) so
-  from-scratch candle-body models work. Inert for FVG (byte-for-byte verified).
+* **v1.1 (2026-08-27)** — `detect()` carries `bars` (raw OHLC, passed generically to every model).
+  Added while exploring a candle-based detector later removed as out-of-course-scope; retained as
+  general model-agnostic plumbing. Inert for FVG (byte-for-byte verified).
 * **v1.0 (2026-08-26)** — initial frozen contract (four verbs, Entry contract, two-level state).

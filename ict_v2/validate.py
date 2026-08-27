@@ -28,22 +28,23 @@ def _bars_for(tf, slc):
     return slc if tf == "5m" else D.resample(slc, tf)
 
 
-def _stage_cands(slc, stage, tfs):
+def _stage_cands(slc, stage, tfs, min_stop=None):
     """Run ONLY the cascade layers needed for `stage` (cheaper than the full analyze_mtf per cursor).
-    `tfs` = (context, setup, confirm, trigger) timeframe labels."""
+    `tfs` = (context, setup, confirm, trigger) timeframe labels. `min_stop` = degenerate-stop floor
+    (points) — rejects tiny-stop setups the live engine would reject (else costs explode in R)."""
     ctf, stf, cftf, ttf = tfs
     ctx = P.htf_context(_bars_for(ctf, slc), ctf)
-    setup = P.mtf_setup(_bars_for(stf, slc), stf, ctx)
+    setup = P.mtf_setup(_bars_for(stf, slc), stf, ctx, min_stop=min_stop)
     if stage == "setup":
         return setup.cand_info
-    conf = P.confirm_setup(_bars_for(cftf, slc), cftf, ctx, setup)
+    conf = P.confirm_setup(_bars_for(cftf, slc), cftf, ctx, setup, min_stop=min_stop)
     if stage == "confirmation":
         return conf.cand_info
-    return P.execution_for(_bars_for(ttf, slc), ttf, ctx, setup, conf).cand_info
+    return P.execution_for(_bars_for(ttf, slc), ttf, ctx, setup, conf, min_stop=min_stop).cand_info
 
 
 def enumerate_setups(symbol, start, end, *, stage="setup", relaxed=False,
-                     want=("TAKE",), step_min=60, tfs=("4H", "1H", "15m", "5m")):
+                     want=("TAKE",), step_min=60, tfs=("4H", "1H", "15m", "5m"), min_stop=None):
     """Replay the cascade at each `step_min` cursor in [start, end]; return de-duplicated setups on
     `stage` (setup/confirmation/execution) whose recommendation is in `want` (default TAKE).
     Each setup is reported once, at the cursor it first appears."""
@@ -64,7 +65,7 @@ def enumerate_setups(symbol, start, end, *, stage="setup", relaxed=False,
         i1 = bisect.bisect_right(times, cur)
         slc = bars5[i0:i1]
         if len(slc) >= 60:
-            for c in _stage_cands(slc, stage, tfs):
+            for c in _stage_cands(slc, stage, tfs, min_stop=min_stop):
                 if c["recommendation"] not in want:
                     continue
                 # de-dup ACROSS cursors by PRICE (ids are index-based and shift as the window slides,
@@ -125,13 +126,18 @@ def _simulate_one(row, bars_after, *, fill_bars=48, horizon_bars=288, target_r=N
 
 def simulate(symbol, start, end, *, tfs=("4H", "15m", "5m", "5m"), stage="setup",
              relaxed_retrace=True, min_rr=2.0, killzone=True, step_min=30, target_r=None,
-             cost_dollars=0.0):
+             cost_dollars=0.0, min_stop=None):
     """Enumerate setups then simulate each. Returns (results, matched_random) — lists of R. Setups use
     the faithful ≥min_rr + killzone filters but count ARMED (retrace off) as tradeable (we simulate the
     actual fill). matched_random flips each setup's direction (same fills) as a no-skill control."""
+    if min_stop is None:
+        try:
+            from ict_live import config as _C; min_stop = _C.min_stop_for(symbol)
+        except Exception:
+            min_stop = None
     REC.configure(min_rr=min_rr, killzone=killzone, require_retrace=not relaxed_retrace)
     rows = enumerate_setups(symbol, start, end, stage=stage, want=("TAKE",),
-                            step_min=step_min, tfs=tfs)
+                            step_min=step_min, tfs=tfs, min_stop=min_stop)
     REC.configure(min_rr=2.0, killzone=True, require_retrace=True)
     import pandas as pd
     pad = (pd.Timestamp(start, tz="UTC") - pd.Timedelta(days=2)).strftime("%Y-%m-%d")

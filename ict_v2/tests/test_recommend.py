@@ -17,9 +17,10 @@ def test_course_filters_min_rr_and_killzone():
     # killzone filter
     f = {x["name"]: x for x in REC.evaluate_filters(rr=4.0, killzone="")}
     assert f["killzone"]["ok"] is False and "killzone" in f["killzone"]["reason"]
-    # configurable / toggleable
-    f = REC.evaluate_filters(rr=1.0, killzone="", cfg={"min_rr": 3.0})   # only ≥3R, killzone off
-    assert [x["name"] for x in f] == ["≥3R"] and f[0]["ok"] is False
+    # configurable / toggleable — a disabled filter is now SHOWN (greyed), not omitted
+    f = {x["name"]: x for x in REC.evaluate_filters(rr=1.0, killzone="", cfg={"min_rr": 3.0})}
+    assert f["≥3R"]["ok"] is False and not f["≥3R"].get("disabled")
+    assert f["killzone"]["disabled"] is True             # killzone off → shown as disabled, not gating
 
 
 def test_recommendation_derivation():
@@ -60,8 +61,12 @@ def test_configure_validation_knobs():
         REC.configure(require_retrace=False, min_rr=1.0, killzone=False)
         # relaxed: armed setup now TAKE; killzone filter dropped; RR floor lowered
         assert REC.recommend(structure="valid", filters=good, entry_live=False) == ("TAKE", [])
-        f = REC.evaluate_filters(rr=1.0, killzone="")     # killzone off ⇒ only the RR filter, at 1.0
-        assert [x["name"] for x in f] == ["≥1R"] and f[0]["ok"] is True
+        f = {x["name"]: x for x in REC.evaluate_filters(rr=1.0, killzone="")}
+        assert f["≥1R"]["ok"] is True                     # RR floor lowered to 1
+        assert f["killzone"]["disabled"] and f["retrace"]["disabled"]   # both relaxations shown as disabled
+        # a disabled filter never causes SKIP
+        assert REC.recommend(structure="valid",
+                             filters=list(f.values()), entry_live=False)[0] == "TAKE"
     finally:
         REC.configure(require_retrace=True, min_rr=2.0, killzone=True)     # restore faithful defaults
     assert REC.REQUIRE_RETRACE is True and REC.COURSE_FILTERS["killzone"] is True

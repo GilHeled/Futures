@@ -567,7 +567,7 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
             #     filter-passing setup is eligible to promote so a lower TF can trigger the retrace);
             #     this is DECOUPLED from TAKE, which additionally requires the entry to be live.
             actionable = (structure == "valid")
-            passed = (structure == "valid" and all(f["ok"] for f in filters))
+            passed = (structure == "valid" and all(f["ok"] for f in filters if not f.get("disabled")))
             status = "passed" if rec == "TAKE" else ("incomplete" if rec == "WATCH" else "rejected")
             state = "actionable" if actionable else "entry"
             checks = structural_checks(sw, disp, mss, entry, structure, struct_reason)

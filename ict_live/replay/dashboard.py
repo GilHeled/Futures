@@ -274,6 +274,7 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .cfilter{font-size:10px;font-weight:600;padding:1px 8px;border-radius:6px;border:1px solid var(--line)}
  .cfilter.ok{color:var(--long);border-color:color-mix(in srgb,var(--long) 40%,var(--line))}
  .cfilter.no{color:var(--short);border-color:color-mix(in srgb,var(--short) 45%,var(--line))}
+ .cfilter.off{color:var(--mut);border-style:dashed;opacity:.75}   /* filter disabled for validation */
  .restag{font-size:9px;font-weight:700;letter-spacing:.3px;padding:1px 6px;border-radius:5px;
    color:var(--warn);background:var(--warn-bg);border:1px dashed var(--warn)}   /* undecided [RES] choice */
  /* the ICT chain: sweep → displacement → MSS → FVG → entry → gate; ✓ ok / ✗ fail / — pending */
@@ -712,7 +713,9 @@ function _candCard(c){
   // (3) COURSE FILTERS — each ✓/✗ with its reason (only meaningful for a valid structure)
   const filters=(c.filters||[]);
   const filtHtml=filters.length
-    ? filters.map(f=>`<span class="cfilter ${f.ok?'ok':'no'}" title="${esc(f.reason||'passes')}">${f.ok?'✓':'✗'} ${esc(f.name)}${f.ok?'':' — '+esc(f.reason)}</span>`).join('')
+    ? filters.map(f=>f.disabled
+        ? `<span class="cfilter off" title="${esc(f.reason||'disabled')}">⊘ ${esc(f.name)} (off)</span>`
+        : `<span class="cfilter ${f.ok?'ok':'no'}" title="${esc(f.reason||'passes')}">${f.ok?'✓':'✗'} ${esc(f.name)}${f.ok?'':' — '+esc(f.reason)}</span>`).join('')
     : '<span class=mut>— no course filters (structure not valid)</span>';
   // (4) RECOMMENDATION reasons
   const reasons=(c.reasons||[]);

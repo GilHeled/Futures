@@ -57,10 +57,18 @@ def evaluate_filters(*, rr, killzone, cfg=None) -> list:
         ok = has_rr and rr >= mr
         reason = "" if ok else (f"RR {rr:g} < {mr:g}R" if has_rr else "no liquidity target / RR")
         out.append({"name": f"≥{mr:g}R", "ok": ok, "reason": reason})
+    else:                                                    # DISABLED — shown greyed, does not gate
+        out.append({"name": "min R:R", "ok": None, "disabled": True, "reason": "disabled (validation)"})
     if cfg.get("killzone"):
         ok = bool(killzone)
         out.append({"name": "killzone", "ok": ok,
                     "reason": "" if ok else "manipulation outside a trading killzone"})
+    else:
+        out.append({"name": "killzone", "ok": None, "disabled": True,
+                    "reason": "disabled (validation) — killzone manipulation not required"})
+    if not REQUIRE_RETRACE:                                  # the retrace gate, surfaced when relaxed
+        out.append({"name": "retrace", "ok": None, "disabled": True,
+                    "reason": "disabled (validation) — armed (un-retraced) setups shown as TAKE"})
     return out
 
 
@@ -78,7 +86,7 @@ def recommend(*, structure, structure_reason="", filters=(), entry_live=True) ->
         return "WATCH", [structure_reason or "developing — the ICT chain is not yet complete"]
     if structure == "invalid":
         return "SKIP", [structure_reason or "invalid structure"]
-    fails = [f for f in filters if not f["ok"]]
+    fails = [f for f in filters if not f.get("disabled") and not f["ok"]]   # disabled filters never gate
     if fails:
         return "SKIP", [f"{f['name']} — {f['reason']}" for f in fails]
     if not entry_live and REQUIRE_RETRACE:

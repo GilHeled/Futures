@@ -80,7 +80,11 @@ def enumerate_setups(symbol, start, end, *, stage="setup", relaxed=False,
     return out
 
 
-def _simulate_one(row, bars_after, *, fill_bars=48, horizon_bars=288, target_r=None):
+_POINT_VALUE = {"MES": 5.0, "MNQ": 2.0, "MYM": 0.5, "M2K": 5.0}   # $ per index point
+
+
+def _simulate_one(row, bars_after, *, fill_bars=48, horizon_bars=288, target_r=None,
+                  cost_dollars=0.0, point_value=5.0):
     """Simulate ONE setup on the 5m bars that follow it: rest a limit at the entry (FVG CE), fill on
     the retrace, then run to stop or target. Returns R (reward multiple; -1 = full stop) or None if it
     never fills / invalidates pre-fill. Conservative tie-break: a bar touching BOTH stop and target is
@@ -95,11 +99,12 @@ def _simulate_one(row, bars_after, *, fill_bars=48, horizon_bars=288, target_r=N
     if target_r is not None:                                  # override the far draw with a fixed R target
         target = (entry - target_r * risk) if d == "short" else (entry + target_r * risk)
     rmult = abs(target - entry) / risk
+    cost_r = cost_dollars / (risk * point_value) if (cost_dollars and point_value) else 0.0  # cost in R
     filled = False
     for i, b in enumerate(bars_after):
         if not filled:
             if i >= fill_bars:
-                return None                                  # limit expired unfilled
+                return None                                  # limit expired unfilled → no cost, no trade
             touched = (b.low <= entry <= b.high)
             if not touched:
                 continue
@@ -107,18 +112,20 @@ def _simulate_one(row, bars_after, *, fill_bars=48, horizon_bars=288, target_r=N
         hit_stop = (b.high >= stop) if d == "short" else (b.low <= stop)
         hit_tgt = (b.low <= target) if d == "short" else (b.high >= target)
         if hit_stop and hit_tgt:
-            return -1.0                                       # ambiguous same bar → assume stop (pessimistic)
+            return -1.0 - cost_r                              # ambiguous same bar → assume stop (pessimistic)
         if hit_stop:
-            return -1.0
+            return -1.0 - cost_r
         if hit_tgt:
-            return rmult
+            return rmult - cost_r
         if filled and i >= horizon_bars:
-            return (entry - b.close) / risk if d == "short" else (b.close - entry) / risk   # time exit
+            raw = (entry - b.close) / risk if d == "short" else (b.close - entry) / risk   # time exit
+            return raw - cost_r
     return None
 
 
 def simulate(symbol, start, end, *, tfs=("4H", "15m", "5m", "5m"), stage="setup",
-             relaxed_retrace=True, min_rr=2.0, killzone=True, step_min=30, target_r=None):
+             relaxed_retrace=True, min_rr=2.0, killzone=True, step_min=30, target_r=None,
+             cost_dollars=0.0):
     """Enumerate setups then simulate each. Returns (results, matched_random) — lists of R. Setups use
     the faithful ≥min_rr + killzone filters but count ARMED (retrace off) as tradeable (we simulate the
     actual fill). matched_random flips each setup's direction (same fills) as a no-skill control."""
@@ -134,13 +141,13 @@ def simulate(symbol, start, end, *, tfs=("4H", "15m", "5m", "5m"), stage="setup"
     for r in rows:
         j = bisect.bisect_right(times, r["time"])
         after = bars5[j:j + 400]
-        R = _simulate_one(r, after, target_r=target_r)
+        R = _simulate_one(r, after, target_r=target_r, cost_dollars=cost_dollars, point_value=_POINT_VALUE.get(symbol, 5.0))
         if R is None:
             continue
         res.append(R)
         flip = dict(r); flip["direction"] = "long" if r["direction"] == "short" else "short"
         flip["stop"], flip["target"] = 2 * r["entry"] - r["stop"], 2 * r["entry"] - r["target"]   # mirror geometry
-        Rr = _simulate_one(flip, after, target_r=target_r)
+        Rr = _simulate_one(flip, after, target_r=target_r, cost_dollars=cost_dollars, point_value=_POINT_VALUE.get(symbol, 5.0))
         rnd.append(Rr if Rr is not None else 0.0)
     return res, rnd
 

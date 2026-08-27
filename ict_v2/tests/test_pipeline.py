@@ -29,12 +29,13 @@ def test_entry_models_registry_and_tagging():
     cat = EM.catalog()
     assert cat["fvg"]["implemented"] is True
     assert cat["order_block"]["implemented"] is True                 # first from-scratch plugin, built
-    for m in ("breaker", "mitigation_block", "ifvg", "iofed"):
+    assert cat["breaker"]["implemented"] is True                     # second from-scratch plugin, built
+    for m in ("mitigation_block", "ifvg", "iofed"):
         assert m in cat and cat[m]["implemented"] is False           # declared, not yet built
-    assert EM.resolve(None) == ("fvg",)                              # OB off by default
-    assert EM.resolve(["breaker", "ifvg"]) == ("fvg",)               # planned models drop → FVG kept
-    assert EM.resolve(["order_block"]) == ("order_block",)            # OB is opt-in and now resolves
-    assert EM.resolve(["fvg", "order_block"]) == ("fvg", "order_block")
+    assert EM.resolve(None) == ("fvg",)                              # OB/breaker off by default
+    assert EM.resolve(["ifvg", "iofed"]) == ("fvg",)                 # planned models drop → FVG kept
+    assert EM.resolve(["order_block"]) == ("order_block",)            # opt-in models now resolve
+    assert EM.resolve(["fvg", "order_block", "breaker"]) == ("fvg", "order_block", "breaker")
     assert EM.resolve(["fvg"]) == ("fvg",)
     # every candidate that HAS an entry is tagged with the model that produced it (fvg today);
     # partial candidates (no entry object yet) carry no model
@@ -194,6 +195,89 @@ def test_order_block_flows_through_the_cascade_generically(monkeypatch):
                     assert eo["lifecycle"] in EM.LIFECYCLE["order_block"]["vocab"]
                     assert eo["state"] in EM.COMMON_STATES
     assert found_ob, "Order Block never produced a candidate across 39 seeds — detector not wired"
+
+
+def _mss(state="confirmed", direction="bullish"):
+    return SimpleNamespace(state=state, direction=direction, id="mss-x")
+
+
+def test_breaker_detector_geometry_and_lifecycle():
+    """Breaker Block (second from-scratch plugin): a FAILED order block whose polarity flips after a
+    confirmed structure break. Distinct from an OB — it requires the MSS and a violated block. Fits
+    the v1.1 contract with no further contract evolution."""
+    from ict_v2 import entry_models as EM
+    # bullish breaker: down candle B (bar0) rallied through (bar1) then its low taken out (bar2 = the
+    # impulse origin / sweep), the up-impulse reclaims it, then price retests the zone → confirmed.
+    B = _ob_bar(105, 106, 99, 100)                  # 50% = 102.5, invalidation (low) = 99
+    rally = _ob_bar(100, 110, 100, 108)             # high 110 > B.high 106  (the up-attempt)
+    sweep = _ob_bar(108, 108, 95, 96)               # low 95 < B.low 99      (the failure)
+    up, top = _ob_bar(96, 106, 95, 105), _ob_bar(105, 113, 104, 112)
+    retest = _ob_bar(112, 112, 103, 110)            # low 103 ≤ B.high 106, close 110 ≥ 99
+    bars = [B, rally, sweep, up, top, retest]
+    disp = _ob_disp("bullish", start_index=2, end_index=4)
+    got = EM.breaker_entries(disp, _mss("confirmed", "bullish"), None, "long", bars)
+    assert len(got) == 1
+    e = got[0]
+    assert e.model == "breaker" and e.direction == "long"
+    assert e.ref == 102.5 and e.invalidation == 99.0 and e.origin_index == 0
+    assert e.lifecycle == "confirmed" and e.state == "valid"
+
+    # NO breaker without a confirmed structure break — that is what separates it from an OB
+    assert EM.breaker_entries(disp, None, None, "long", bars) == []
+    assert EM.breaker_entries(disp, _mss("candidate", "bullish"), None, "long", bars) == []
+
+    # formed (not yet retested): confirmed MSS, block violated, but the impulse is still in progress
+    e2 = EM.breaker_entries(_ob_disp("bullish", 2, 4, exhausted=False),
+                            _mss(), None, "long", bars[:5])[0]
+    assert e2.lifecycle == "formed" and e2.state == "waiting"
+
+    # bearish mirror: up candle B, dropped below its low, then broke above its high → short
+    Bs = _ob_bar(100, 112, 98, 110)                 # 50% = 105, invalidation (high) = 112
+    drop = _ob_bar(110, 110, 90, 92)                # low 90 < B.low 98
+    brk = _ob_bar(92, 120, 92, 118)                 # high 120 > B.high 112
+    es = EM.breaker_entries(_ob_disp("bearish", 2, 3, exhausted=False),
+                            _mss("confirmed", "bearish"), None, "short", [Bs, drop, brk])[0]
+    assert es.direction == "short" and es.ref == 105.0 and es.invalidation == 112.0
+
+    # a block that was NOT violated (no rally-then-failure) is not a breaker
+    calm = [_ob_bar(105, 106, 99, 100), _ob_bar(100, 101, 96, 98), _ob_bar(98, 130, 97, 128)]
+    assert EM.breaker_entries(_ob_disp("bullish", 2, 2, exhausted=False),
+                              _mss(), None, "long", calm) == []
+
+
+def test_breaker_shares_contract_and_assembles_generically():
+    from ict_v2 import entry_models as EM
+    FIELDS = {"model", "direction", "ref", "invalidation", "state", "lifecycle", "quality", "reason"}
+    bars = [_ob_bar(105, 106, 99, 100), _ob_bar(100, 110, 100, 108), _ob_bar(108, 108, 95, 96),
+            _ob_bar(96, 106, 95, 105), _ob_bar(105, 113, 104, 112), _ob_bar(112, 112, 103, 110)]
+    e = EM.breaker_entries(_ob_disp("bullish", 2, 4), _mss(), None, "long", bars)[0]
+    assert set(e.to_dict()) == FIELDS
+    g = EM.assemble(e, sweep_extreme=95.0, active_erl=[SimpleNamespace(kind="high", price=130.0)], min_stop=2.0)
+    assert g["stop"] == 95.0 and g["target"] == 130.0 and g["reject"] == ""
+
+
+def test_breaker_flows_through_the_cascade_generically():
+    """Enabling Breaker runs the full cascade with no engine change; every breaker candidate with an
+    entry is tagged `breaker` and conforms to the contract."""
+    from ict_v2 import entry_models as EM
+    found = False
+    for seed in range(1, 40):
+        base = v2._base_1m(20000, seed)
+        st = v2.analyze_mtf(v2.resample(base, 240, "4H"), v2.resample(base, 60, "1H"),
+                            v2.resample(base, 15, "15m"), base[-400:],
+                            entry_models=("fvg", "breaker"))
+        for stage in (st.setup, st.confirmation):
+            for c in stage.cand_info:
+                if c["entry_model"] == "breaker":
+                    found = True
+                    eo = c["entry_obj"]
+                    assert eo and eo["model"] == "breaker"
+                    assert eo["lifecycle"] in EM.LIFECYCLE["breaker"]["vocab"]
+                    assert eo["state"] in EM.COMMON_STATES
+    assert found, "Breaker never produced a candidate across 39 seeds — detector not wired"
+
+
+def test_four_layer_cascade_runs():
     st = v2.demo_state(seed=7)
     assert st.context.tf == "4H" and st.setup.tf == "1H" and st.confirmation.tf == "15m"
     assert st.execution.tf == "1m"

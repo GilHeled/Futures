@@ -192,6 +192,13 @@ argument was). Adding a *model* never touches this contract. **Order Block** is 
 against it, and the plugin that surfaced the v1.1 gap — the proof that the architecture is as generic
 as intended.
 
+### Models built against this contract
+* **FVG** (default) — sources v1's pre-computed gaps off `ms`.
+* **Order Block** (v1.1) — first from-scratch candle-body plugin; surfaced the `bars` gap.
+* **Breaker Block** — second from-scratch plugin; a failed OB that flips polarity after a confirmed
+  MSS. Fit the v1.1 contract with **no** contract change (evidence the contract holds).
+* Planned: Mitigation Block, IFVG, IOFED.
+
 ### Changelog
 * **v1.1 (2026-08-27)** — `detect()` gains `bars` (raw OHLC, passed generically to every model) so
   from-scratch candle-body models work. Inert for FVG (byte-for-byte verified).

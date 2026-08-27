@@ -93,7 +93,7 @@ REGISTRY: dict[str, dict] = {
         "desc": "Order Block — last opposing-close candle before the displacement; entry at its 50%.",
     },
     "breaker": {
-        "implemented": False, "detect": None,
+        "implemented": True, "detect": None,   # detector assigned below (breaker_entries)
         "desc": "Breaker Block — a failed order block that price flips into support/resistance.",
     },
     "mitigation_block": {
@@ -214,6 +214,77 @@ def order_block_entries(disp, mss, ms, direction, bars) -> list:
 
 
 REGISTRY["order_block"]["detect"] = order_block_entries
+
+
+# --- Breaker Block detector: a FAILED order block whose polarity flips after a structure break -----
+_BRK_LOOKBACK = 30         # scan at most this many bars back from the impulse origin for the failed OB
+
+
+def breaker_entries(disp, mss, ms, direction, bars) -> list:
+    """The Breaker Block entry on one displacement leg, as a generic Entry.
+
+    A breaker is an ORDER BLOCK THAT FAILED and then flips polarity once structure breaks the other
+    way (course B8). What makes it a breaker — not just an OB — is (1) a confirmed market-structure
+    shift on this leg and (2) the block was VIOLATED before the break: for a long, a prior down-close
+    candle whose HIGH was rallied through (an up-attempt) and whose LOW was then taken out (the move
+    failed / liquidity swept); the current up-displacement + MSS reclaims it, so that candle now acts
+    as support. Entry ref = the breaker candle's 50%; invalidation = its far edge (low for a long,
+    high for a short). Mirror for a short.
+
+    Requires the raw `bars` (v1.1) and a confirmed `mss` (no structure break ⇒ no breaker, at most an
+    OB). Causal / no-repaint: the breaker candle is fixed at its bar; the up-attempt→failure sequence
+    and the retest are read only from realised bars up to the cursor. Lifecycle:
+    formed → (price retests the zone after the break) confirmed; a close beyond invalidation ⇒ invalidated."""
+    if not bars or mss is None or getattr(mss, "state", "") != "confirmed":
+        return []                                           # a breaker needs a real structure break
+    j = getattr(disp, "start_index", -1)                    # impulse origin (= manipulation extreme)
+    if j <= 0 or j >= len(bars):
+        return []
+    bullish = disp.direction == "bullish"
+    brk_i = None
+    for i0 in range(j - 1, max(-1, j - _BRK_LOOKBACK) - 1, -1):
+        B = bars[i0]
+        opposing = (B.close < B.open) if bullish else (B.close > B.open)   # the failed-move origin
+        if not opposing:
+            continue
+        if bullish:                                         # up-attempt (rally above B.high)…
+            rally = next((a for a in range(i0 + 1, j + 1) if bars[a].high > B.high), None)
+            failed = rally is not None and any(bars[b].low < B.low for b in range(rally + 1, j + 1))
+        else:                                               # down-attempt (drop below B.low)…
+            drop = next((a for a in range(i0 + 1, j + 1) if bars[a].low < B.low), None)
+            failed = drop is not None and any(bars[b].high > B.high for b in range(drop + 1, j + 1))
+        if failed:                                          # …then the level was taken out (failure)
+            brk_i = i0; break
+    if brk_i is None:
+        return []
+    B = bars[brk_i]
+    d = "long" if bullish else "short"
+    ref = (B.high + B.low) / 2.0
+    inval = B.low if bullish else B.high
+
+    # The block's LOW being taken out is what FORMS the breaker (the failure), not what invalidates it.
+    # So the breaker's own invalidation — and its retest — are read only AFTER the impulse reclaims it.
+    inval_i = retest_i = None
+    if getattr(disp, "exhausted", False):
+        for i in range(disp.end_index + 1, len(bars)):
+            b = bars[i]
+            if inval_i is None and ((bullish and b.close < B.low) or (not bullish and b.close > B.high)):
+                inval_i = i
+            if retest_i is None and ((bullish and b.low <= B.high) or (not bullish and b.high >= B.low)):
+                retest_i = i
+
+    if retest_i is not None and (inval_i is None or retest_i <= inval_i):
+        lifecycle = "confirmed"
+    elif inval_i is not None:
+        lifecycle = "invalidated"
+    else:
+        lifecycle = "formed"
+
+    return [Entry(model="breaker", direction=d, ref=ref, invalidation=inval,
+                  lifecycle=lifecycle, id=f"brk-{brk_i}-{disp.direction}", origin_index=brk_i, source=B)]
+
+
+REGISTRY["breaker"]["detect"] = breaker_entries
 
 
 def assemble(entry: Entry, sweep_extreme: float, active_erl, min_stop=None) -> dict:

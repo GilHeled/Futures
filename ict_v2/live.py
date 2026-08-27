@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 from ict_live.market.bar_builder import BarBuilder
 from ict_v2.engine import MTFEngine
 from ict_v2 import entry_models as EM
+from ict_v2 import pdarrays                          # NWOG/ORG PD-array context detectors (Lessons 13/14)
 from ict_v2.pipeline import session_of              # ET/DST-safe session+killzone (§11, context)
 
 _WINDOW = 240          # context/setup/confirmation structural window
@@ -144,6 +145,8 @@ class V2Live:
         pools = [{"kind": "BSL" if getattr(p, "kind", None) == "high" else "SSL", "price": _px(p.price)}
                  for p in (c.liquidity if c else [])]             # §3 the FULL pool set (BSL/SSL)
         fib = c.fib_levels() if c else []                          # §6 fib ladder (Lesson 8)
+        nwog = pdarrays.nwogs(self.buf.get(self.context_tf) or [])  # §18 New Week Opening Gaps (Lesson 13)
+        org = pdarrays.org(self.buf.get(self.confirm_tf) or [])     # §19 Opening Range Gap (Lesson 14; 15m has 09:30/16:15)
         tb = self.buf.get(self.trigger_tf) or []                  # last 1m bar = the latest price
         last = tb[-1] if tb else None
         last_dir = None
@@ -167,6 +170,8 @@ class V2Live:
                                                           "ce": _px(dr.ce), "direction": dr.direction},
                 "fib": fib,                                   # §6 fib ladder 0/0.5/0.62/0.79/1 (Lesson 8)
                 "pools": pools,                               # §3 full ERL pool set (BSL/SSL), Lesson 6
+                "nwog": nwog,                                 # §18 New Week Opening Gaps (Lesson 13) — S/R + magnet
+                "org": org,                                   # §19 Opening Range Gap (Lesson 14) — current-day, 50% line
                 "liquidity_draws": len(c.liquidity), "liquidity_objective": obj},
             "dealing_ranges": nested,                         # §5/§6 nested range hierarchy (source_tf-tagged)
             "setup": self._setup_dict(s),

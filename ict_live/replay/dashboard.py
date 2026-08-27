@@ -187,6 +187,7 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .fibx i,.rangx i{font-style:normal;color:var(--mut);margin-left:4px}
  .fibx.premium{border-color:var(--short)} .fibx.discount{border-color:var(--long)}
  .fibx.equilibrium{border-color:var(--accent,#c8a24a);font-weight:700}
+ .rangx.closed{opacity:.5;text-decoration:line-through}   /* NWOG/ORG rebalanced */
  .modal{position:fixed;inset:0;background:#000a;display:none;z-index:50;padding:22px}
  .modal.on{display:flex} .modal-box{background:var(--panel);border:1px solid var(--line);border-radius:14px;
    margin:auto;width:min(1120px,96vw);height:90vh;display:flex;flex-direction:column;overflow:hidden}
@@ -607,6 +608,10 @@ function v2Tables(rep){
     const fibHtml=fib.length?`<div class=fibrow><span class=fibl>fib</span>${fib.map(l=>`<span class="fibx ${l.zone}" title="${l.zone}">${l.level}<i>${num(l.price)}</i></span>`).join('')}</div>`:'';
     const nested=s.dealing_ranges||[];
     const nestedHtml=nested.length?`<div class=fibrow><span class=fibl>ranges</span>${nested.map(r=>`<span class=rangx title="${r.direction}">${r.tf} ${num(r.low)}–${num(r.high)}</span>`).join('')}</div>`:'';
+    const nwog=c.nwog||[];   // §18 New Week Opening Gaps (Lesson 13) — S/R + magnet; NOT liquidity
+    const nwogHtml=nwog.length?`<div class=fibrow><span class=fibl>NWOG</span>${nwog.map(g=>`<span class="rangx${g.closed?' closed':''}" title="${g.closed?'closed (rebalanced)':'open'} · 50% ${num(g.mid)}${g.age_weeks!=null?' · '+g.age_weeks+'w':''}">${num(g.bottom)}–${num(g.top)}${g.closed?' ✓':''}</span>`).join('')}</div>`:'';
+    const org=c.org;   // §19 Opening Range Gap (Lesson 14) — current day only, 50% line is the key level
+    const orgHtml=org?`<div class=fibrow><span class=fibl>ORG</span><span class="rangx${org.closed?' closed':''}" title="current-day opening gap · 50% ${num(org.mid)}${org.closed?' · closed':''}">${num(org.bottom)}–${num(org.top)} <i>50% ${num(org.mid)}</i>${org.closed?' ✓':''}</span></div>`:'';
     // each stage colored by ITS OWN state; neutral grey otherwise so color never implies a phantom trade
     const biasSide=sideOf(c.bias);
     const setupSide=(st.gated>0)?sideOf(st.direction):'flat';
@@ -628,7 +633,7 @@ function v2Tables(rep){
       <div class=reads>
         <div class="read ${biasSide}"><div class=rhd><span class=rsy>4H</span><span class=rnn>context</span></div>
           <div class=why><span class=wc>bias <b>${fmt(c.bias)}</b></span>${c.anchor_tf?`<span class=wc>${c.anchor_tf}-anchor <b>${fmt(c.anchor_bias||'neutral')}</b></span>`:''}<span class=wc>range <b>${drs}</b></span><span class=wc>draw <b>${objs}</b></span>${poolsHtml}</div>
-          ${fibHtml}${nestedHtml}
+          ${fibHtml}${nestedHtml}${nwogHtml}${orgHtml}
           <div class=rfoot>updated ${fmt(u[tf.context])}</div></div>
         <div class="read ${setupSide}"><div class=rhd><span class=rsy>1H</span><span class=rnn>setup</span></div>
           <div class=rln>${gline('setup',st)}</div>

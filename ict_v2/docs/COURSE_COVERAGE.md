@@ -164,15 +164,24 @@ The W/D/4H→1H→15m→1m role split *is* v2's spine.
 - Verified: `test_htf_context_labels`.
 - **Gaps:** (a) AMD-phase labels (with §10), (b) remove the bias veto in the filter refactor (item 11).
 
-### 18. NWOG (New Week Opening Gap) — `[COURSE]`+`[NEC]` (§18) — ❌ Missing
-- Config knobs only (`NWOG_KEEP`, `NWOG_REBALANCE_NOTE_PTS`); explicitly excluded from v1 liquidity; **no detector** anywhere in the three layers.
-- ℹ️ The "small gaps tend to rebalance (≈≤60 pts)" line is a **course observation, not a law** — informational.
-- **Gap:** NWOG detector (S/R / rebalance / magnet-target), tracked as IRL context, shown on DB.
+### 18. NWOG (New Week Opening Gap) — `[COURSE]` (§18, **Lesson 13**) — ✅ Implemented
+- Lesson 13 verified: NWOG = gap between the last price before the weekend (Fri close) and the new
+  trading-week open; a **magnet/target** + **support/resistance**, explicitly **NOT liquidity/ERL**;
+  mark **three**, keep the marking after close, additionally keep an **unclosed** gap **older than 3
+  weeks**. (The ≤60/>60/>200-pt rebalance figures are LIVE-session *statistics* → informational, not encoded.)
+- v2 ✅: `pdarrays.nwogs(bars, keep=3)` (weekend = >24h bar gap; 'closed' = body close back through the
+  Friday-close edge, Lesson-12 convention; keeps 3 + old-unclosed>3wk). Surfaced `snapshot.context.nwog`
+  (top/bottom/mid/closed/age); DB renders an `NWOG` row (closed struck-through). Runs off the 4H
+  context buffer (~8 weeks). Verified `test_pdarrays.py` (detection, midpoint, closed, retention).
 
-### 19. ORG (Opening Range Gap) — `[COURSE]`+`[NEC]` (§19) — ❌ Missing
-- Config knobs only (`ORG_TRACK_CURRENT_DAY_ONLY`, `ORG_REBALANCE_NOTE_PCT`); **no detector**.
-- ℹ️ "~70% partial rebalance" is a course observation, not verified law — informational.
-- **Gap:** current-day ORG detector + its 50% level, as context/target, shown on DB.
+### 19. ORG (Opening Range Gap) — `[COURSE]` (§19, **Lesson 14**) — ✅ Implemented
+- Lesson 14 verified: ORG = gap between the **prior day's close (16:15 ET)** and the **current day's
+  open (09:30 ET)**; the **50% midpoint** is the key line; **current day only**; magnet/target that
+  identifies the day's opening potential. (The "~70% close ≥half" figure is an *observation* → not encoded.)
+- v2 ✅: `pdarrays.org(bars)` (ET/DST-correct 09:30 open vs prior-day ≤16:15 close; 50% midpoint;
+  'closed' = body close back through the prior-day-close edge). Surfaced `snapshot.context.org`; DB
+  renders an `ORG` row with the 50% level. Runs off the 15m confirm buffer (09:30/16:15 land on 15m
+  boundaries; ~2.5-day span). Verified `test_pdarrays.py` (midpoint 150 example, closed, guards).
 
 ### 20. NO-TRADE is first-class — `[COURSE]` (§20) — ✅ Implemented
 - v1: `recommend` returns NO-TRADE with per-setup reject reasons (`setup.py:122`).
@@ -215,8 +224,8 @@ Reading the PDFs surfaced concrete mechanical rules the 20-section distillation 
 4. Explicit AMD phase + consolidation/accumulation detector (§10)
 5. ~~Session/killzone context wired into v2 + shown on DB (§11)~~ ✅ **DONE 2026-08-27**
 6. HTF context labels (§17) — 🟡 alignment labels ✅ **DONE 2026-08-27**; AMD-phase labels pending §10; bias-veto removal pending item 11
-7. NWOG detector (§18)
-8. ORG detector (§19)
+7. ~~NWOG detector (§18)~~ ✅ **DONE 2026-08-27** (Lesson 13)
+8. ~~ORG detector (§19)~~ ✅ **DONE 2026-08-27** (Lesson 14)
 9. Intraday trend-change / HTF-transition read (§21)
 10. Ordered target hierarchy (§16) — now includes the **fib EXTENSION targets 1.5–4 (Lesson 8)**
 11. Course-filter layer (§16 ≥3R + §11 killzone) with Structure/Filter/Recommendation separation
@@ -251,7 +260,8 @@ no PnL tuning; verify against the spec, not by search):
 1. ~~**Sessions/killzones into v2 + DB** (§11)~~ ✅ **DONE 2026-08-27** — context tagged on every candidate + current-session chip on the V2 tab; killzone *filter* deferred to the filter layer.
 2. ~~**HTF context labels** (§17)~~ ✅ **DONE 2026-08-27** (alignment axis) — AMD-phase labels come with §10; bias-veto removal is item 11.
 3. **Liquidity/range completeness** (§3/§6): ✅ **DONE 2026-08-27** the parameter-free parts — fib ladder (Lesson 8, oriented), full pool set surfaced (Lesson 6), nested per-stage ranges surfaced. ⛔ **Deferred (parameter-blocked):** equal-H/L clustering + pools-as-zones — no course tolerance; awaiting an explicit rule or an approved `[NEC]` value. ← resume here when the tolerance is decided
-4. **NWOG & ORG detectors** (§18/§19) — new IRL context arrays; tracked, shown, usable as targets. ← **NEXT parameter-free item** (Lessons 13/14 available on disk)
+4. ~~**NWOG & ORG detectors** (§18/§19)~~ ✅ **DONE 2026-08-27** (Lessons 13/14) — `ict_v2/pdarrays.py`, surfaced on the V2 tab. IRL-classification usage (§4) can now build on these.
+5. **IRL classification** (§4, Lesson 10 on disk) — with the internal arrays (FVG/NWOG/ORG) now present, classify ERL vs IRL relative to the dealing range. ← **NEXT** (verify against Lesson 10)
 4. **NWOG & ORG detectors** (§18/§19) — new IRL context arrays; tracked, shown, usable as targets.
 5. **IRL classification** (§4) — depends on 3+4 (needs the internal arrays first).
 6. **Explicit AMD phase + consolidation detector** (§10) — the hardest; `[RES:amd_phase]`, needs its own mini-spec.

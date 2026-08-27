@@ -21,6 +21,9 @@ class MTFEngine:
     def __init__(self, context_tf: str = "4H", setup_tf: str = "1H", confirm_tf: str = "15m",
                  trigger_tf: str = "1m", refine_tf: str | None = None, min_stop: float | None = None,
                  anchor_tf: str | None = None, entry_models=None):
+        # ≥15-minute liquidity floor (Lesson 6/8): structure/liquidity TFs must be ≥15m; the 1m
+        # trigger (and refine) may be finer — they only trigger, they do not mark liquidity.
+        P.assert_liquidity_floor(context_tf, setup_tf, confirm_tf)
         self.context_tf, self.setup_tf = context_tf, setup_tf
         self.confirm_tf, self.trigger_tf = confirm_tf, trigger_tf
         self.refine_tf = refine_tf     # None = MTF entry-refinement OFF (default); else the entry TF

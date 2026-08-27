@@ -703,7 +703,9 @@ function _candCard(c){
   const rrtxt=c.rr==null?'—':num(c.rr)+(rrq?` <b class=rrq-${rrq}>${rrq}</b>`:'');
   const clab=(c.context_label||'neutral-context').replace(/-/g,' ');
   const amd=c.amd_phase||'—';
-  const qual=[['RR',rrtxt],['alignment',clab],['P/D',c.pd_location||'—'],['AMD',amd]]
+  const pb=c.pullback;   // Lesson 8: pullback retraces ≥50% (a quality read, not a gate)
+  const pbtxt=pb==null?'—':(Math.round(pb*100)+'%'+(pb>=0.5?' <b class=rrq-good>≥50%</b>':' <b class=rrq-low>shallow</b>'));
+  const qual=[['RR',rrtxt],['alignment',clab],['P/D',c.pd_location||'—'],['AMD',amd],['pullback',pbtxt]]
     .map(([k,v])=>`<span class=qmetric><i>${k}</i>${v}</span>`).join('');
   // (3) COURSE FILTERS — each ✓/✗ with its reason (only meaningful for a valid structure)
   const filters=(c.filters||[]);

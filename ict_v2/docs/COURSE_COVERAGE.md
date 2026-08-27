@@ -278,13 +278,13 @@ levels (Lesson 11)". No new detector, no test (no new logic).
 
 Reading the PDFs surfaced concrete mechanical rules the 20-section distillation had dropped or blurred:
 
-- **≥15-minute liquidity floor** (Lesson 6 & 8): *"do not mark liquidity points on a chart below 15
-  minutes"* (smaller interval = less reliable). A hard rule for where swings/liquidity may be defined.
-  v2 status: **honored in practice** (pools/objective come from the HTF context; the 1m stage is an
-  execution trigger only, not a liquidity source) — but **not asserted**. → add an explicit guard/test.
-- **≥50% pullback rule** (Lesson 8): every technical correction retraces **at least 50%** of the leg to
-  continue the trend; if no ≥50% pullback, re-measure from another liquidity point, else drop a TF
-  (never below 15m). Relates to §6/§2. v2 status: **not represented** → candidate rule for §2/§6 work.
+- **≥15-minute liquidity floor** (Lesson 6 & 8) — ✅ **DONE 2026-08-27**: `tf_minutes()` +
+  `assert_liquidity_floor()` enforce that the context/setup/confirmation TFs are ≥15m; `MTFEngine`
+  rejects a <15m structural TF at construction. The 1m trigger (and refine) may be finer — they only
+  trigger, they do not mark liquidity. Verified `test_liquidity_floor_15m_and_pullback`.
+- **≥50% pullback rule** (Lesson 8) — ✅ **DONE 2026-08-27**: `pullback_pct(disp, entry)` measures the
+  entry's retrace depth into the displacement leg; surfaced as a QUALITY metric on each candidate
+  (≥0.5 = adequate) + a dashboard chip. A quality read, not a gate (kept faithful to "context/quality").
 - **Fib EXTENSION targets 1.5 / 2 / 2.5 / 3 / 3.5 / 4** (Lesson 8): multiples of the 0→1 range, used
   for *target-taking*. Directly relevant to §16 targets. v2 status: **missing** → fold into the target
   hierarchy work (§16). This is a course-grounded target mechanism we did not previously have.
@@ -344,10 +344,18 @@ no PnL tuning; verify against the spec, not by search):
    - ~~**Lessons 3, 4, 5**~~ ✅ **DONE 2026-08-27** — informational (3/4) / verification of §11 (5); no new mechanic.
    - **ALL AVAILABLE LESSONS NOW READ & REPRESENTED.** Remaining work is cross-lesson SYNTHESIS, not new lessons:
      - ~~**Course-filter layer**~~ ✅ **DONE 2026-08-27** (`ict_v2/recommend.py`) — Structure / Quality / Course-Filters / Recommendation (TAKE/SKIP/WATCH); ≥3R + killzone as filters; §17 bias-veto removed; dashboard shows all four layers. ← the big architectural piece, landed.
-     - **Ordered target hierarchy + fib extensions 1.5–4** (§16, Lesson 8). ← **NEXT**
-     - **A/B/C quality grade** (§22).
-     - Assert **≥15m liquidity floor** + **≥50% pullback** rules (§2/§3/§6).
-   - ⛔ Parameter-blocked (await a course rule or approved `[NEC]`): equal-H/L clustering + pools-as-zones (§3); accumulation/consolidation detector (§10).
+     - ~~Assert **≥15m liquidity floor** + **≥50% pullback** rules (§2/§3/§6)~~ ✅ **DONE 2026-08-27**.
+   - ⛔ **DEFERRED — for the separate "parameter-dependent" review the user flagged:**
+     - **Ordered target hierarchy** (§16): a **DATA gap** — v2's cascade (`v1.analyze`) exposes only
+       swing-type ERL pools (`SwingPool`: kind+price, no type); the typed pools the §16 hierarchy orders
+       by (PDH/PDL, PWH/PWL, Asia/London H/L) live in v1's **live-only `LiquidityRegistry`** (`Pool` with
+       name/source), not in the analyze output. Implementing the typed hierarchy needs those pools merged
+       into the v2 context (a data-layer task), not a parameter. **Fib EXTENSION targets 1.5–4** (Lesson 8)
+       have an unresolved projection-direction (the lesson doesn't crisply fix which way to project for a
+       target) — an ambiguity, not to be guessed.
+     - **A/B/C quality grade** (§22): boundaries are `[RES]` / `config.QUALITY_BOUNDARIES = DEFERRED` — an
+       **undefined parameter**. v2 uses the RR-based grade (reject/low/good/high) as the interim quality read.
+     - equal-H/L clustering + pools-as-zones (§3); accumulation/consolidation detector (§10) — undefined tolerances.
 4. **NWOG & ORG detectors** (§18/§19) — new IRL context arrays; tracked, shown, usable as targets.
 5. **IRL classification** (§4) — depends on 3+4 (needs the internal arrays first).
 6. **Explicit AMD phase + consolidation detector** (§10) — the hardest; `[RES:amd_phase]`, needs its own mini-spec.

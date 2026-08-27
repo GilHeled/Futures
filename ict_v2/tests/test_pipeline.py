@@ -271,6 +271,33 @@ def test_four_layer_cascade_runs():
     assert "CONTEXT" in d and "SETUP" in d and "CONFIRM" in d and "EXECUTION" in d
 
 
+def test_liquidity_floor_15m_and_pullback():
+    """Lesson 6/8: (a) liquidity/structure TFs must be ≥15m ('do not mark liquidity below 15m') —
+    the execution trigger may be finer; (b) a pullback should retrace ≥50% of the leg (a quality read)."""
+    import pytest
+    from ict_v2.engine import MTFEngine
+    assert v2.tf_minutes("4H") == 240 and v2.tf_minutes("15m") == 15 and v2.tf_minutes("1m") == 1
+    assert v2.tf_minutes("D") == 1440 and v2.tf_minutes("W") == 10080
+    v2.assert_liquidity_floor("4H", "1H", "15m")             # ok — all ≥15m
+    v2.assert_liquidity_floor("15m", "15m", "15m")           # ok — exactly the floor
+    with pytest.raises(ValueError):
+        v2.assert_liquidity_floor("4H", "5m", "15m")         # 5m structural TF violates the floor
+    # the engine enforces it: a <15m structural TF is rejected; a <15m TRIGGER is fine
+    MTFEngine("4H", "1H", "15m", "1m")                       # ok (1m is the trigger, not liquidity)
+    with pytest.raises(ValueError):
+        MTFEngine("4H", "5m", "15m", "1m")                   # 5m as the SETUP TF → rejected
+    # pullback depth of the entry into the displacement leg
+    disp = SimpleNamespace(start_price=100.0, end_price=200.0)   # a 100-pt up leg
+    assert v2.pullback_pct(disp, 150.0) == 0.5               # entry at the midpoint = 50% retrace
+    assert v2.pullback_pct(disp, 130.0) == 0.7               # deeper (from the 200 end back to 130)
+    assert v2.pullback_pct(disp, 180.0) == 0.2               # shallow
+    assert v2.pullback_pct(None, 150.0) is None
+    # surfaced on candidates that reached an entry
+    st = v2.demo_state(seed=7)
+    withentry = [c for c in st.setup.cand_info if c["entry_obj"]]
+    assert withentry and all(c["pullback"] is None or 0.0 <= c["pullback"] <= 2.0 for c in withentry)
+
+
 def test_four_layer_semantics_and_no_bias_veto():
     """The semantic layer on real candidates: every candidate carries structure / filters /
     recommendation; TAKE ⟺ valid structure + all course filters pass; and — critically — a

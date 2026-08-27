@@ -69,6 +69,26 @@ The W/D/4H→1H→15m→1m role split *is* v2's spine.
   — needs a width tolerance. Both are *mechanically required but the course provides no number*; left
   pending an explicit course rule or a deliberately-approved `[NEC]` parameter. **Not** using 0.15·ATR.
 
+### 3b. Support / Resistance levels — **Lesson 11** — ✅ Implemented (re-framing; NO new mechanic)
+Lesson 11 verified end-to-end. It teaches S/R as **the areas where traders' stops/targets rest** and
+enumerates the S/R *types* (page 2) — and every one is **already implemented under another name**, so
+per the no-duplicate-logic rule this is documented, not re-coded:
+
+| Lesson-11 S/R type | Already implemented as |
+|---|---|
+| liquidity areas / old highs & lows | v1 swing pools → `active_erl` (§3) |
+| equal highs / lows | ⛔ the one **gap** — equal-H/L clustering (§3), parameter-blocked |
+| imbalance candle (FVG) on a high TF | FVG (§7) |
+| Asia / London high & low | v1 session pools `liquidity.py` (§3) |
+| weekly / daily candle high & low | PWH/PWL, PDH/PDL `liquidity.py` (§3) |
+
+The one **distinct rule** — *"mark ONLY untaken (unbroken) levels; once taken, a level loses meaning"* —
+is exactly `active_erl = active(pools)` = pools with `not swept` (`swing_liquidity.py:55`), which is
+what v2 surfaces as the pool set / draw. **Verified.** "Higher interval = stronger" is already in v1
+ranking + the ≥15m rule. Equal H/L is again taught as a *price ZONE* with **no numerical tolerance** —
+reinforces the parameter-block, nothing to invent. DB: the pools chip is now labelled "untaken S/R
+levels (Lesson 11)". No new detector, no test (no new logic).
+
 ### 4. ERL vs IRL — `[COURSE]` (§4, **Lesson 10**) — ✅ Implemented
 - Lesson 10 verified: **ERL** = liquidity ABOVE the range high / BELOW the range low (untaken equal
   highs/lows the market draws to); **IRL** = BETWEEN low and high (FVG/gaps/imbalance — rebalance area).
@@ -268,8 +288,14 @@ no PnL tuning; verify against the spec, not by search):
 3. **Liquidity/range completeness** (§3/§6): ✅ **DONE 2026-08-27** the parameter-free parts — fib ladder (Lesson 8, oriented), full pool set surfaced (Lesson 6), nested per-stage ranges surfaced. ⛔ **Deferred (parameter-blocked):** equal-H/L clustering + pools-as-zones — no course tolerance; awaiting an explicit rule or an approved `[NEC]` value. ← resume here when the tolerance is decided
 4. ~~**NWOG & ORG detectors** (§18/§19)~~ ✅ **DONE 2026-08-27** (Lessons 13/14) — `ict_v2/pdarrays.py`, surfaced on the V2 tab. IRL-classification usage (§4) can now build on these.
 5. ~~**IRL classification** (§4, Lesson 10)~~ ✅ **DONE 2026-08-27** — `HTFContext.erl_irl()`, pools + NWOG/ORG tagged, DB breakdown.
-6. **Support/resistance levels** (§—, **Lesson 11** on disk, "רמות תמיכה והתנגדות") — verify what Lesson 11 adds beyond swing pools; likely named S/R levels. ← **NEXT** (read Lesson 11 first)
-7. Remaining: market-structure surfacing + potential/confirmed reversal (§2, Lesson 8), intraday trend-change (§21, **Lesson 15** on disk), AMD phase + consolidation (§10, **Lesson 16**), course-filter layer (§16 ≥3R + killzone; removes §17 bias-veto), ordered target hierarchy + fib extensions (§16), A/B/C grade (§22), the ≥15m & ≥50%-pullback rules, equal-H/L + zones (parameter-blocked).
+6. ~~**Support/resistance levels** (Lesson 11)~~ ✅ **DONE 2026-08-27** — re-framing of existing liquidity concepts; no new mechanic (documented §3b).
+7. **Lesson-by-lesson sweep of the remainder** (user mandate: continue without per-lesson approval, stop only on genuine ambiguity or an undefined parameter):
+   - **Lesson 12 (FVG)** — verify our §7 FVG against the raw lesson; document. ← **NEXT**
+   - **Lesson 15 (intraday trend changes)** → §21 intraday trend-change (currently missing).
+   - **Lesson 16 (Power of 3)** → §10 AMD phase + consolidation detector (currently missing).
+   - **Lessons 3, 4** (orders; contract names/rollover) — expected informational/non-mechanical; verify + classify.
+   - Then: course-filter layer (§16 ≥3R + killzone; removes §17 bias-veto), ordered target hierarchy + fib extensions 1.5–4 (§16), A/B/C grade (§22), assert ≥15m floor + ≥50%-pullback rules (§2/§6), market-structure surfacing + reversal states (§2).
+   - Parameter-blocked (skip until a rule/param): equal-H/L clustering + pools-as-zones (§3).
 4. **NWOG & ORG detectors** (§18/§19) — new IRL context arrays; tracked, shown, usable as targets.
 5. **IRL classification** (§4) — depends on 3+4 (needs the internal arrays first).
 6. **Explicit AMD phase + consolidation detector** (§10) — the hardest; `[RES:amd_phase]`, needs its own mini-spec.

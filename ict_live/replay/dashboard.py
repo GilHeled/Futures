@@ -605,7 +605,7 @@ function v2Tables(rep){
     // §3 full pool set (Lesson 6), §6 fib ladder (Lesson 8), §5/§6 nested ranges — all CONTEXT
     const pools=c.pools||[];   // §4 each pool tagged ERL (outside range) / IRL (inside) — Lesson 10
     const nERL=pools.filter(p=>p.loc==='ERL').length, nIRL=pools.filter(p=>p.loc==='IRL').length;
-    const poolsHtml=pools.length?`<span class=wc title="${pools.map(p=>p.kind+' '+num(p.price)+(p.loc?' ['+p.loc+']':'')).join(', ')}">pools <b>${pools.length}</b> <span class=mut>ERL ${nERL}/IRL ${nIRL}</span></span>`:'';
+    const poolsHtml=pools.length?`<span class=wc title="untaken S/R levels (Lesson 11) — ${pools.map(p=>p.kind+' '+num(p.price)+(p.loc?' ['+p.loc+']':'')).join(', ')}">pools <b>${pools.length}</b> <span class=mut>ERL ${nERL}/IRL ${nIRL}</span></span>`:'';
     const fib=c.fib||[];
     const fibHtml=fib.length?`<div class=fibrow><span class=fibl>fib</span>${fib.map(l=>`<span class="fibx ${l.zone}" title="${l.zone}">${l.level}<i>${num(l.price)}</i></span>`).join('')}</div>`:'';
     const nested=s.dealing_ranges||[];

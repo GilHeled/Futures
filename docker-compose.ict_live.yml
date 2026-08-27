@@ -82,6 +82,11 @@ services:
       ICT_V2_MIN_RR: "${ICT_V2_MIN_RR:-}"                 # e.g. 1  (take/skip R:R floor)
       ICT_V2_KILLZONE: "${ICT_V2_KILLZONE:-}"             # off = don't require a killzone manipulation
       ICT_V2_REQUIRE_RETRACE: "${ICT_V2_REQUIRE_RETRACE:-}"  # off = armed setups read as TAKE (not WATCH)
+      # cascade timeframes — validated MES edge uses the intraday config: SETUP_TF=15m CONFIRM_TF=5m
+      ICT_V2_CONTEXT_TF: "${ICT_V2_CONTEXT_TF:-}"
+      ICT_V2_SETUP_TF: "${ICT_V2_SETUP_TF:-}"
+      ICT_V2_CONFIRM_TF: "${ICT_V2_CONFIRM_TF:-}"
+      ICT_V2_TRIGGER_TF: "${ICT_V2_TRIGGER_TF:-}"
     command: ["python", "-m", "ict_v2.serve"]
     ports:
       - "127.0.0.1:8020:8020"

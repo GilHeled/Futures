@@ -41,6 +41,12 @@ class V2Service:
         # run. Unset = FVG only. Not-yet-implemented models are inert (see entry_models.REGISTRY).
         em = os.environ.get("ICT_V2_ENTRY_MODELS", "").strip()
         self.entry_models = tuple(x.strip() for x in em.split(",") if x.strip()) or None
+        # Cascade TIMEFRAMES (default 4H/1H/15m/1m swing triad). The validated MES edge uses a lower,
+        # intraday cascade — set e.g. ICT_V2_SETUP_TF=15m ICT_V2_CONFIRM_TF=5m for the 4H/15m/5m/1m config.
+        self.context_tf = os.environ.get("ICT_V2_CONTEXT_TF", "4H").strip() or "4H"
+        self.setup_tf = os.environ.get("ICT_V2_SETUP_TF", "1H").strip() or "1H"
+        self.confirm_tf = os.environ.get("ICT_V2_CONFIRM_TF", "15m").strip() or "15m"
+        self.trigger_tf = os.environ.get("ICT_V2_TRIGGER_TF", "1m").strip() or "1m"
         # VALIDATION / TUNING knobs for the take/skip course filters (NOT course methodology — the
         # faithful defaults are min_rr=2.0, killzone=on, require_retrace=on). Relax these to make the
         # pipeline fire on more setups while eyeballing the logic against charts:
@@ -73,9 +79,10 @@ class V2Service:
                             mstop = _C.min_stop_for(sym)
                         except Exception:
                             mstop = None
-                    live = self.lives.setdefault(sym, V2Live(refine_tf=self.refine_tf, min_stop=mstop,
-                                                             anchor_tf=self.anchor_tf,
-                                                             entry_models=self.entry_models))
+                    live = self.lives.setdefault(sym, V2Live(
+                        self.context_tf, self.setup_tf, self.confirm_tf, self.trigger_tf,
+                        refine_tf=self.refine_tf, min_stop=mstop, anchor_tf=self.anchor_tf,
+                        entry_models=self.entry_models))
                 last = self.last_ms.get(sym, -1)
                 for b in store.bars(sym):                    # chronological
                     ms = int(b.open_time.timestamp() * 1000)

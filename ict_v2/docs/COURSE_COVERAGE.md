@@ -133,7 +133,15 @@ levels (Lesson 11)". No new detector, no test (no new logic).
 > auto-fired (parameter-blocked; refinement stays an explicit mode). No new mechanic; no code change.
 - v1: `fvg.py:44 detect_fvgs` — geometry (`:57`), CE (`:67`), **body-close-through-far-boundary mitigation** (`:75/:81`), full same-displacement-leg scan (`:53`), depends_on displacement+MSS. MTF refine variant `detect_fvgs_mtf:107`. P/D eligibility applied at the gate.
 - v2: FVG is the sole execution model (`entry_models.py fvg_entries`; ref=CE, invalidation=far edge, prefers unmitigated). DB: entry-model + lifecycle pill (`dashboard.py:655`), invalidation fact (`:647`).
-- ℹ️ **Same-P/D-zone tie-break** (>1 eligible FVG) is an **intentionally unresolved documented gap** (`ict_faithful/SPEC.md §7b`) — not silently invented.
+- ℹ️ **Same-leg / same-zone FVG tie-break — EXPLICIT `[RES:fvg_tiebreak]` (2026-08-27).** Verified
+  against the RAW lessons: the course never demonstrates how to choose between multiple valid FVGs on
+  one displacement leg (Lesson 12 gives only "mark it in the discount" + "very large FVG → drop a TF";
+  neither a same-leg tie-break). So it is a labelled, UNDECIDED research choice — **not** course
+  methodology. Placeholder `entry_models.FVG_TIEBREAK_RULE = "v1_rank"` (prefer unmitigated → largest
+  gap → most recent). Made explicit (no longer implicit): each candidate reports `fvg_tiebreak` = how
+  many unmitigated FVGs the entry was chosen among (>1 ⇒ exercised, ~5% of legs), and the dashboard
+  shows an `[RES] tie-break ×N` marker so the rare cases can be studied live. To be replaced by an
+  evidence-based rule after live observation — deliberately NOT decided today (user, 2026-08-27).
 
 ### 8. Displacement — `[COURSE]`+`[NEC]` (§8) — ✅ Implemented
 - v1: leg-based `displacement.py:39` (manipulation-extreme → first counter-pivot; net/span/exhausted); quality **ranked, not gated** (`pipeline.py:82`).

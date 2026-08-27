@@ -283,6 +283,7 @@ class Candidate:
     amd_phase: str = "manipulation"        # §10 Power-of-3 phase (manipulation/distribution; Lesson 16)
     # --- the four semantic layers (see ict_v2/recommend.py) ---
     pullback: "float|None" = None          # QUALITY: entry retrace depth into the displacement leg (§/Lesson 8; ≥0.5 good)
+    fvg_tiebreak: int = 0                  # # of unmitigated FVGs the entry was picked among; >1 ⇒ [RES:fvg_tiebreak] exercised
     structure: str = "forming"             # STRUCTURE: forming | valid | invalid (the ICT setup itself)
     filters: list = field(default_factory=list)   # COURSE FILTERS: [{name, ok, reason}] (≥3R, killzone, …)
     recommendation: str = "WATCH"          # RECOMMENDATION: TAKE | SKIP | WATCH (derived from the layers)
@@ -315,6 +316,7 @@ class Candidate:
             "context_label": self.context_label,                   # §17 HTF label (not a veto)
             "amd_phase": self.amd_phase,                           # §10 Power-of-3 phase (Lesson 16)
             "pullback": self.pullback,                             # QUALITY: retrace depth of the leg (≥0.5 good, Lesson 8)
+            "fvg_tiebreak": self.fvg_tiebreak,                     # >1 ⇒ [RES:fvg_tiebreak] picked among N unmitigated FVGs
             "structure": self.structure,                           # STRUCTURE: forming|valid|invalid
             "filters": [dict(f) for f in self.filters],            # COURSE FILTERS: [{name,ok,reason}]
             "recommendation": self.recommendation,                 # RECOMMENDATION: TAKE|SKIP|WATCH
@@ -580,7 +582,8 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
                                    objective=obj, entry=E, stop=S, target=tgt, rr=rr, rr_quality=quality,
                                    actionable=actionable, passed=passed, reasons=reasons, setup=setup_ns,
                                    session=sess, killzone=kz, context_label=clabel, amd_phase=phase,
-                                   pullback=pb, structure=structure, filters=filters, recommendation=rec))
+                                   pullback=pb, fvg_tiebreak=getattr(entry, "tiebreak_n", 0),
+                                   structure=structure, filters=filters, recommendation=rec))
 
     # DE-DUPLICATE identical setups. Equal-high/low sweeps at the SAME bar/level (e.g. SWP17H@82 and
     # SWP29H@82 at the same extreme) share one displacement → one FVG → the SAME trade idea emitted

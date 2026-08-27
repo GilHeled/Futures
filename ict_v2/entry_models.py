@@ -87,6 +87,13 @@ DEFAULT_MODELS: tuple[str, ...] = ("fvg",)          # FVG is the course's sole e
 # --- FVG detector: adapt v1's frozen FVG objects into the common Entry contract ------------------
 _FVG_STATUS = {"unfilled": "waiting", "touched": "valid", "mitigated": "mitigated"}
 
+# [RES:fvg_tiebreak] — how to pick between multiple valid FVGs on the SAME displacement leg. The course
+# defines NO such rule (verified against the raw lessons). This is an EXPLICIT, UNDECIDED research
+# choice, NOT course methodology. Current placeholder = "v1_rank" (prefer unmitigated, then largest
+# gap, then most recent — v1's `ranked_fvgs`). Pending an evidence-based decision after live use; do
+# NOT treat this value as course-sanctioned.
+FVG_TIEBREAK_RULE = "v1_rank"
+
 
 def detect(model: str, disp, mss, ms, direction, bars) -> list:
     """Ask a model for its entries on one displacement leg — the engine calls THIS, never a
@@ -114,13 +121,24 @@ def fvg_entries(disp, mss, ms, direction, bars=None) -> list:
             if getattr(r.item, "depends_on", None) and r.item.depends_on[0] == disp.id]
     if not fvgs:
         return []
-    fvgs.sort(key=lambda f: 0 if getattr(f, "status", "") != "mitigated" else 1)   # prefer unmitigated
-    f = fvgs[0]
+    # ---- SELECTION among multiple FVGs on ONE leg — an EXPLICIT, UNDECIDED [RES:fvg_tiebreak] ----
+    # The course teaches WHERE the entry FVG sits (premium/discount, Lesson 12) but defines NO rule
+    # for choosing between several valid FVGs in the SAME zone on one displacement leg — verified
+    # against the raw lessons (2026-08-27): only "very large FVG → drop a TF" and "mark it in the
+    # discount", neither a same-leg tie-break. So this is a labelled [RES] placeholder, NOT course
+    # methodology: keep v1's ranking (`ms.ranked_fvgs` = status → LARGEST size → most recent) and take
+    # the first unmitigated. To be replaced by an EVIDENCE-BASED rule after live observation of the
+    # rare (~5% of legs) multi-unmitigated-FVG cases — deliberately not decided today.
+    unmit = [f for f in fvgs if getattr(f, "status", "") != "mitigated"]
+    pool = unmit or fvgs                                   # prefer unmitigated; else fall back to mitigated
+    f = pool[0]                                            # FVG_TIEBREAK_RULE (below): v1 rank, first unmitigated
     d = "short" if f.direction == "bearish" else "long"
     inval = f.bottom if d == "long" else f.top
-    return [Entry(model="fvg", direction=d, ref=f.ce, invalidation=inval,
-                  lifecycle=_FVG_STATUS.get(getattr(f, "status", "unfilled"), "waiting"),
-                  id=getattr(f, "id", ""), origin_index=getattr(f, "formed_index", -1), source=f)]
+    e = Entry(model="fvg", direction=d, ref=f.ce, invalidation=inval,
+              lifecycle=_FVG_STATUS.get(getattr(f, "status", "unfilled"), "waiting"),
+              id=getattr(f, "id", ""), origin_index=getattr(f, "formed_index", -1), source=f)
+    e.tiebreak_n = len(unmit)     # how many unmitigated FVGs shared this leg (>1 ⇒ the [RES] tie-break was exercised)
+    return [e]
 
 
 REGISTRY["fvg"]["detect"] = fvg_entries

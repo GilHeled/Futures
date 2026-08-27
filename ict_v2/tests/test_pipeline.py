@@ -298,6 +298,21 @@ def test_liquidity_floor_15m_and_pullback():
     assert withentry and all(c["pullback"] is None or 0.0 <= c["pullback"] <= 2.0 for c in withentry)
 
 
+def test_fvg_tiebreak_is_explicit_res():
+    """The multi-FVG tie-break is an EXPLICIT [RES:fvg_tiebreak] placeholder (the course defines no
+    rule), not silent behaviour: a named rule constant exists, and every candidate reports how many
+    unmitigated FVGs its entry was chosen among (>1 ⇒ the tie-break was exercised, flagged live)."""
+    from ict_v2 import entry_models as EM
+    assert EM.FVG_TIEBREAK_RULE == "v1_rank"                # documented placeholder, NOT course methodology
+    exercised = 0
+    for seed in range(1, 40):
+        for c in v2.demo_state(seed).setup.cand_info:
+            assert "fvg_tiebreak" in c and c["fvg_tiebreak"] >= 0   # count of UNMITIGATED FVGs on the leg
+            if c["fvg_tiebreak"] > 1:
+                exercised += 1                            # the [RES] tie-break actually chose among >1
+    assert exercised > 0                                  # the rare multi-unmitigated-FVG case occurs & is surfaced
+
+
 def test_no_duplicate_candidates():
     """Equal-high/low sweeps at the SAME bar/level share one displacement → one FVG → the same trade
     idea twice. generate_candidates de-duplicates exact matches (dir+entry+stop+target+model), so no

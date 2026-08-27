@@ -274,6 +274,8 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .cfilter{font-size:10px;font-weight:600;padding:1px 8px;border-radius:6px;border:1px solid var(--line)}
  .cfilter.ok{color:var(--long);border-color:color-mix(in srgb,var(--long) 40%,var(--line))}
  .cfilter.no{color:var(--short);border-color:color-mix(in srgb,var(--short) 45%,var(--line))}
+ .restag{font-size:9px;font-weight:700;letter-spacing:.3px;padding:1px 6px;border-radius:5px;
+   color:var(--warn);background:var(--warn-bg);border:1px dashed var(--warn)}   /* undecided [RES] choice */
  /* the ICT chain: sweep → displacement → MSS → FVG → entry → gate; ✓ ok / ✗ fail / — pending */
  .cchain{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
  .cchain i{color:var(--mut);font-style:normal;font-size:11px}
@@ -727,9 +729,11 @@ function _candCard(c){
                ['inval',eo?num(eo.invalidation):'—'],['leg',legtxt],['session',sesstxt]]
     .map(([k,v])=>`<span class=cfact><i>${k}</i>${v}</span>`).join('');
   const emodel=eo?`<span class=emodel title="execution model · lifecycle (common state: ${_candEsc(eo.state)})">${_candEsc(eo.model+(eo.lifecycle?' · '+eo.lifecycle:''))}</span>`:'';
+  const tb=c.fvg_tiebreak||0;   // [RES:fvg_tiebreak] — >1 ⇒ the (undecided) tie-break chose among N FVGs
+  const tbHtml=tb>1?`<span class="restag" title="[RES:fvg_tiebreak] — the course defines NO rule for choosing among multiple FVGs on one displacement leg. This entry was picked among ${tb} unmitigated FVGs by a placeholder (currently largest gap). Studying these live before deciding a rule.">[RES] tie-break ×${tb}</span>`:'';
   const layer=(name,body)=>`<div class=slayer><span class=slabel>${name}</span>${body}</div>`;
   return `<div class="ccard rec-${recCls}"><div class=ccard-hd>${dpill}`
-       + `<span class="cstate ${c.state}">${c.state}</span>${emodel}<span class=ccard-gate>${recBadge}</span></div>`
+       + `<span class="cstate ${c.state}">${c.state}</span>${emodel}${tbHtml}<span class=ccard-gate>${recBadge}</span></div>`
        + layer('Structure', structTag+chain)
        + layer('Quality', `<div class=qrow>${qual}</div>`)
        + layer('Course filters', `<div class=frow>${filtHtml}</div>`)

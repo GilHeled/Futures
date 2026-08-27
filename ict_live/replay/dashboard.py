@@ -179,6 +179,9 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
    border-radius:999px;background:var(--panel2);color:var(--mut);border:1px solid var(--line)}
  .clabel.htf-aligned{color:var(--long);border-color:transparent;background:var(--long-bg)}
  .clabel.counter-context{color:var(--short);border-color:transparent;background:var(--short-bg)}
+ .amd{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:1px 6px;
+   border-radius:999px;background:var(--panel2);color:var(--mut);border:1px solid var(--line)}
+ .amd.distribution{color:var(--accent,#c8a24a);border-color:var(--accent,#c8a24a)}
  .fibrow{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-top:4px;
    font-family:"SF Mono",ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums}
  .fibl{font-size:9px;text-transform:uppercase;letter-spacing:.4px;color:var(--mut);min-width:34px}
@@ -686,8 +689,10 @@ function _candCard(c){
       + (c.reasons||[]).map(r=>`<li>${esc(r)}</li>`).join('') + `</ul></div>`;
   const clab=c.context_label||'neutral-context';   // §17 HTF context label — a label, not a veto
   const clabHtml=`<span class="clabel ${clab}" title="HTF context label (§17) — a label, not a veto">${_candEsc(clab.replace(/-/g,' '))}</span>`;
+  const amd=c.amd_phase||'';   // §10 Power-of-3 phase (Lesson 16): manipulation → distribution
+  const amdHtml=amd?`<span class="amd ${amd}" title="Power-of-3 / AMD phase (§10) — manipulation (the sweep) → distribution (the real move, on a confirmed trend change)">${amd}</span>`:'';
   return `<div class="ccard ${st}"><div class=ccard-hd>${dpill}`
-       + `<span class="cstate ${c.state}">${c.state}</span>${clabHtml}`
+       + `<span class="cstate ${c.state}">${c.state}</span>${clabHtml}${amdHtml}`
        + (eo?`<span class=emodel title="execution model · lifecycle (common state: ${_candEsc(eo.state)})">${_candEsc(eo.model+(eo.lifecycle?' · '+eo.lifecycle:''))}</span>`:'')
        + `<span class=ccard-gate>${badge}</span></div>`
        + `${chain}<div class=cfacts>${facts}</div>${rblock}</div>`;

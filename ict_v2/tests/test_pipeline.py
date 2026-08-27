@@ -153,6 +153,23 @@ def test_htf_context_labels(monkeypatch):
             assert c["context_label"] == "neutral-context"
 
 
+def test_amd_phase():
+    """Power-of-3 / AMD (Lesson 16, §10): manipulation (the counter-move sweep) → distribution (the
+    real move WITH the trend), the transition being a confirmed MSS aligned with the HTF bias.
+    'accumulation' is never emitted (consolidation detector is parameter-undefined)."""
+    assert v2.amd_phase("long", "long", "confirmed") == "distribution"   # aligned + confirmed = real move
+    assert v2.amd_phase("short", "short", "confirmed") == "distribution"
+    assert v2.amd_phase("long", "long", "candidate") == "manipulation"   # not yet confirmed
+    assert v2.amd_phase("long", "short", "confirmed") == "manipulation"  # counter to HTF → still manip
+    assert v2.amd_phase("long", "neutral", "confirmed") == "manipulation"
+    assert v2.amd_phase("long", "long", "") == "manipulation"            # only swept
+    assert "accumulation" not in {v2.amd_phase("long", "long", s) for s in ("", "potential", "candidate", "confirmed")}
+    assert set(v2.AMD_PHASES) == {"accumulation", "manipulation", "distribution", ""}
+    # every candidate carries a valid phase, serialized
+    st = v2.demo_state(seed=7)
+    assert all(c["amd_phase"] in v2.AMD_PHASES for c in st.setup.cand_info)
+
+
 def test_trend_state_verdict():
     """Lesson 15 / §2/§21: trend = up (higher highs AND higher lows) / down (lower/lower) / none;
     change = confirmed (a confirmed MSS) / potential (potential-or-candidate MSS) / ''. A verdict over

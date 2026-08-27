@@ -144,11 +144,23 @@ levels (Lesson 11)". No new detector, no test (no new logic).
 - v1: `mss.py:40 detect_mss` — opposing pre-manip swing target, **potential→candidate→confirmed** via body close, acceptance distance; ranked (`pipeline.py:101`).
 - v2: attached per displacement (`pipeline.py:334`); `mss_state` in the candidate dict. DB: MSS chain step + note.
 
-### 10. Power of 3 / AMD — `[COURSE]` (§10, lessons 3–16) — 🟡 Partial
-- ✅ Mechanized behaviors: **multiple ranked candidate sweeps** (`pipeline.py:183`), **explicit lexicographic ranking** (`ranking.py:45`), **supersession + session expiry** (`lifecycle.py:32`), "don't trade the first sweep" (emergent from ranking/lifecycle).
-- ❌ Missing: an **explicit AMD-phase model** (accumulation / manipulation / distribution labels) and the **accumulation/consolidation detector** (`config.CONSOLIDATION_DETECTOR` = DEFERRED, `amd_phase` `[RES]`).
-- v2: ranked sweeps are the candidate anchors. DB: candidate list + per-item reasons.
-- **Gap:** name & expose the AMD phase per candidate; consolidation/accumulation detector.
+### 10. Power of 3 / AMD — `[COURSE]` (§10, **Lesson 16 verified**) — 🟡 Mostly (1 parameter-block)
+- Lesson 16 verified: three phases — **accumulation** (consolidation around/below the open) →
+  **manipulation** (the counter-move that takes liquidity / stops, often London) → **distribution**
+  (the real move WITH the main trend, toward equal H/L + FVG; break of an old high = exit). The lesson
+  states the transition explicitly: *look for the intraday trend change* → the confirmed MSS is when
+  manipulation gives way to the real move.
+- ✅ Mechanized: **ranked candidate sweeps** + **lexicographic ranking** (`ranking.py`) + **supersession/
+  session expiry** (`lifecycle.py`) + "don't trade the first sweep" (emergent); the **manipulation** =
+  the sweep anchor (§12); the **distribution** = the displacement toward the draw (§8/§16).
+- ✅ **AMD-phase label** (NEW, Lesson 16): `amd_phase(direction, bias, mss_state)` → `manipulation` /
+  `distribution` (transition = confirmed MSS aligned with bias). Tagged on every `Candidate.amd_phase`,
+  serialized, shown as a chip in the candidate card. Verified `test_amd_phase`. This also provides §17's
+  `possible-manipulation` / `possible-distribution` reads (which §17 deferred here).
+- ⛔ **Parameter-block (STOP):** the **accumulation / consolidation detector** — Lesson 16 describes
+  consolidation around the open but gives **no range/duration threshold** (`config.CONSOLIDATION_DETECTOR`
+  is a hard sentinel; `[RES:amd_phase]`). Not invented. `amd_phase` never emits `accumulation`. Awaiting
+  an explicit course rule or an approved `[NEC]`.
 
 ### 11. Sessions / killzones — `[COURSE map]`+`[NEC]` (§11, lesson 5) — ✅ Implemented (as context)
 - v1 ✅: `market/sessions.py` (`active_windows`, `in_session`, `killzone`, DST-safe) + `config.SESSIONS` (Asia/London/NY-AM/NY-PM, ET).
@@ -195,8 +207,9 @@ levels (Lesson 11)". No new detector, no test (no new logic).
 - ✅ Labels: `context_label(direction, bias)` → `htf-aligned` / `counter-context` / `neutral-context`
   (`pipeline.py`); every `Candidate` tagged `.context_label`, serialized, shown as a chip in the
   candidate-card header (`dashboard.py` `.clabel`). `CONTEXT_LABELS` vocab carries all five values.
-- ❌ The **AMD-phase refinement** of the labels — `possible-manipulation` / `possible-distribution` —
-  is **not computed** (it needs the AMD phase read; deferred to §10, deliberately not invented).
+- ✅ The **AMD-phase read** — `possible-manipulation` / `possible-distribution` — is now provided by
+  §10's `amd_phase` (Lesson 16): manipulation → distribution, transition = confirmed MSS. Surfaced as a
+  separate per-candidate chip (kept distinct from the alignment label, since they are two axes).
 - ⚠️ **Veto contradiction (open).** §17 says HTF is a *label, not a veto*, but `align.gate_setup`
   (`align.py:37-40`) still **fails a setup on bias-neutral or bias-mismatch** — a hard veto. The label
   is now produced, but honoring "not a veto" (so counter-context setups can still be recommended)
@@ -313,8 +326,8 @@ no PnL tuning; verify against the spec, not by search):
 7. **Lesson-by-lesson sweep of the remainder** (user mandate: continue without per-lesson approval, stop only on genuine ambiguity or an undefined parameter):
    - ~~**Lesson 12 (FVG)**~~ ✅ **DONE 2026-08-27** — verified; matches §7; nuance ("very large FVG → smaller TF") is capability-present/param-undefined.
    - ~~**Lesson 15 (intraday trend changes)**~~ ✅ **DONE 2026-08-27** → §2 + §21 via `trend_state` (verdict over v1 skeleton+MSS).
-   - **Lesson 16 (Power of 3)** → §10 AMD phase + consolidation detector (currently missing). ← **NEXT**
-   - **Lessons 3, 4** (orders; contract names/rollover) — expected informational/non-mechanical; verify + classify.
+   - ~~**Lesson 16 (Power of 3)**~~ ✅ **DONE 2026-08-27** → §10 AMD phase (manipulation/distribution); accumulation detector PARAMETER-BLOCKED (stop).
+   - **Lessons 3, 4** (orders; contract names/rollover) — expected informational/non-mechanical; verify + classify. ← **NEXT**
    - Then: course-filter layer (§16 ≥3R + killzone; removes §17 bias-veto), ordered target hierarchy + fib extensions 1.5–4 (§16), A/B/C grade (§22), assert ≥15m floor + ≥50%-pullback rules (§2/§6), market-structure surfacing + reversal states (§2).
    - Parameter-blocked (skip until a rule/param): equal-H/L clustering + pools-as-zones (§3).
 4. **NWOG & ORG detectors** (§18/§19) — new IRL context arrays; tracked, shown, usable as targets.

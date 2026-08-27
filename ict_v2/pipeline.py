@@ -50,6 +50,24 @@ CONTEXT_LABELS = ("htf-aligned", "counter-context", "possible-manipulation",
 # Course fib ladder — the main S/R levels (Lesson 8, §6). 0.5 = equilibrium; 0.62/0.79 = OTE.
 FIB_LEVELS = (0.0, 0.5, 0.62, 0.79, 1.0)
 
+# Power-of-3 / AMD phases (Lesson 16, §10). "accumulation" is NEVER emitted — detecting consolidation
+# needs a range/duration threshold the course does not define (config.CONSOLIDATION_DETECTOR sentinel).
+AMD_PHASES = ("accumulation", "manipulation", "distribution", "")
+
+
+def amd_phase(direction: str, bias: str, mss_state: str) -> str:
+    """The Power-of-3 / AMD phase of a sweep-anchored candidate (Lesson 16, §10).
+    Phases: accumulation (consolidation) → manipulation (the counter-move sweep that takes liquidity)
+    → distribution (the real move WITH the main trend). Lesson 16 marks the transition explicitly:
+    the intraday TREND CHANGE — a CONFIRMED MSS — is when manipulation gives way to the real move.
+    So from a candidate (always anchored on a sweep = the manipulation event):
+      'distribution' — a confirmed MSS aligned with the HTF bias (the real move is underway);
+      'manipulation' — otherwise (swept, but the aligned trend change is not yet confirmed).
+    'accumulation' is intentionally never returned (consolidation detector is parameter-undefined)."""
+    if mss_state == "confirmed" and bias in ("long", "short") and direction == bias:
+        return "distribution"
+    return "manipulation"
+
 
 def context_label(direction: str, bias: str) -> str:
     """The setup's HTF context label (§17). A LABEL/confidence read, never a veto (§1, §17;
@@ -240,6 +258,7 @@ class Candidate:
     session: str = ""                      # session window of the manipulation (§11 context; "" if none)
     killzone: str = ""                     # trading killzone of the manipulation (london_active/ny_am/ny_pm)
     context_label: str = "neutral-context" # §17 HTF context label (aligned/counter/neutral) — a label, not a veto
+    amd_phase: str = "manipulation"        # §10 Power-of-3 phase (manipulation/distribution; Lesson 16)
 
     def to_dict(self) -> dict:
         def px(x):
@@ -260,6 +279,7 @@ class Candidate:
             "mss_state": None if self.mss is None else getattr(self.mss, "state", None),
             "session": self.session, "killzone": self.killzone,   # §11 context (lesson 5)
             "context_label": self.context_label,                   # §17 HTF label (not a veto)
+            "amd_phase": self.amd_phase,                           # §10 Power-of-3 phase (Lesson 16)
             "actionable": self.actionable, "passed": self.passed, "reasons": list(self.reasons),
             "entry_model": self.entry_model,
             "entry_obj": (self.entry_obj.to_dict() if self.entry_obj is not None else None),  # common contract
@@ -421,6 +441,7 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
                   "displaced": "Incomplete — no market-structure shift (MSS) yet",
                   "mss": "Incomplete — structure shifted, no entry yet"}[state]
         sess, kz = session_of(getattr(sw, "time", None))
+        _bias = context.bias if context else ""
         return Candidate(direction=direction, state=state, status="incomplete", checks=checks,
                          sweep=sw, displacement=disp, mss=mss, entry_model="", entry_obj=None,
                          dealing_range=dr, pd_location=None, objective=objective,
@@ -428,7 +449,8 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
                          target=getattr(objective, "price", None), rr=None, rr_quality=None,
                          actionable=False, passed=False, reasons=[reason], setup=None,
                          session=sess, killzone=kz,
-                         context_label=context_label(direction, context.bias if context else ""))
+                         context_label=context_label(direction, _bias),
+                         amd_phase=amd_phase(direction, _bias, getattr(mss, "state", "")))
 
     cands = []
     for r in ms.ranked_sweeps:                                           # anchor: the manipulation
@@ -498,7 +520,9 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
                                    objective=obj, entry=E, stop=S, target=tgt, rr=rr, rr_quality=quality,
                                    actionable=actionable, passed=passed, reasons=reasons, setup=setup_ns,
                                    session=sess, killzone=kz,
-                                   context_label=context_label(direction, context.bias if context else "")))
+                                   context_label=context_label(direction, context.bias if context else ""),
+                                   amd_phase=amd_phase(direction, context.bias if context else "",
+                                                       getattr(mss, "state", ""))))
     return cands
 
 

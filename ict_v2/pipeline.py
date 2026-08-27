@@ -232,16 +232,20 @@ def structural_checks(sw, disp, mss, entry, structure, struct_reason=""):
     olabel = (entry.model.replace("_", " ") if entry is not None else "entry")   # from the model itself
     checks = [_mk("sweep", "ok")]                                         # the manipulation = the anchor
     if disp is None:
-        return checks + [_mk("displacement", "fail", "waiting"), _mk("MSS", "pending"), _mk("entry", "pending")]
+        return checks + [_mk("displacement", "fail", "no move yet"), _mk("MSS", "pending"), _mk("entry", "pending")]
     checks.append(_mk("displacement", "ok"))
     if mss is None:
-        return checks + [_mk("MSS", "fail", "waiting"), _mk("entry", "pending")]
+        return checks + [_mk("MSS", "fail", "not shifted"), _mk("entry", "pending")]
     checks.append(_mk("MSS", "ok"))
     if entry is None:
-        return checks + [_mk("entry", "fail", "waiting")]
+        return checks + [_mk("entry", "fail", "no FVG yet")]
     if structure == "invalid":
         return checks + [_mk(olabel, "fail", _short_reject(struct_reason), True)]
-    return checks + [_mk(olabel, "ok")]
+    checks.append(_mk(olabel, "ok"))
+    # the entry is present + structurally valid → show the RETRACE/fill step (§14: enter on the retrace)
+    if getattr(entry, "state", "") == "valid":            # FVG has been retraced into → live
+        return checks + [_mk("retrace", "ok")]
+    return checks + [_mk("retrace", "fail", "awaiting", False)]   # armed FVG — waiting for the retrace
 
 
 @dataclass
@@ -464,10 +468,10 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
         """Chain has NOT reached an entry object yet (swept / displaced / mss) — model-agnostic.
         STRUCTURE is 'forming' → RECOMMENDATION WATCH (a developing idea, no course filters yet)."""
         state = "swept" if disp is None else ("displaced" if mss is None else "mss")
+        reason = {"swept": "Waiting for a displacement (energetic move) off the manipulation",
+                  "displaced": "Waiting for a market-structure shift (MSS) to confirm the reversal",
+                  "mss": "Waiting for an entry FVG to form on the displacement leg"}[state]
         checks = structural_checks(sw, disp, mss, None, "forming", "")
-        reason = {"swept": "Developing — no displacement off the manipulation yet",
-                  "displaced": "Developing — no market-structure shift (MSS) yet",
-                  "mss": "Developing — structure shifted, no entry yet"}[state]
         rec, rec_reasons = REC.recommend(structure="forming", structure_reason=reason)
         sess, kz = session_of(getattr(sw, "time", None))
         _bias = context.bias if context else ""
@@ -537,15 +541,20 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
             # (3) COURSE FILTERS — course execution rules (≥3R, killzone, …); only for a valid structure
             filters = REC.evaluate_filters(rr=rr, killzone=kz, cfg=filters_cfg) if structure == "valid" else []
 
-            # (4) RECOMMENDATION — TAKE / SKIP / WATCH, derived from structure + filters
-            rec, reasons = REC.recommend(structure=structure, structure_reason=struct_reason, filters=filters)
+            # (4) RECOMMENDATION — TAKE / SKIP / WATCH. `entry_live` = the entry FVG has been retraced
+            #     into (common state 'valid' = touched); an unfilled FVG is ARMED → WATCH (awaiting retrace).
+            entry_live = (entry.state == "valid")
+            rec, reasons = REC.recommend(structure=structure, structure_reason=struct_reason,
+                                         filters=filters, entry_live=entry_live)
             entry.reason = reasons[0] if reasons else ""
 
-            # legacy fields, now DERIVED from the layers (cascade + dashboard compatibility):
+            # legacy fields, DERIVED from the layers:
             #   actionable = a valid ICT setup exists (RR/bias/P/D no longer gate it);
-            #   passed = TAKE (valid + every course filter passes) — this is what removes the bias veto.
+            #   passed = CASCADE ELIGIBILITY — valid structure + all course filters pass (an armed,
+            #     filter-passing setup is eligible to promote so a lower TF can trigger the retrace);
+            #     this is DECOUPLED from TAKE, which additionally requires the entry to be live.
             actionable = (structure == "valid")
-            passed = (rec == "TAKE")
+            passed = (structure == "valid" and all(f["ok"] for f in filters))
             status = "passed" if rec == "TAKE" else ("incomplete" if rec == "WATCH" else "rejected")
             state = "actionable" if actionable else "entry"
             checks = structural_checks(sw, disp, mss, entry, structure, struct_reason)
@@ -561,7 +570,22 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
                                    actionable=actionable, passed=passed, reasons=reasons, setup=setup_ns,
                                    session=sess, killzone=kz, context_label=clabel, amd_phase=phase,
                                    pullback=pb, structure=structure, filters=filters, recommendation=rec))
-    return cands
+
+    # DE-DUPLICATE identical setups. Equal-high/low sweeps at the SAME bar/level (e.g. SWP17H@82 and
+    # SWP29H@82 at the same extreme) share one displacement → one FVG → the SAME trade idea emitted
+    # twice. Collapse candidates whose resulting trade is identical (direction + entry + stop + target
+    # + model), keeping the first (best-ranked) — an EXACT-match dedup, no tolerance (that near-equal
+    # clustering is the deferred equal-H/L parameter item, §3). Partials collapse by (dir, extreme, draw).
+    def _px(x):
+        return None if x is None else round(float(x), 2)
+    seen, out = set(), []
+    for c in cands:
+        key = (c.direction, _px(c.entry), _px(c.stop), _px(c.target), c.entry_model)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(c)
+    return out
 
 
 def mtf_setup(bars, tf: str, context: HTFContext, *, refine_bars=None, min_stop=None,
@@ -606,19 +630,19 @@ def confirm_setup(bars, tf: str, context: HTFContext, setup: MTFSetup, *,
     setup_dirs = sorted({g.setup.direction for g in (setup.gated if setup else [])})
     gated, candidates, cand_info = [], [], []
     for c in mtf.candidate_objs:                             # the rich Candidate objects from the generate
-        if c.actionable and c.passed:                        # passed the HTF gate → evaluate confirmation
-            if not setup_dirs:
-                c.reasons = list(c.reasons) + [f"No gated {against} to confirm"]
-                c.passed, c.status = False, "incomplete"
-                c.checks.append(_mk(node, "fail", "no " + against, False))
-            elif c.direction not in setup_dirs:
+        if c.actionable and c.passed:                        # eligible (valid + filters) → evaluate confirmation
+            if not setup_dirs:                               # nothing gated on the higher layer to confirm
+                c.reasons = list(c.reasons) + [f"Waiting for a gated {against} in this direction"]
+                c.passed, c.status, c.recommendation = False, "incomplete", "WATCH"
+                c.checks.append(_mk(node, "fail", "awaiting " + against, False))
+            elif c.direction not in setup_dirs:              # a gated higher setup exists, opposite way
                 c.reasons = list(c.reasons) + [
                     f"Direction mismatch — {tf} {c.direction} vs {against} {'/'.join(setup_dirs)}"]
-                c.passed, c.status = False, "rejected"
+                c.passed, c.status, c.recommendation = False, "rejected", "SKIP"
                 c.checks.append(_mk(node, "fail", "wrong direction", True))
             else:
-                c.checks.append(_mk(node, "ok"))             # confirmed in the higher-layer direction
-        else:                                                # HTF-failed or structurally incomplete
+                c.checks.append(_mk(node, "ok"))             # confirmed — keep the generated recommendation
+        else:                                                # structurally incomplete or filtered out
             c.checks.append(_mk(node, "pending"))
         cand_info.append(c.to_dict())
         if c.actionable and c.setup is not None:

@@ -43,13 +43,16 @@ def evaluate_filters(*, rr, killzone, cfg=None) -> list:
     return out
 
 
-def recommend(*, structure, structure_reason="", filters=()) -> tuple:
-    """Derive the RECOMMENDATION + its reasons from structure + course filters:
-      TAKE  — structure valid AND every course filter passes;
-      SKIP  — structure valid but a course filter failed (a valid setup, filtered out), OR invalid structure;
-      WATCH — structure still forming (the ICT chain is not yet complete).
-    Note SKIP never means 'not a valid setup' unless structure is invalid — it usually means a valid
-    setup the course's execution filters tell us to pass on."""
+def recommend(*, structure, structure_reason="", filters=(), entry_live=True) -> tuple:
+    """Derive the RECOMMENDATION + its reasons from structure + course filters + entry readiness:
+      TAKE  — structure valid, every course filter passes, AND the entry is LIVE (price has retraced
+              into it). This is a trade to take now.
+      WATCH — structure still forming (chain incomplete), OR a valid+filtered setup whose entry is
+              ARMED but not yet retraced into (`entry_live=False`) — 'waiting for retrace'.
+      SKIP  — structure valid but a course filter failed (a valid setup, filtered out), OR invalid structure.
+    A valid setup whose FVG has not been retraced is NOT a SKIP — it is a WATCH awaiting the retrace
+    (course §14: enter on the later retrace into the FVG). Cascade eligibility (promotion) is separate
+    from TAKE: an armed, filter-passing setup is still eligible; only its recommendation waits."""
     if structure == "forming":
         return "WATCH", [structure_reason or "developing — the ICT chain is not yet complete"]
     if structure == "invalid":
@@ -57,4 +60,6 @@ def recommend(*, structure, structure_reason="", filters=()) -> tuple:
     fails = [f for f in filters if not f["ok"]]
     if fails:
         return "SKIP", [f"{f['name']} — {f['reason']}" for f in fails]
+    if not entry_live:
+        return "WATCH", ["armed — waiting for price to retrace into the entry (FVG not yet touched)"]
     return "TAKE", []

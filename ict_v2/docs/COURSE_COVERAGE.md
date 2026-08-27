@@ -174,12 +174,23 @@ levels (Lesson 11)". No new detector, no test (no new logic).
 - v2: the sweep is the candidate anchor (`pipeline.py:329`). DB: sweep pool/extreme in the candidate dict + "sweep" node.
 - ℹ️ Multi-bar reclaim explicitly left open (`manipulation.py:12`).
 
-### 13. Preferred setup sequence — `[COURSE]` (§13, lesson 15) — ✅ Implemented
+### 13. Preferred setup sequence — `[COURSE]` (§13, lesson 15) — ✅ Implemented (+ de-dup)
+- **De-duplication (live-validation refinement, 2026-08-27):** equal-high/low sweeps at the SAME
+  bar/level share one displacement → one FVG → the identical trade idea generated more than once.
+  `generate_candidates` now collapses exact duplicates (dir+entry+stop+target+model), keeping the
+  best-ranked. This is EXACT-match only (no tolerance — near-equal clustering remains the deferred
+  equal-H/L parameter item, §3). Verified `test_no_duplicate_candidates` (0 dupes across 39 seeds).
 - v1: causal dependency chain sweeps→disp→MSS→FVG→setup (`pipeline.py:182`, each object's `depends_on`).
 - v2: made explicit as ordered checks (`pipeline.py structural_checks`): sweep→displacement→MSS→entry→setup→HTF-gate.
 - DB: rendered as the ✓/✗/— step chain in `_candCard` (`dashboard.py:631`).
 
-### 14. Entry — `[COURSE]`+`[RES]` (§14, lesson 12) — ✅ Implemented
+### 14. Entry — `[COURSE]`+`[RES]` (§14, lesson 12) — ✅ Implemented (armed vs live)
+- **Armed vs live (live-validation refinement, 2026-08-27):** a valid FVG that has **not** been
+  retraced into (common state `waiting` = unfilled) is ARMED → recommendation **WATCH** with "waiting
+  for price to retrace into the entry"; it becomes **TAKE** only once the FVG is retraced/touched
+  (`entry_live`), per §14 "enter on the later retrace". The chain shows an explicit `retrace` step
+  (✓ live / awaiting). Cascade *eligibility* is decoupled from TAKE — an armed, filter-passing setup
+  still promotes so a lower TF can trigger the retrace.
 - v1: entry = FVG CE (`setup.py:68`); **arm at k+1**, fill on a strictly later retrace (`fvg.py:69`).
 - v2: `Entry.ref = ce` (`entry_models.py`); geometry via `assemble`. DB: entry fact + lifecycle.
 - ℹ️ In-FVG entry location (touch / CE / far edge) is `[RES]`; CE is the chosen, documented default.

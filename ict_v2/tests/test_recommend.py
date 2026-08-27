@@ -33,3 +33,15 @@ def test_recommendation_derivation():
     rec, reasons = REC.recommend(structure="forming", structure_reason="no MSS yet")
     assert rec == "WATCH" and "no MSS yet" in reasons[0]
     assert set(REC.RECOMMENDATIONS) == {"TAKE", "SKIP", "WATCH"}
+
+
+def test_armed_entry_is_watch_not_take():
+    """A valid, filter-passing setup whose FVG is NOT yet retraced into (entry_live=False) is ARMED →
+    WATCH ('waiting for retrace'), not TAKE. Once live it becomes TAKE (course §14: enter on retrace)."""
+    good = REC.evaluate_filters(rr=4.0, killzone="ny_am")
+    rec, reasons = REC.recommend(structure="valid", filters=good, entry_live=False)
+    assert rec == "WATCH" and "retrace" in reasons[0].lower()
+    assert REC.recommend(structure="valid", filters=good, entry_live=True) == ("TAKE", [])
+    # a failing filter still SKIPs even if armed (filter check precedes the retrace check)
+    bad = REC.evaluate_filters(rr=1.0, killzone="ny_am")
+    assert REC.recommend(structure="valid", filters=bad, entry_live=False)[0] == "SKIP"

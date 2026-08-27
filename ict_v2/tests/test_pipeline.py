@@ -298,6 +298,40 @@ def test_liquidity_floor_15m_and_pullback():
     assert withentry and all(c["pullback"] is None or 0.0 <= c["pullback"] <= 2.0 for c in withentry)
 
 
+def test_no_duplicate_candidates():
+    """Equal-high/low sweeps at the SAME bar/level share one displacement → one FVG → the same trade
+    idea twice. generate_candidates de-duplicates exact matches (dir+entry+stop+target+model), so no
+    two candidates on a stage describe the identical setup."""
+    for seed in range(1, 40):
+        for stage in (v2.demo_state(seed).setup,):
+            keys = [(c["direction"], c["entry"], c["stop"], c["target"], c["entry_model"])
+                    for c in stage.cand_info]
+            assert len(keys) == len(set(keys)), f"duplicate candidate on seed {seed}"
+            ids = [c["id"] for c in stage.cand_info]
+            assert len(ids) == len(set(ids)), f"repeated setup id on seed {seed}"
+
+
+def test_incomplete_candidates_say_what_they_wait_for():
+    """WATCH candidates explain precisely what is awaited — displacement / MSS / entry FVG / retrace —
+    instead of a bare 'entry waiting'."""
+    wanted = {"displacement", "market-structure shift", "entry FVG", "retrace"}
+    seen = set()
+    for seed in range(1, 40):
+        for c in v2.demo_state(seed).setup.cand_info:
+            if c["recommendation"] == "WATCH":
+                r = " ".join(c["reasons"]).lower()
+                assert r.strip(), "a WATCH candidate must say what it is waiting for"
+                for w in wanted:
+                    if w.lower() in r:
+                        seen.add(w)
+            # an armed (valid + filters pass) but un-retraced FVG is WATCH with a 'retrace' reason
+            if c["structure"] == "valid" and c["entry_obj"] and c["entry_obj"]["lifecycle"] == "waiting" \
+                    and all(f["ok"] for f in c["filters"]):
+                assert c["recommendation"] == "WATCH"
+                assert any("retrace" in r.lower() for r in c["reasons"])
+    assert {"displacement", "market-structure shift", "entry FVG"} <= seen   # the forming reasons appear
+
+
 def test_four_layer_semantics_and_no_bias_veto():
     """The semantic layer on real candidates: every candidate carries structure / filters /
     recommendation; TAKE ⟺ valid structure + all course filters pass; and — critically — a

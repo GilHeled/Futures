@@ -47,6 +47,9 @@ def session_of(dt):
 CONTEXT_LABELS = ("htf-aligned", "counter-context", "possible-manipulation",
                   "possible-distribution", "neutral-context")
 
+# Course fib ladder — the main S/R levels (Lesson 8, §6). 0.5 = equilibrium; 0.62/0.79 = OTE.
+FIB_LEVELS = (0.0, 0.5, 0.62, 0.79, 1.0)
+
 
 def context_label(direction: str, bias: str) -> str:
     """The setup's HTF context label (§17). A LABEL/confidence read, never a veto (§1, §17;
@@ -65,13 +68,33 @@ class HTFContext:
     tf: str
     bias: str                              # "long" | "short" | "neutral" (after any anchor veto)
     dealing_range: object = None           # v1 DealingRange (premium/discount/EQ) or None
-    liquidity: list = field(default_factory=list)   # active ERL pools = the draw on liquidity
+    liquidity: list = field(default_factory=list)   # active ERL pools = the draw on liquidity (the FULL set)
     anchor_bias: str = ""                  # Daily/Weekly anchor bias ("" if no anchor); vetoes the 4H bias
     anchor_tf: str = ""                    # the anchor timeframe ("D"/"W"), "" if none
+    ranges: list = field(default_factory=list)   # ALL dealing ranges on this TF (source_tf-tagged), for nesting
 
     def zone(self, price: float) -> Optional[str]:
         """premium / discount / equilibrium of `price` within the HTF dealing range (None if no range)."""
         return self.dealing_range.zone_of(price) if self.dealing_range is not None else None
+
+    def fib_levels(self) -> list:
+        """The course fib ladder (Lesson 8, METHODOLOGY §6): the main support/resistance levels
+        0 / 0.5 / 0.62 / 0.79 / 1 measured on the dealing range. ORIENTATION per the course: an
+        UPtrend places 0 at the HIGH and 1 at the LOW; a DOWNtrend places 0 at the LOW and 1 at the
+        HIGH. Premium/discount of each level is by price vs equilibrium (Lesson 9, direction-agnostic:
+        ≥50% premium, <50% discount). Returns [] if no range. 0.5 is equilibrium; 0.62/0.79 = the OTE."""
+        dr = self.dealing_range
+        if dr is None:
+            return []
+        span = dr.high - dr.low
+        up = dr.direction == "up"                        # uptrend: 0 at high, 1 at low (Lesson 8)
+        out = []
+        for f in FIB_LEVELS:
+            price = (dr.high - f * span) if up else (dr.low + f * span)
+            zone = ("equilibrium" if abs(f - 0.5) < 1e-9
+                    else "premium" if price > dr.ce else "discount")
+            out.append({"level": f, "price": round(price, 2), "zone": zone})
+        return out
 
 
 @dataclass
@@ -246,6 +269,7 @@ class MTFSetup:
     gated: list = field(default_factory=list)          # list[GatedSetup] that passed the HTF gate
     cand_info: list = field(default_factory=list)      # ALL candidates as dicts (w/ actionable/passed/reasons)
     candidate_objs: list = field(default_factory=list) # the rich Candidate objects (for the next stage to refine)
+    dealing_range: object = None                       # THIS stage's own dealing range (source_tf-tagged; nesting)
 
 
 @dataclass
@@ -321,7 +345,7 @@ def htf_context(bars, tf: str, *, anchor: str = "", anchor_tf: str = "") -> HTFC
     if anchor in ("long", "short") and bias in ("long", "short") and bias != anchor:
         bias = "neutral"                                 # 4H opposes the Daily/Weekly anchor → stand aside
     return HTFContext(tf=tf, bias=bias, dealing_range=dr, liquidity=list(ms.active_erl),
-                      anchor_bias=(anchor or ""), anchor_tf=(anchor_tf or ""))
+                      anchor_bias=(anchor or ""), anchor_tf=(anchor_tf or ""), ranges=list(ms.ranges))
 
 
 def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=None, bars=None) -> list:
@@ -465,7 +489,7 @@ def mtf_setup(bars, tf: str, context: HTFContext, *, refine_bars=None, min_stop=
                 gated.append(GatedSetup(setup=c.setup, objective=c.objective))
     return MTFSetup(tf=tf, sweeps=list(ms.ranked_sweeps), displacements=list(ms.ranked_displacements),
                     mss=list(ms.ranked_mss), candidates=candidates, gated=gated, cand_info=cand_info,
-                    candidate_objs=all_cands)
+                    candidate_objs=all_cands, dealing_range=(ms.ranges[0] if ms.ranges else None))
 
 
 def confirm_setup(bars, tf: str, context: HTFContext, setup: MTFSetup, *,
@@ -504,7 +528,7 @@ def confirm_setup(bars, tf: str, context: HTFContext, setup: MTFSetup, *,
                 gated.append(GatedSetup(setup=c.setup, objective=c.objective))
     return MTFSetup(tf=tf, sweeps=mtf.sweeps, displacements=mtf.displacements, mss=mtf.mss,
                     candidates=candidates, gated=gated, cand_info=cand_info,
-                    candidate_objs=mtf.candidate_objs)
+                    candidate_objs=mtf.candidate_objs, dealing_range=mtf.dealing_range)
 
 
 def ltf_execution(bars, tf: str, setup: MTFSetup, context: HTFContext) -> LTFExecution:

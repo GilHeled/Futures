@@ -6,8 +6,15 @@ the living map. Each rule is classified and anchored to its implementation acros
 
 ## Authoritative source
 
-The course rules are taken from the in-repo **authoritative distillation** (the raw `Trade/` lesson
-transcripts are *not* in this repo; the specs below cite them as lessons 3–16):
+> **UPDATE 2026-08-27 — the raw course is available.** The full `Trade/` lesson set is on disk at
+> `~/Library/Mobile Documents/com~apple~Pages/Documents/Trade/` (lessons 3,4,5,6,8,9,10,11,12,13,14,15,16
+> as PDFs). These are the **primary authority**; the distillation below is secondary. This map is now
+> being verified **lesson by lesson** against the PDFs (read with `pypdf`; Hebrew, RTL). Verified so far:
+> **Lesson 6** (Liquidity), **Lesson 8** (Advanced Market Structure — the fib source), **Lesson 9**
+> (Premium/Discount). Reading them already corrected the distillation (see §6 fib orientation, and the
+> new rules logged at the end).
+
+The course rules are taken from the raw lessons above, cross-checked with the in-repo distillation:
 
 - **`ict_live/docs/METHODOLOGY_SPEC.md`** — the 20-section methodology, tagged `[COURSE]` / `[NEC]`
   (necessary mechanization) / `[RES]` (open research choice). The master enumeration.
@@ -51,11 +58,16 @@ The W/D/4H→1H→15m→1m role split *is* v2's spine.
 - DB 🟡: shows bias per stage; **raw swing structure / reversal state not visualized**.
 - **Gap:** surface the structural read (HH/HL sequence, potential-vs-confirmed reversal) in v2/DB.
 
-### 3. Liquidity pools / BSL/SSL — `[COURSE]`+`[NEC]` (§3) — 🟡 Partial
+### 3. Liquidity pools / BSL/SSL — `[COURSE]`+`[NEC]` (§3, **Lesson 6**) — 🟡 Partial (full set now surfaced)
+- Lesson 6 verified: liquidity = stops above highs / below lows; **BSL** = high swing (stops above),
+  **SSL** = low swing (stops below); *identify by equal highs/lows*; **larger TF ⇒ stronger**; and a
+  hard rule — **do NOT mark liquidity below the 15-minute chart** (logged as a new rule below).
 - v1 ✅(core): period/session pools `liquidity.py:42` (PDH/PDL, PWH/PWL, Asia/London/NY-AM/NY-PM), swing BSL/SSL `swing_liquidity.py:34`.
-- v1 🟡: pools carry a **single `price`, not a zone/band** (§3 wants zones ± tol); **equal-highs/lows clustering NOT implemented** (deliberately excluded, `liquidity.py:9`; `EQUAL_HL_TOL_ATR` is a provisional number only).
-- v2: consumes v1 `active_erl` as "the draw" (`align.py:13`). DB: shows the single draw price, not the full pool set.
-- **Gaps:** (a) pools-as-zones, (b) equal-H/L clustering, (c) surface the full pool list.
+- v2 ✅: the **full pool set** is now surfaced — `snapshot.context.pools` (BSL/SSL + price) from `context.liquidity` (`live.py`); DB shows a `pools N` chip (all pools in tooltip). Verified `test_full_pool_set_and_nested_ranges_surfaced`.
+- 🟡 **Pending, parameter-unresolved (do NOT guess):** (a) **equal-highs/lows clustering** — Lesson 6
+  teaches equal H/L as liquidity but gives **no numerical tolerance**; (b) **pools-as-zones** (± band)
+  — needs a width tolerance. Both are *mechanically required but the course provides no number*; left
+  pending an explicit course rule or a deliberately-approved `[NEC]` parameter. **Not** using 0.15·ATR.
 
 ### 4. ERL vs IRL — `[COURSE]` (§4) — 🟡 Partial (ERL only)
 - v1: every pool flagged `erl=True` (`liquidity.py:37`); **IRL (FVG/NWOG/ORG internal) classification not implemented** (`liquidity.py:12`). v2/DB: no ERL/IRL label.
@@ -66,11 +78,16 @@ The W/D/4H→1H→15m→1m role split *is* v2's spine.
 - v2: gate requires longs in discount / shorts in premium (`align.py:41`); entry P/D tagged (`pipeline.py:392`).
 - DB: `P/D` fact in the candidate card (`dashboard.py:646`).
 
-### 6. Fibonacci / dealing range — `[COURSE]` (§6) — 🟡 Partial
-- v1 ✅: dealing range = most-recent completed opposing structural leg (`dealing_range.py:48 range_for_tf`); nested W→D→4H→1H→15m set (`:72 dealing_ranges`).
-- v1 ❌: **only the 50% (CE) level exists** — the fib ladder **0 / 0.62 / 0.79 / 1 is not implemented**.
-- v2 🟡: uses `ms.ranges[0]` only (first TF's range) — **nested ranges not surfaced** (`pipeline.py:278`). DB: shows `low–high CE`, no fib ladder.
-- **Gaps:** (a) fib ladder levels, (b) surface the nested range hierarchy.
+### 6. Fibonacci / dealing range — `[COURSE]` (§6, **Lesson 8**) — ✅ Implemented
+- Lesson 8 verified (the fib source): main S/R levels **0 / 0.5 / 0.62 / 0.79 / 1** (0.5 = equilibrium;
+  0.62/0.79 = OTE). **Orientation:** UPtrend → 0 at the HIGH, 1 at the LOW; DOWNtrend → 0 at the LOW,
+  1 at the HIGH. (The distillation didn't carry the orientation — reading the lesson fixed it.)
+- v2 ✅ fib ladder: `HTFContext.fib_levels()` (`pipeline.py`, `FIB_LEVELS`) → the 5 levels with course
+  orientation + premium/discount tag; surfaced in `snapshot.context.fib`; DB renders a fib row
+  (equilibrium/OTE colour-coded). Verified `test_fib_ladder_levels_and_orientation`.
+- v2 ✅ nested ranges: each cascade stage's dealing range (4H/1H/15m, `source_tf`-tagged) is exposed —
+  `MTFSetup.dealing_range` + `snapshot.dealing_ranges`; DB renders a `ranges` row. Verified.
+- v1 basis: dealing range = most-recent completed opposing structural leg (`dealing_range.py:48`), each `source_tf`-tagged.
 
 ### 7. FVG lifecycle & TF rules — `[COURSE]` (§7, lesson 12) — ✅ Implemented (one documented gap)
 - v1: `fvg.py:44 detect_fvgs` — geometry (`:57`), CE (`:67`), **body-close-through-far-boundary mitigation** (`:75/:81`), full same-displacement-leg scan (`:53`), depends_on displacement+MSS. MTF refine variant `detect_fvgs_mtf:107`. P/D eligibility applied at the gate.
@@ -174,21 +191,38 @@ The W/D/4H→1H→15m→1m role split *is* v2's spine.
 
 ---
 
+## New course rules found by reading the raw lessons (not in the distillation)
+
+Reading the PDFs surfaced concrete mechanical rules the 20-section distillation had dropped or blurred:
+
+- **≥15-minute liquidity floor** (Lesson 6 & 8): *"do not mark liquidity points on a chart below 15
+  minutes"* (smaller interval = less reliable). A hard rule for where swings/liquidity may be defined.
+  v2 status: **honored in practice** (pools/objective come from the HTF context; the 1m stage is an
+  execution trigger only, not a liquidity source) — but **not asserted**. → add an explicit guard/test.
+- **≥50% pullback rule** (Lesson 8): every technical correction retraces **at least 50%** of the leg to
+  continue the trend; if no ≥50% pullback, re-measure from another liquidity point, else drop a TF
+  (never below 15m). Relates to §6/§2. v2 status: **not represented** → candidate rule for §2/§6 work.
+- **Fib EXTENSION targets 1.5 / 2 / 2.5 / 3 / 3.5 / 4** (Lesson 8): multiples of the 0→1 range, used
+  for *target-taking*. Directly relevant to §16 targets. v2 status: **missing** → fold into the target
+  hierarchy work (§16). This is a course-grounded target mechanism we did not previously have.
+
 ## Gap summary
 
 **❌ Missing (mechanize):**
-1. Equal-highs/lows clustering (§3) & pools-as-zones (§3)
+1. Equal-highs/lows clustering (§3) & pools-as-zones (§3) — **parameter-blocked** (Lesson 6 teaches them but gives no tolerance; pending explicit rule or approved `[NEC]`; **not** 0.15·ATR)
 2. IRL classification / ERL-IRL labelling (§4)
-3. Fib ladder 0/0.62/0.79/1 (§6)
+3. ~~Fib ladder 0/0.5/0.62/0.79/1 (§6)~~ ✅ **DONE 2026-08-27** (Lesson 8, with orientation)
 4. Explicit AMD phase + consolidation/accumulation detector (§10)
 5. ~~Session/killzone context wired into v2 + shown on DB (§11)~~ ✅ **DONE 2026-08-27**
 6. HTF context labels (§17) — 🟡 alignment labels ✅ **DONE 2026-08-27**; AMD-phase labels pending §10; bias-veto removal pending item 11
 7. NWOG detector (§18)
 8. ORG detector (§19)
 9. Intraday trend-change / HTF-transition read (§21)
-10. Ordered target hierarchy (§16)
+10. Ordered target hierarchy (§16) — now includes the **fib EXTENSION targets 1.5–4 (Lesson 8)**
 11. Course-filter layer (§16 ≥3R + §11 killzone) with Structure/Filter/Recommendation separation
 12. A/B/C quality grade — or a reasoned decision to keep the RR grade (§22)
+13. ≥15m liquidity floor (assert) & ≥50% pullback rule (Lesson 6/8) — new rules to represent
+14. **Full lesson-by-lesson re-verification** of every section against the raw PDFs (started: L6/L8/L9)
 
 **🟡 Partial (surface / complete in v2 + DB):**
 - Market-structure read (HH/HL, reversal state) surfaced in v2/DB (§2)
@@ -216,7 +250,8 @@ no PnL tuning; verify against the spec, not by search):
 
 1. ~~**Sessions/killzones into v2 + DB** (§11)~~ ✅ **DONE 2026-08-27** — context tagged on every candidate + current-session chip on the V2 tab; killzone *filter* deferred to the filter layer.
 2. ~~**HTF context labels** (§17)~~ ✅ **DONE 2026-08-27** (alignment axis) — AMD-phase labels come with §10; bias-veto removal is item 11.
-3. **Equal-H/L clustering + pools-as-zones** (§3) and **surface the full pool set + nested ranges + fib ladder** (§3/§6) — liquidity/range completeness. ← **NEXT**
+3. **Liquidity/range completeness** (§3/§6): ✅ **DONE 2026-08-27** the parameter-free parts — fib ladder (Lesson 8, oriented), full pool set surfaced (Lesson 6), nested per-stage ranges surfaced. ⛔ **Deferred (parameter-blocked):** equal-H/L clustering + pools-as-zones — no course tolerance; awaiting an explicit rule or an approved `[NEC]` value. ← resume here when the tolerance is decided
+4. **NWOG & ORG detectors** (§18/§19) — new IRL context arrays; tracked, shown, usable as targets. ← **NEXT parameter-free item** (Lessons 13/14 available on disk)
 4. **NWOG & ORG detectors** (§18/§19) — new IRL context arrays; tracked, shown, usable as targets.
 5. **IRL classification** (§4) — depends on 3+4 (needs the internal arrays first).
 6. **Explicit AMD phase + consolidation detector** (§10) — the hardest; `[RES:amd_phase]`, needs its own mini-spec.

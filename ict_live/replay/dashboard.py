@@ -179,6 +179,14 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
    border-radius:999px;background:var(--panel2);color:var(--mut);border:1px solid var(--line)}
  .clabel.htf-aligned{color:var(--long);border-color:transparent;background:var(--long-bg)}
  .clabel.counter-context{color:var(--short);border-color:transparent;background:var(--short-bg)}
+ .fibrow{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-top:4px;
+   font-family:"SF Mono",ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums}
+ .fibl{font-size:9px;text-transform:uppercase;letter-spacing:.4px;color:var(--mut);min-width:34px}
+ .fibx,.rangx{font-size:10px;padding:1px 6px;border-radius:5px;background:var(--panel2);
+   border:1px solid var(--line);color:var(--fg)}
+ .fibx i,.rangx i{font-style:normal;color:var(--mut);margin-left:4px}
+ .fibx.premium{border-color:var(--short)} .fibx.discount{border-color:var(--long)}
+ .fibx.equilibrium{border-color:var(--accent,#c8a24a);font-weight:700}
  .modal{position:fixed;inset:0;background:#000a;display:none;z-index:50;padding:22px}
  .modal.on{display:flex} .modal-box{background:var(--panel);border:1px solid var(--line);border-radius:14px;
    margin:auto;width:min(1120px,96vw);height:90vh;display:flex;flex-direction:column;overflow:hidden}
@@ -593,6 +601,12 @@ function v2Tables(rep){
     const s=syms[sym], c=s.context||{}, st=s.setup||{}, cf=s.confirmation||{}, e=s.execution||{}, u=s.updated||{}, tf=s.timeframes||{};
     const dr=c.dealing_range; const drs=dr?`${num(dr.low)}–${num(dr.high)} CE ${num(dr.ce)} (${dr.direction})`:'—';
     const obj=c.liquidity_objective; const objs=obj?`${obj.kind==='high'?'BSL':'SSL'} ${num(obj.price)}`:'—';
+    // §3 full pool set (Lesson 6), §6 fib ladder (Lesson 8), §5/§6 nested ranges — all CONTEXT
+    const pools=c.pools||[]; const poolsHtml=pools.length?`<span class=wc title="${pools.map(p=>p.kind+' '+num(p.price)).join(', ')}">pools <b>${pools.length}</b></span>`:'';
+    const fib=c.fib||[];
+    const fibHtml=fib.length?`<div class=fibrow><span class=fibl>fib</span>${fib.map(l=>`<span class="fibx ${l.zone}" title="${l.zone}">${l.level}<i>${num(l.price)}</i></span>`).join('')}</div>`:'';
+    const nested=s.dealing_ranges||[];
+    const nestedHtml=nested.length?`<div class=fibrow><span class=fibl>ranges</span>${nested.map(r=>`<span class=rangx title="${r.direction}">${r.tf} ${num(r.low)}–${num(r.high)}</span>`).join('')}</div>`:'';
     // each stage colored by ITS OWN state; neutral grey otherwise so color never implies a phantom trade
     const biasSide=sideOf(c.bias);
     const setupSide=(st.gated>0)?sideOf(st.direction):'flat';
@@ -613,7 +627,8 @@ function v2Tables(rep){
         <span class=thead-right>${sessHtml}${biasHtml}<span class="v2dec ${execSide}">${dec}</span></span></div>
       <div class=reads>
         <div class="read ${biasSide}"><div class=rhd><span class=rsy>4H</span><span class=rnn>context</span></div>
-          <div class=why><span class=wc>bias <b>${fmt(c.bias)}</b></span>${c.anchor_tf?`<span class=wc>${c.anchor_tf}-anchor <b>${fmt(c.anchor_bias||'neutral')}</b></span>`:''}<span class=wc>range <b>${drs}</b></span><span class=wc>draw <b>${objs}</b></span></div>
+          <div class=why><span class=wc>bias <b>${fmt(c.bias)}</b></span>${c.anchor_tf?`<span class=wc>${c.anchor_tf}-anchor <b>${fmt(c.anchor_bias||'neutral')}</b></span>`:''}<span class=wc>range <b>${drs}</b></span><span class=wc>draw <b>${objs}</b></span>${poolsHtml}</div>
+          ${fibHtml}${nestedHtml}
           <div class=rfoot>updated ${fmt(u[tf.context])}</div></div>
         <div class="read ${setupSide}"><div class=rhd><span class=rsy>1H</span><span class=rnn>setup</span></div>
           <div class=rln>${gline('setup',st)}</div>

@@ -153,6 +153,54 @@ def test_htf_context_labels(monkeypatch):
             assert c["context_label"] == "neutral-context"
 
 
+def test_fib_ladder_levels_and_orientation():
+    """METHODOLOGY §6 / Lesson 8: the fib ladder = 0/0.5/0.62/0.79/1 on the dealing range, 0.5 =
+    equilibrium. Orientation per the course: UPtrend → 0 at HIGH, 1 at LOW; DOWNtrend → 0 at LOW,
+    1 at HIGH. Premium/discount by price vs equilibrium (Lesson 9, direction-agnostic)."""
+    dr_up = SimpleNamespace(source_tf="4H", low=100.0, high=200.0, ce=150.0, direction="up")
+    ctx = v2.HTFContext(tf="4H", bias="long", dealing_range=dr_up)
+    lv = {round(x["level"], 2): x for x in ctx.fib_levels()}
+    assert set(lv) == {0.0, 0.5, 0.62, 0.79, 1.0}
+    assert lv[0.0]["price"] == 200.0 and lv[1.0]["price"] == 100.0      # up: 0 at high, 1 at low
+    assert lv[0.5]["price"] == 150.0 and lv[0.5]["zone"] == "equilibrium"
+    assert lv[0.62]["price"] == 138.0 and lv[0.62]["zone"] == "discount"  # 200-0.62*100
+    assert lv[0.79]["price"] == 121.0 and lv[0.79]["zone"] == "discount"  # OTE in discount → longs
+    # downtrend mirrors: 0 at low, 1 at high; OTE in premium
+    dr_dn = SimpleNamespace(source_tf="4H", low=100.0, high=200.0, ce=150.0, direction="down")
+    lv2 = {round(x["level"], 2): x for x in v2.HTFContext(tf="4H", bias="short", dealing_range=dr_dn).fib_levels()}
+    assert lv2[0.0]["price"] == 100.0 and lv2[1.0]["price"] == 200.0
+    assert lv2[0.62]["price"] == 162.0 and lv2[0.62]["zone"] == "premium"   # OTE in premium → shorts
+    assert v2.HTFContext(tf="4H", bias="neutral", dealing_range=None).fib_levels() == []
+
+
+def test_full_pool_set_and_nested_ranges_surfaced():
+    """§3 (Lesson 6): the FULL liquidity-pool set (BSL/SSL) is surfaced, not just the single draw.
+    §5/§6: each cascade stage's dealing range is exposed (source_tf-tagged) as the nested hierarchy."""
+    from ict_v2 import live as v2live
+    from ict_live.market.bar import Bar
+    from datetime import datetime, timedelta, timezone
+    t0 = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    bars = []
+    x = 5
+    px = 20000.0
+    for i in range(1600):
+        x = (1103515245 * x + 12345) % (2 ** 31)
+        o = px; c = px + ((x % 25) - 12) * 0.6
+        ot = t0 + timedelta(minutes=i)
+        bars.append(Bar("1m", ot, ot + timedelta(minutes=1), o, max(o, c) + (x % 5) * 0.4,
+                        min(o, c) - (x % 4) * 0.4, c, 100.0)); px = c
+    v = v2live.run_bars(bars)
+    snap = v.snapshot()
+    ctx = snap["context"]
+    assert ctx is not None
+    assert isinstance(ctx["pools"], list) and isinstance(ctx["fib"], list)  # full set + ladder present
+    assert "dealing_ranges" in snap and isinstance(snap["dealing_ranges"], list)
+    for r in snap["dealing_ranges"]:                     # each nested range is source_tf-tagged
+        assert set(r) == {"tf", "low", "high", "ce", "direction"} and r["tf"]
+    for p in ctx["pools"]:
+        assert p["kind"] in ("BSL", "SSL")
+
+
 def test_four_layer_cascade_runs():
     st = v2.demo_state(seed=7)
     assert st.context.tf == "4H" and st.setup.tf == "1H" and st.confirmation.tf == "15m"

@@ -135,6 +135,15 @@ class V2Live:
             p = s.gated[0].objective
             obj = {"kind": p.kind, "price": _px(p.price)}
         top = e.executables[0] if (e and e.executables) else None
+        def _dr(r):                                               # serialize a dealing range (source_tf-tagged)
+            return None if r is None else {"tf": getattr(r, "source_tf", ""), "low": _px(r.low),
+                                           "high": _px(r.high), "ce": _px(r.ce), "direction": r.direction}
+        nested = [d for d in (_dr(getattr(c, "dealing_range", None)),      # §5/§6 nested hierarchy: 4H⊃1H⊃15m
+                              _dr(getattr(s, "dealing_range", None)),
+                              _dr(getattr(cf, "dealing_range", None))) if d is not None]
+        pools = [{"kind": "BSL" if getattr(p, "kind", None) == "high" else "SSL", "price": _px(p.price)}
+                 for p in (c.liquidity if c else [])]             # §3 the FULL pool set (BSL/SSL)
+        fib = c.fib_levels() if c else []                          # §6 fib ladder (Lesson 8)
         tb = self.buf.get(self.trigger_tf) or []                  # last 1m bar = the latest price
         last = tb[-1] if tb else None
         last_dir = None
@@ -156,7 +165,10 @@ class V2Live:
                 "anchor_tf": getattr(c, "anchor_tf", ""),
                 "dealing_range": None if dr is None else {"low": _px(dr.low), "high": _px(dr.high),
                                                           "ce": _px(dr.ce), "direction": dr.direction},
+                "fib": fib,                                   # §6 fib ladder 0/0.5/0.62/0.79/1 (Lesson 8)
+                "pools": pools,                               # §3 full ERL pool set (BSL/SSL), Lesson 6
                 "liquidity_draws": len(c.liquidity), "liquidity_objective": obj},
+            "dealing_ranges": nested,                         # §5/§6 nested range hierarchy (source_tf-tagged)
             "setup": self._setup_dict(s),
             "confirmation": self._setup_dict(cf),
             "execution": None if not e else {

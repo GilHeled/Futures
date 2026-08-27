@@ -69,9 +69,15 @@ The W/D/4H→1H→15m→1m role split *is* v2's spine.
   — needs a width tolerance. Both are *mechanically required but the course provides no number*; left
   pending an explicit course rule or a deliberately-approved `[NEC]` parameter. **Not** using 0.15·ATR.
 
-### 4. ERL vs IRL — `[COURSE]` (§4) — 🟡 Partial (ERL only)
-- v1: every pool flagged `erl=True` (`liquidity.py:37`); **IRL (FVG/NWOG/ORG internal) classification not implemented** (`liquidity.py:12`). v2/DB: no ERL/IRL label.
-- **Gap:** an IRL classifier + ERL/IRL labelling relative to the active dealing range.
+### 4. ERL vs IRL — `[COURSE]` (§4, **Lesson 10**) — ✅ Implemented
+- Lesson 10 verified: **ERL** = liquidity ABOVE the range high / BELOW the range low (untaken equal
+  highs/lows the market draws to); **IRL** = BETWEEN low and high (FVG/gaps/imbalance — rebalance area).
+  Classification is relative to the active (fib) dealing range; ERL-broken → draw to IRL, IRL-filled →
+  draw to ERL. (The lesson's two-things rule — price draws to highs/lows OR returns to imbalance — is
+  the conceptual model behind the classification.)
+- v2 ✅: `HTFContext.erl_irl(price)` → `"ERL"`/`"IRL"` vs the dealing range. Every surfaced pool is
+  tagged `loc` (`live.py`), and NWOG/ORG mids too; DB shows an `ERL n / IRL m` breakdown on the pools
+  chip + `[ERL]/[IRL]` per pool in the tooltip. Verified `test_erl_irl_classification`.
 
 ### 5. Premium / Discount — `[COURSE]` (§5, lesson 9) — ✅ Implemented
 - v1: `dealing_range.py:40 zone_of` (premium/discount/EQ, CE `:59`).
@@ -219,7 +225,7 @@ Reading the PDFs surfaced concrete mechanical rules the 20-section distillation 
 
 **❌ Missing (mechanize):**
 1. Equal-highs/lows clustering (§3) & pools-as-zones (§3) — **parameter-blocked** (Lesson 6 teaches them but gives no tolerance; pending explicit rule or approved `[NEC]`; **not** 0.15·ATR)
-2. IRL classification / ERL-IRL labelling (§4)
+2. ~~IRL classification / ERL-IRL labelling (§4)~~ ✅ **DONE 2026-08-27** (Lesson 10)
 3. ~~Fib ladder 0/0.5/0.62/0.79/1 (§6)~~ ✅ **DONE 2026-08-27** (Lesson 8, with orientation)
 4. Explicit AMD phase + consolidation/accumulation detector (§10)
 5. ~~Session/killzone context wired into v2 + shown on DB (§11)~~ ✅ **DONE 2026-08-27**
@@ -261,7 +267,9 @@ no PnL tuning; verify against the spec, not by search):
 2. ~~**HTF context labels** (§17)~~ ✅ **DONE 2026-08-27** (alignment axis) — AMD-phase labels come with §10; bias-veto removal is item 11.
 3. **Liquidity/range completeness** (§3/§6): ✅ **DONE 2026-08-27** the parameter-free parts — fib ladder (Lesson 8, oriented), full pool set surfaced (Lesson 6), nested per-stage ranges surfaced. ⛔ **Deferred (parameter-blocked):** equal-H/L clustering + pools-as-zones — no course tolerance; awaiting an explicit rule or an approved `[NEC]` value. ← resume here when the tolerance is decided
 4. ~~**NWOG & ORG detectors** (§18/§19)~~ ✅ **DONE 2026-08-27** (Lessons 13/14) — `ict_v2/pdarrays.py`, surfaced on the V2 tab. IRL-classification usage (§4) can now build on these.
-5. **IRL classification** (§4, Lesson 10 on disk) — with the internal arrays (FVG/NWOG/ORG) now present, classify ERL vs IRL relative to the dealing range. ← **NEXT** (verify against Lesson 10)
+5. ~~**IRL classification** (§4, Lesson 10)~~ ✅ **DONE 2026-08-27** — `HTFContext.erl_irl()`, pools + NWOG/ORG tagged, DB breakdown.
+6. **Support/resistance levels** (§—, **Lesson 11** on disk, "רמות תמיכה והתנגדות") — verify what Lesson 11 adds beyond swing pools; likely named S/R levels. ← **NEXT** (read Lesson 11 first)
+7. Remaining: market-structure surfacing + potential/confirmed reversal (§2, Lesson 8), intraday trend-change (§21, **Lesson 15** on disk), AMD phase + consolidation (§10, **Lesson 16**), course-filter layer (§16 ≥3R + killzone; removes §17 bias-veto), ordered target hierarchy + fib extensions (§16), A/B/C grade (§22), the ≥15m & ≥50%-pullback rules, equal-H/L + zones (parameter-blocked).
 4. **NWOG & ORG detectors** (§18/§19) — new IRL context arrays; tracked, shown, usable as targets.
 5. **IRL classification** (§4) — depends on 3+4 (needs the internal arrays first).
 6. **Explicit AMD phase + consolidation detector** (§10) — the hardest; `[RES:amd_phase]`, needs its own mini-spec.

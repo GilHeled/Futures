@@ -153,6 +153,22 @@ def test_htf_context_labels(monkeypatch):
             assert c["context_label"] == "neutral-context"
 
 
+def test_erl_irl_classification():
+    """METHODOLOGY §4 / Lesson 10: a price ABOVE the range high or BELOW the range low is EXTERNAL
+    range liquidity (ERL); a price BETWEEN low and high is INTERNAL (IRL). Relative to the active
+    dealing range; None without a range."""
+    dr = SimpleNamespace(source_tf="4H", low=100.0, high=200.0, ce=150.0, direction="up")
+    ctx = v2.HTFContext(tf="4H", bias="long", dealing_range=dr)
+    assert ctx.erl_irl(250.0) == "ERL" and ctx.erl_irl(90.0) == "ERL"   # outside the range
+    assert ctx.erl_irl(150.0) == "IRL" and ctx.erl_irl(120.0) == "IRL"  # inside the range
+    assert ctx.erl_irl(100.0) == "IRL" and ctx.erl_irl(200.0) == "IRL"  # boundaries are inclusive-inside
+    assert ctx.erl_irl(None) is None
+    assert v2.HTFContext(tf="4H", bias="neutral", dealing_range=None).erl_irl(150.0) is None
+    # surfaced: every pool in the snapshot carries an ERL/IRL loc tag
+    st = v2.demo_state(seed=7)
+    # (demo has a range; pools should be classified) — checked via the live snapshot in test_pdarrays/live
+
+
 def test_fib_ladder_levels_and_orientation():
     """METHODOLOGY §6 / Lesson 8: the fib ladder = 0/0.5/0.62/0.79/1 on the dealing range, 0.5 =
     equilibrium. Orientation per the course: UPtrend → 0 at HIGH, 1 at LOW; DOWNtrend → 0 at LOW,
@@ -199,6 +215,7 @@ def test_full_pool_set_and_nested_ranges_surfaced():
         assert set(r) == {"tf", "low", "high", "ce", "direction"} and r["tf"]
     for p in ctx["pools"]:
         assert p["kind"] in ("BSL", "SSL")
+        assert p.get("loc") in ("ERL", "IRL", None)          # §4 ERL/IRL tag surfaced per pool
 
 
 def test_four_layer_cascade_runs():

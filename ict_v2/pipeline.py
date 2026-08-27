@@ -77,6 +77,16 @@ class HTFContext:
         """premium / discount / equilibrium of `price` within the HTF dealing range (None if no range)."""
         return self.dealing_range.zone_of(price) if self.dealing_range is not None else None
 
+    def erl_irl(self, price: float) -> Optional[str]:
+        """Classify a price as EXTERNAL (ERL) or INTERNAL (IRL) range liquidity vs the active dealing
+        range (Lesson 10, METHODOLOGY §4): ABOVE the range high or BELOW the range low = ERL (external —
+        untaken highs/lows the market draws to); BETWEEN low and high = IRL (internal — FVG/gaps/
+        imbalance, a rebalance area). None if no range/price. Recomputed whenever the range updates."""
+        dr = self.dealing_range
+        if dr is None or price is None:
+            return None
+        return "ERL" if (price > dr.high or price < dr.low) else "IRL"
+
     def fib_levels(self) -> list:
         """The course fib ladder (Lesson 8, METHODOLOGY §6): the main support/resistance levels
         0 / 0.5 / 0.62 / 0.79 / 1 measured on the dealing range. ORIENTATION per the course: an

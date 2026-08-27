@@ -142,11 +142,16 @@ class V2Live:
         nested = [d for d in (_dr(getattr(c, "dealing_range", None)),      # §5/§6 nested hierarchy: 4H⊃1H⊃15m
                               _dr(getattr(s, "dealing_range", None)),
                               _dr(getattr(cf, "dealing_range", None))) if d is not None]
-        pools = [{"kind": "BSL" if getattr(p, "kind", None) == "high" else "SSL", "price": _px(p.price)}
+        pools = [{"kind": "BSL" if getattr(p, "kind", None) == "high" else "SSL", "price": _px(p.price),
+                  "loc": (c.erl_irl(p.price) if c else None)}      # §4 ERL/IRL vs the dealing range (Lesson 10)
                  for p in (c.liquidity if c else [])]             # §3 the FULL pool set (BSL/SSL)
         fib = c.fib_levels() if c else []                          # §6 fib ladder (Lesson 8)
         nwog = pdarrays.nwogs(self.buf.get(self.context_tf) or [])  # §18 New Week Opening Gaps (Lesson 13)
+        for g in nwog:                                             # §4 tag each NWOG's 50% by location
+            g["loc"] = c.erl_irl(g["mid"]) if c else None
         org = pdarrays.org(self.buf.get(self.confirm_tf) or [])     # §19 Opening Range Gap (Lesson 14; 15m has 09:30/16:15)
+        if org and c:
+            org["loc"] = c.erl_irl(org["mid"])                    # §4 ORG is an internal array → usually IRL
         tb = self.buf.get(self.trigger_tf) or []                  # last 1m bar = the latest price
         last = tb[-1] if tb else None
         last_dir = None

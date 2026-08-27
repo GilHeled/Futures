@@ -18,6 +18,7 @@ from typing import Optional
 
 from ict_live.engine import pipeline as v1        # frozen v1 engine, read-only
 from ict_v2 import align
+from ict_v2 import entry_models as EM              # pluggable execution/entry models (FVG + course set)
 
 
 # ---- the three layers -------------------------------------------------------------------------
@@ -161,6 +162,7 @@ class Candidate:
     rr_quality: Optional[str] = None       # reject | low | good | high — QUALITY grade, not a gate
     actionable: bool = False               # a VALID ICT setup in v2's sense (structure ok, RR>1)
     passed: bool = False                   # cleared the HTF gate (fully validated on this TF)
+    entry_model: str = "fvg"               # execution model that produced the entry (fvg | order_block | ...)
     status: str = "incomplete"             # passed | incomplete (still developing) | rejected (permanently invalid)
     reasons: list = field(default_factory=list)   # EXPLICIT reasons it did not fully validate (empty ⇒ passed)
     checks: list = field(default_factory=list)    # the ordered pipeline (sweep→…→gate) w/ per-step status
@@ -185,6 +187,7 @@ class Candidate:
             "fvg_status": None if self.fvg is None else getattr(self.fvg, "status", None),
             "mss_state": None if self.mss is None else getattr(self.mss, "state", None),
             "actionable": self.actionable, "passed": self.passed, "reasons": list(self.reasons),
+            "entry_model": self.entry_model,
             "checks": [dict(c) for c in self.checks],
             "id": (getattr(self.setup, "id", "") if self.setup is not None
                    else getattr(self.sweep, "id", "")),
@@ -281,7 +284,7 @@ def htf_context(bars, tf: str, *, anchor: str = "", anchor_tf: str = "") -> HTFC
                       anchor_bias=(anchor or ""), anchor_tf=(anchor_tf or ""))
 
 
-def generate_candidates(ms, context: HTFContext) -> list:
+def generate_candidates(ms, context: HTFContext, entry_models=None) -> list:
     """GENERATE trade candidates from the manipulation, do NOT "find FVGs and filter".
 
     Every liquidity sweep is a possible trade idea (its direction is set by which side was raided).
@@ -289,7 +292,13 @@ def generate_candidates(ms, context: HTFContext) -> list:
     manipulation, the market-structure shift, and the entry FVG — plus the HTF dealing range, the
     premium/discount location of the entry, and the opposing liquidity objective. Where v1 assembled a
     full tradeable Setup we adopt its authoritative geometry/actionability; otherwise the candidate
-    still exists at whatever `state` it reached, for the next timeframe to reject / refine / promote."""
+    still exists at whatever `state` it reached, for the next timeframe to reject / refine / promote.
+
+    EXECUTION MODELS (pluggable): `entry_models` selects which course entry models run (default FVG
+    only). FVG uses v1's frozen entry detector below; additional models (order_block, breaker, …) are
+    added in their own verified increments and, when enabled, emit extra candidates tagged with their
+    `entry_model`. See ict_v2/entry_models.py."""
+    models = EM.resolve(entry_models)                 # implemented subset; always includes "fvg"
     disp_by_sweep, fvg_by_disp, mss_by_disp = {}, {}, {}
     for r in ms.ranked_displacements:
         d = r.item
@@ -395,14 +404,20 @@ def generate_candidates(ms, context: HTFContext) -> list:
             checks.append(_mk("HTF context", "fail", _short_gate(reasons), True))
 
         cands.append(Candidate(direction=direction, state=state, status=status, checks=checks,
-                               sweep=sw, displacement=disp, mss=mss,
+                               sweep=sw, displacement=disp, mss=mss, entry_model="fvg",
                                fvg=fvg, dealing_range=dr, pd_location=pd, objective=objective,
                                entry=entry, stop=stop, target=target, rr=rr, rr_quality=quality,
                                actionable=actionable, passed=passed, reasons=reasons, setup=setup))
+    # EXTENSION POINT — additional execution models emit extra candidates here (tagged entry_model),
+    # each added + verified in its own increment. Only "fvg" is implemented today:
+    #   for m in models:
+    #       if m == "fvg": continue
+    #       cands += _entries_for_model(m, ms, context, ...)   # -> Candidate(entry_model=m, ...)
     return cands
 
 
-def mtf_setup(bars, tf: str, context: HTFContext, *, refine_bars=None, min_stop=None) -> MTFSetup:
+def mtf_setup(bars, tf: str, context: HTFContext, *, refine_bars=None, min_stop=None,
+              entry_models=None) -> MTFSetup:
     """Stage 2: GENERATE trade candidates on this timeframe (manipulation → full ICT idea), then GATE
     the tradeable ones by the HTF context (bias + premium/discount + liquidity objective). Every
     candidate is retained (with its workflow `state`) so the next timeframe can reject / refine /
@@ -415,7 +430,7 @@ def mtf_setup(bars, tf: str, context: HTFContext, *, refine_bars=None, min_stop=
     fast instrument a fresh, unmitigated entry gap. `min_stop` rejects degenerate stops. Both default
     off, so the standard v2 behaviour is unchanged."""
     ms = v1.analyze(bars, tf, refine_bars=refine_bars, min_stop=min_stop)
-    all_cands = generate_candidates(ms, context)
+    all_cands = generate_candidates(ms, context, entry_models=entry_models)
     gated, candidates, cand_info = [], [], []
     for c in all_cands:
         cand_info.append(c.to_dict())
@@ -430,7 +445,7 @@ def mtf_setup(bars, tf: str, context: HTFContext, *, refine_bars=None, min_stop=
 
 def confirm_setup(bars, tf: str, context: HTFContext, setup: MTFSetup, *,
                   against: str = "1H setup", node: str = "confirms 1H",
-                  refine_bars=None, min_stop=None) -> MTFSetup:
+                  refine_bars=None, min_stop=None, entry_models=None) -> MTFSetup:
     """A CONFIRMATION stage. Generate candidates on `tf` with their OWN structure, HTF-gate them like
     the 1H stage, THEN require they confirm the higher layer (`setup`): a confirmation is valid only if
     it is a complete, HTF-aligned setup in the direction of a gated setup on that higher layer. Each
@@ -438,7 +453,8 @@ def confirm_setup(bars, tf: str, context: HTFContext, setup: MTFSetup, *,
     ("confirms 1H" for 15m, "1m trigger" for 1m) that fails as INCOMPLETE ("No gated ... to confirm")
     or REJECTED ("Direction mismatch"). `refine_bars` optionally refines THIS stage's entry FVG onto a
     lower TF (e.g. the 15m confirmation onto 5m); `min_stop` rejects degenerate stops."""
-    mtf = mtf_setup(bars, tf, context, refine_bars=refine_bars, min_stop=min_stop)  # generate + HTF-gate
+    mtf = mtf_setup(bars, tf, context, refine_bars=refine_bars, min_stop=min_stop,
+                    entry_models=entry_models)                  # generate + HTF-gate
     setup_dirs = sorted({g.setup.direction for g in (setup.gated if setup else [])})
     gated, candidates, cand_info = [], [], []
     for c in mtf.candidate_objs:                             # the rich Candidate objects from the generate
@@ -484,7 +500,8 @@ def ltf_execution(bars, tf: str, setup: MTFSetup, context: HTFContext) -> LTFExe
     return LTFExecution(tf=tf, fvgs=fvgs, executables=executables, decision=decision)
 
 
-def execution_for(bars, tf: str, context, setup, confirmation, *, min_stop=None) -> LTFExecution:
+def execution_for(bars, tf: str, context, setup, confirmation, *, min_stop=None,
+                  entry_models=None) -> LTFExecution:
     """Stage 4 — the 1m execution trigger. It GENERATES 1m candidates that must confirm the 15m
     confirmation (own structure, HTF-aligned, same direction as a gated 15m confirmation), exactly the
     same candidate+reasons+pipeline model as the higher stages. The trade fires only for a gated 1m
@@ -507,7 +524,7 @@ def execution_for(bars, tf: str, context, setup, confirmation, *, min_stop=None)
         return LTFExecution(tf=tf, decision=decision or "NO-TRADE (awaiting 1m trigger)")
     # ALWAYS generate the 1m candidate list (transparency parity with the higher stages)
     conf = confirm_setup(bars, tf, context, confirmation, against="15m confirmation", node="1m trigger",
-                         min_stop=min_stop)
+                         min_stop=min_stop, entry_models=entry_models)
     executables = []
     if decision is None:                                     # cascade reached the 1m: fire iff a gated 1m trigger
         if conf.gated:
@@ -524,15 +541,15 @@ def execution_for(bars, tf: str, context, setup, confirmation, *, min_stop=None)
 
 def analyze_mtf(context_bars, setup_bars, confirm_bars, trigger_bars, *, context_tf: str = "4H",
                 setup_tf: str = "1H", confirm_tf: str = "15m", trigger_tf: str = "1m",
-                anchor_bars=None, anchor_tf: str = "") -> MTFState:
+                anchor_bars=None, anchor_tf: str = "", entry_models=None) -> MTFState:
     """Run the four-layer cascade in order and return the combined state (stateless convenience).
     Optional Daily/Weekly anchor: pass `anchor_bars` on `anchor_tf` ("D"/"W") to veto a counter-trend
-    4H bias to neutral."""
+    4H bias to neutral. `entry_models` selects the execution models (default FVG only)."""
     anchor = htf_bias_of(anchor_bars, anchor_tf) if (anchor_bars and anchor_tf) else ""
     ctx = htf_context(context_bars, context_tf, anchor=anchor, anchor_tf=(anchor_tf if anchor else ""))
-    stp = mtf_setup(setup_bars, setup_tf, ctx)
-    cf = confirm_setup(confirm_bars, confirm_tf, ctx, stp)  # 15m confirmation of the 1H setup
-    exe = execution_for(trigger_bars, trigger_tf, ctx, stp, cf)
+    stp = mtf_setup(setup_bars, setup_tf, ctx, entry_models=entry_models)
+    cf = confirm_setup(confirm_bars, confirm_tf, ctx, stp, entry_models=entry_models)  # 15m confirms 1H
+    exe = execution_for(trigger_bars, trigger_tf, ctx, stp, cf, entry_models=entry_models)
     return MTFState(context=ctx, setup=stp, confirmation=cf, execution=exe)
 
 

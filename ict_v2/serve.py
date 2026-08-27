@@ -37,6 +37,10 @@ class V2Service:
         # to neutral (trade only with the higher timeframe). Unset/empty = OFF. NB needs weeks/months
         # of history to actually engage — a Daily range needs several session-days of structure.
         self.anchor_tf = (os.environ.get("ICT_V2_ANCHOR", "").strip() or None)
+        # OPTIONAL execution models: ICT_V2_ENTRY_MODELS="fvg,order_block" selects which entry models
+        # run. Unset = FVG only. Not-yet-implemented models are inert (see entry_models.REGISTRY).
+        em = os.environ.get("ICT_V2_ENTRY_MODELS", "").strip()
+        self.entry_models = tuple(x.strip() for x in em.split(",") if x.strip()) or None
 
     def ingest_new(self) -> int:
         """Feed any NEW 1m bars appended to the shared store through each symbol's V2Live. Returns the
@@ -57,7 +61,8 @@ class V2Service:
                         except Exception:
                             mstop = None
                     live = self.lives.setdefault(sym, V2Live(refine_tf=self.refine_tf, min_stop=mstop,
-                                                             anchor_tf=self.anchor_tf))
+                                                             anchor_tf=self.anchor_tf,
+                                                             entry_models=self.entry_models))
                 last = self.last_ms.get(sym, -1)
                 for b in store.bars(sym):                    # chronological
                     ms = int(b.open_time.timestamp() * 1000)

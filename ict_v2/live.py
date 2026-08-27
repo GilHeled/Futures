@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 from ict_live.market.bar_builder import BarBuilder
 from ict_v2.engine import MTFEngine
+from ict_v2 import entry_models as EM
 
 _WINDOW = 240          # context/setup/confirmation structural window
 _EXEC_WINDOW = 400     # recent 1m bars for the execution trigger
@@ -43,19 +44,21 @@ class V2Live:
     def __init__(self, context_tf: str = "4H", setup_tf: str = "1H", confirm_tf: str = "15m",
                  trigger_tf: str = "1m", window: int = _WINDOW, exec_window: int = _EXEC_WINDOW,
                  refine_tf: str | None = None, min_stop: float | None = None,
-                 anchor_tf: str | None = None):
+                 anchor_tf: str | None = None, entry_models=None):
         self.context_tf, self.setup_tf = context_tf, setup_tf
         self.confirm_tf, self.trigger_tf = confirm_tf, trigger_tf
         self.window, self.exec_window = window, exec_window
         self.refine_tf = refine_tf                           # None = MTF entry-refinement OFF (default)
         self.anchor_tf = anchor_tf                           # None = no Daily/Weekly anchor (default); else "D"/"W"
+        self.entry_models = entry_models                     # None = FVG only (default execution model)
         # build every TF we need: intraday (5m/15m/1H/4H) + optional Daily/Weekly anchor (D/W need the
         # session calendar, which BarBuilder supplies by default)
         built = tuple(dict.fromkeys(tf for tf in (setup_tf, context_tf, confirm_tf, refine_tf, anchor_tf)
                                     if tf and tf != "1m"))
         self.builder = BarBuilder(timeframes=built)
         self.engine = MTFEngine(context_tf, setup_tf, confirm_tf, trigger_tf,
-                                refine_tf=refine_tf, min_stop=min_stop, anchor_tf=anchor_tf)
+                                refine_tf=refine_tf, min_stop=min_stop, anchor_tf=anchor_tf,
+                                entry_models=entry_models)
         tfs = tuple(dict.fromkeys(tf for tf in (context_tf, setup_tf, confirm_tf, trigger_tf,
                                                 refine_tf, anchor_tf) if tf))
         self.buf = {tf: [] for tf in tfs}
@@ -140,6 +143,7 @@ class V2Live:
             "timeframes": {"context": self.context_tf, "setup": self.setup_tf,
                            "confirm": self.confirm_tf, "trigger": self.trigger_tf,
                            "refine": self.refine_tf, "anchor": self.anchor_tf},
+            "entry_models": {"enabled": list(EM.resolve(self.entry_models)), "catalog": EM.catalog()},
             "updated": dict(self.updated),
             "last": None if last is None else {"price": _px(last.close), "dir": last_dir,
                                                "time": _et_iso(last.close_time)},

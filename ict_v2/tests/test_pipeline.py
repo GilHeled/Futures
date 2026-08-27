@@ -22,6 +22,22 @@ def test_daily_weekly_anchor_vetoes_counter_trend_bias(monkeypatch):
     assert v2.htf_bias_of([], "D") == "short"
 
 
+def test_entry_models_registry_and_tagging():
+    """The execution layer is pluggable: FVG is the implemented default, the other course models are
+    registered but not yet implemented (enabling them is inert), and every candidate is tagged."""
+    from ict_v2 import entry_models as EM
+    cat = EM.catalog()
+    assert cat["fvg"]["implemented"] is True
+    for m in ("order_block", "breaker", "mitigation_block", "ifvg", "iofed"):
+        assert m in cat and cat[m]["implemented"] is False          # declared, not yet built
+    assert EM.resolve(None) == ("fvg",)
+    assert EM.resolve(["order_block", "breaker"]) == ("fvg",)         # planned models drop → FVG kept
+    assert EM.resolve(["fvg"]) == ("fvg",)
+    # every generated candidate carries entry_model="fvg" today
+    st = v2.demo_state(seed=7)
+    assert all(c["entry_model"] == "fvg" for c in st.setup.cand_info)
+
+
 def test_four_layer_cascade_runs():
     st = v2.demo_state(seed=7)
     assert st.context.tf == "4H" and st.setup.tf == "1H" and st.confirmation.tf == "15m"

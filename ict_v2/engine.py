@@ -20,12 +20,13 @@ from ict_v2 import pipeline as P
 class MTFEngine:
     def __init__(self, context_tf: str = "4H", setup_tf: str = "1H", confirm_tf: str = "15m",
                  trigger_tf: str = "1m", refine_tf: str | None = None, min_stop: float | None = None,
-                 anchor_tf: str | None = None):
+                 anchor_tf: str | None = None, entry_models=None):
         self.context_tf, self.setup_tf = context_tf, setup_tf
         self.confirm_tf, self.trigger_tf = confirm_tf, trigger_tf
         self.refine_tf = refine_tf     # None = MTF entry-refinement OFF (default); else the entry TF
         self.min_stop = min_stop       # degenerate-stop floor (price), used with refinement
         self.anchor_tf = anchor_tf     # None = no Daily/Weekly anchor (default); else "D"/"W"
+        self.entry_models = entry_models   # None = FVG only (default); else the enabled execution models
         self.context = None            # HTFContext — fixed until the next 4H close
         self.setup = None              # 1H MTFSetup (gated by context) — fixed until the next 1H close
         self.confirmation = None       # 15m MTFSetup (its own gated setup) — fixed until the next 15m close
@@ -44,7 +45,8 @@ class MTFEngine:
         if self.context is None:
             return None
         rb = refine_bars if self.refine_tf else None      # only refine when the mode is enabled
-        self.setup = P.mtf_setup(bars, self.setup_tf, self.context, refine_bars=rb, min_stop=self.min_stop)
+        self.setup = P.mtf_setup(bars, self.setup_tf, self.context, refine_bars=rb, min_stop=self.min_stop,
+                                 entry_models=self.entry_models)
         return self.setup
 
     def on_confirm_close(self, bars, refine_bars=None):
@@ -56,7 +58,8 @@ class MTFEngine:
             return None
         rb = refine_bars if self.refine_tf else None
         self.confirmation = P.confirm_setup(bars, self.confirm_tf, self.context, self.setup,
-                                            refine_bars=rb, min_stop=self.min_stop)
+                                            refine_bars=rb, min_stop=self.min_stop,
+                                            entry_models=self.entry_models)
         return self.confirmation
 
     def on_trigger_close(self, bars):
@@ -64,7 +67,8 @@ class MTFEngine:
         the cascade got. The 1m entry is already the finest TF (no lower to refine onto); the
         degenerate-stop floor still applies via min_stop."""
         self.execution = P.execution_for(bars, self.trigger_tf, self.context, self.setup,
-                                         self.confirmation, min_stop=self.min_stop)
+                                         self.confirmation, min_stop=self.min_stop,
+                                         entry_models=self.entry_models)
         return self.execution
 
     def state(self) -> P.MTFState:

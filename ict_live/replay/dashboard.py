@@ -217,6 +217,12 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
    background:var(--panel);border:1px solid var(--line);color:var(--mut)}
  .cstate.actionable{color:var(--long);border-color:color-mix(in srgb,var(--long) 40%,var(--line))}
  .cstate.fvg{color:var(--info,#3b82f6)} .cstate.mss{color:var(--warn)}
+ .emodel{font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:10px;color:var(--mut);
+   background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:1px 6px;letter-spacing:.02em}
+ .emtag{font-size:10px;font-family:"SF Mono",ui-monospace,Menlo,monospace;padding:1px 6px;border-radius:5px;
+   border:1px solid var(--line);color:var(--mut)}
+ .emtag.on{color:var(--long);border-color:color-mix(in srgb,var(--long) 40%,var(--line))}
+ .emtag.planned{opacity:.6;font-style:italic}
  .cbadge{font-size:10px;font-weight:700;padding:2px 9px;border-radius:999px;text-transform:uppercase;letter-spacing:.4px}
  .cbadge.pass{color:var(--long);background:var(--long-bg)}
  .cbadge.inc{color:var(--warn);background:var(--warn-bg)}
@@ -644,6 +650,7 @@ function _candCard(c){
       + (c.reasons||[]).map(r=>`<li>${esc(r)}</li>`).join('') + `</ul></div>`;
   return `<div class="ccard ${st}"><div class=ccard-hd>${dpill}`
        + `<span class="cstate ${c.state}">${c.state}</span>`
+       + `<span class=emodel title="execution model">${_candEsc(c.entry_model||'fvg')}</span>`
        + `<span class=ccard-gate>${badge}</span></div>`
        + `${chain}<div class=cfacts>${facts}</div>${rblock}</div>`;
 }
@@ -662,13 +669,20 @@ function openCandidates(sym,layer){
   const n=st=>st==='possible'?info.length:info.filter(c=>c.status===st).length;
   const chip=(f,cls,lbl)=>`<button type=button class="cchip ${cls}" data-f="${f}" onclick="filterCand('${f}')">${n(f)} ${lbl}</button>`;
   $('#candmodal-title').innerHTML=`${sym}<span class=ctlayer>${layer} candidates</span>`;
+  const em=(s.entry_models||{}); const cat=em.catalog||{}; const en=(em.enabled||['fvg']);
+  const emline=Object.keys(cat).length
+    ? `<div class=cleg>execution models — `+Object.keys(cat).map(k=>{
+        const on=en.includes(k), impl=cat[k].implemented;
+        const tag=on?'on':(impl?'off':'planned');
+        return `<span class="emtag ${tag}" title="${_candEsc(cat[k].desc||'')}">${k}·${tag}</span>`;
+      }).join(' ')+`</div>` : '';
   $('#candmodal-body').innerHTML=
       `<div class=csum>${chip('possible','','possible')}${chip('passed','pass','passed')}`
     + `${chip('incomplete','inc','incomplete')}${chip('rejected','rej','rejected')}</div>`
     + `<div class=ccards id=cand-cards></div>`
     + `<div class=cleg>click a badge to filter · <span class=lg-pass>green</span> = passed · `
     + `<span class=lg-inc>amber</span> = incomplete (still developing) · `
-    + `<span class=lg-rej>red</span> = rejected (permanently invalid)</div>`;
+    + `<span class=lg-rej>red</span> = rejected (permanently invalid)</div>` + emline;
   _candRender();
   $('#candmodal').classList.add('on');
 }

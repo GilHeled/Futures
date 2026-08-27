@@ -39,23 +39,30 @@ def test_entry_models_registry_and_tagging():
 
 
 def test_entry_common_contract():
-    """Every entry exposes the SAME contract; FVG conforms; geometry is assembled generically."""
+    """Every entry exposes the SAME contract with a two-level state (common + model lifecycle); FVG
+    conforms; geometry is assembled generically off the common state."""
     from types import SimpleNamespace
     from ict_v2 import entry_models as EM
-    FIELDS = {"model", "direction", "ref", "invalidation", "status", "quality", "reason"}
-    # the contract is uniform for any model
+    FIELDS = {"model", "direction", "ref", "invalidation", "state", "lifecycle", "quality", "reason"}
     assert set(EM.Entry(model="x", direction="long", ref=1.0, invalidation=0.0).to_dict()) == FIELDS
-    # FVG candidates expose it, with a status from the common vocabulary
+    # common state is DERIVED from the model-specific lifecycle
+    assert EM.Entry(model="fvg", direction="long", ref=1, invalidation=0, lifecycle="mitigated").state == "completed"
+    assert EM.Entry(model="fvg", direction="long", ref=1, invalidation=0, lifecycle="valid").state == "valid"
+    assert EM.Entry(model="order_block", direction="long", ref=1, invalidation=0,
+                    lifecycle="awaiting_retest").state == "waiting"
+    assert EM.common_state("breaker", "confirmed") == "valid"
+    # FVG candidates expose the contract; common state ∈ COMMON_STATES; lifecycle is FVG's own
     st = v2.demo_state(seed=7)
     withentry = [c for c in st.setup.cand_info if c["entry_obj"]]
     assert withentry and all(set(c["entry_obj"]) == FIELDS for c in withentry)
-    assert all(c["entry_obj"]["status"] in EM.STATUS for c in withentry)
-    assert all(c["entry_obj"]["model"] == "fvg" for c in withentry)
-    # assemble() is model-agnostic: same geometry contract for a non-FVG entry object
-    ent = EM.Entry(model="order_block", direction="long", ref=100.0, invalidation=98.0, status="valid")
-    g = EM.assemble(ent, sweep_extreme=97.0,
-                    active_erl=[SimpleNamespace(kind="high", price=110.0)], min_stop=2.0)
+    assert all(c["entry_obj"]["state"] in EM.COMMON_STATES for c in withentry)
+    assert all(c["entry_obj"]["lifecycle"] in EM.LIFECYCLE["fvg"]["vocab"] for c in withentry)
+    # assemble() reads only the COMMON state: a "completed" entry is not enterable; a valid one is
+    good = EM.Entry(model="order_block", direction="long", ref=100.0, invalidation=98.0, lifecycle="validated")
+    g = EM.assemble(good, sweep_extreme=97.0, active_erl=[SimpleNamespace(kind="high", price=110.0)], min_stop=2.0)
     assert g["stop"] == 97.0 and g["target"] == 110.0 and g["reject"] == "" and g["rr"] == 3.33
+    done = EM.Entry(model="order_block", direction="long", ref=100.0, invalidation=98.0, lifecycle="mitigated")
+    assert EM.assemble(done, 97.0, [SimpleNamespace(kind="high", price=110.0)], 2.0)["reject"] != ""
 
 
 def test_four_layer_cascade_runs():

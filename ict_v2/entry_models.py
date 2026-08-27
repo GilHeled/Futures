@@ -16,35 +16,67 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-# the ONE status vocabulary every entry model reports (course-agnostic, model-agnostic)
-STATUS = ("waiting", "valid", "mitigated", "invalidated")
-#   waiting     — the entry object formed but price has not reached the reference yet
-#   valid       — price reached the reference; the entry is live/usable
-#   mitigated   — the entry zone was traded through (ICT "mitigated"): no re-entry
-#   invalidated — the structural premise is void (geometry/no-target/reward≤risk/etc.)
+# TWO-LEVEL STATE. The COMMON state is all the engine ever looks at; the model-specific LIFECYCLE
+# sub-state is for the dashboard only.
+COMMON_STATES = ("waiting", "valid", "rejected", "completed")
+#   waiting    — the entry object exists but is not yet usable (still forming / awaiting its trigger)
+#   valid      — the entry is live/usable (an order can rest here now)
+#   rejected   — the entry never became valid (structural fault: bad geometry / invalidated early)
+#   completed  — the entry was valid and then played out / was consumed (e.g. an FVG mitigated)
+
+# Each model's own lifecycle vocabulary + how each sub-state maps to the ONE common state above.
+LIFECYCLE = {
+    "fvg":              {"vocab": ["waiting", "valid", "mitigated"],
+                         "map": {"waiting": "waiting", "valid": "valid", "mitigated": "completed"}},
+    "order_block":      {"vocab": ["identified", "awaiting_retest", "validated", "invalidated", "mitigated"],
+                         "map": {"identified": "waiting", "awaiting_retest": "waiting",
+                                 "validated": "valid", "invalidated": "rejected", "mitigated": "completed"}},
+    "breaker":          {"vocab": ["formed", "confirmed", "invalidated", "mitigated"],
+                         "map": {"formed": "waiting", "confirmed": "valid",
+                                 "invalidated": "rejected", "mitigated": "completed"}},
+    "mitigation_block": {"vocab": ["formed", "awaiting_retest", "validated", "invalidated", "mitigated"],
+                         "map": {"formed": "waiting", "awaiting_retest": "waiting", "validated": "valid",
+                                 "invalidated": "rejected", "mitigated": "completed"}},
+    "ifvg":             {"vocab": ["inverted", "confirmed", "invalidated", "mitigated"],
+                         "map": {"inverted": "waiting", "confirmed": "valid",
+                                 "invalidated": "rejected", "mitigated": "completed"}},
+    "iofed":            {"vocab": ["raid", "first_fvg", "validated", "invalidated"],
+                         "map": {"raid": "waiting", "first_fvg": "waiting",
+                                 "validated": "valid", "invalidated": "rejected"}},
+}
+
+
+def common_state(model: str, lifecycle: str) -> str:
+    """Map a model's lifecycle sub-state to the ONE common state the engine uses."""
+    return LIFECYCLE.get(model, {}).get("map", {}).get(lifecycle, "waiting")
 
 
 @dataclass
 class Entry:
-    """THE COMMON CONTRACT every execution model implements. The engine and the dashboard consume
-    this generic object without knowing which model produced it. A model's detector returns a list of
-    these; geometry (stop/target/RR) is assembled uniformly by `assemble()`."""
+    """THE COMMON CONTRACT every execution model implements. The engine + dashboard consume this
+    generic object without knowing the model. `state` is the common state (all the engine reads);
+    `lifecycle` is the model-specific sub-state (dashboard only), derived → common if `state` omitted."""
     model: str                    # registry key: "fvg" | "order_block" | "breaker" | ...
     direction: str                # "long" | "short"
     ref: float                    # REFERENCE ENTRY PRICE (where the order rests)
     invalidation: float           # INVALIDATION LEVEL (price beyond which the entry object is void)
-    status: str = "waiting"       # one of STATUS
+    lifecycle: str = ""           # MODEL-SPECIFIC sub-state (e.g. fvg: waiting|valid|mitigated)
+    state: str = ""               # COMMON state (waiting|valid|rejected|completed) — derived if empty
     quality: "float|None" = None  # CONFIDENCE / QUALITY 0..1 if the model provides one, else None
     reason: str = ""              # REASON IF REJECTED / not usable (empty when fine)
     origin_index: int = -1        # bar index where the entry object formed
     id: str = ""
     source: object = None         # underlying detector object (audit/deps); consumers ignore it
 
+    def __post_init__(self):
+        if not self.state:                                # derive the common state from the lifecycle
+            self.state = common_state(self.model, self.lifecycle)
+
     def to_dict(self) -> dict:
         def px(x):
             return None if x is None else round(float(x), 2)
         return {"model": self.model, "direction": self.direction, "ref": px(self.ref),
-                "invalidation": px(self.invalidation), "status": self.status,
+                "invalidation": px(self.invalidation), "state": self.state, "lifecycle": self.lifecycle,
                 "quality": self.quality, "reason": self.reason}
 
 
@@ -97,7 +129,7 @@ def fvg_entries(disp, ms) -> list:
     d = "short" if f.direction == "bearish" else "long"
     inval = f.bottom if d == "long" else f.top
     return [Entry(model="fvg", direction=d, ref=f.ce, invalidation=inval,
-                  status=_FVG_STATUS.get(getattr(f, "status", "unfilled"), "waiting"),
+                  lifecycle=_FVG_STATUS.get(getattr(f, "status", "unfilled"), "waiting"),
                   id=getattr(f, "id", ""), origin_index=getattr(f, "formed_index", -1), source=f)]
 
 
@@ -122,8 +154,8 @@ def assemble(entry: Entry, sweep_extreme: float, active_erl, min_stop=None) -> d
     reward = abs(E - target) if target is not None else 0.0
     rr = round(reward / risk, 2) if risk > 0 else None
     reject = ""
-    if entry.status == "mitigated":
-        reject = "entry mitigated (invalidated) — no valid entry"
+    if entry.state in ("completed", "rejected"):          # engine reads only the COMMON state
+        reject = f"entry {entry.lifecycle or entry.state} — no valid entry"
     elif min_stop and risk < min_stop:
         reject = f"degenerate stop — risk {round(risk, 2)} < execution floor {min_stop:g}"
     elif (d == "long" and not E > S) or (d == "short" and not E < S):
@@ -143,5 +175,7 @@ def resolve(names) -> tuple[str, ...]:
 
 
 def catalog() -> dict:
-    """Registry summary for the dashboard: which models are implemented vs planned, with descriptions."""
-    return {n: {"implemented": e["implemented"], "desc": e["desc"]} for n, e in REGISTRY.items()}
+    """Registry summary for the dashboard: which models are implemented vs planned, their description,
+    and their model-specific lifecycle (for display)."""
+    return {n: {"implemented": e["implemented"], "desc": e["desc"],
+                "lifecycle": LIFECYCLE.get(n, {}).get("vocab", [])} for n, e in REGISTRY.items()}

@@ -115,7 +115,17 @@ levels (Lesson 11)". No new detector, no test (no new logic).
   `MTFSetup.dealing_range` + `snapshot.dealing_ranges`; DB renders a `ranges` row. Verified.
 - v1 basis: dealing range = most-recent completed opposing structural leg (`dealing_range.py:48`), each `source_tf`-tagged.
 
-### 7. FVG lifecycle & TF rules — `[COURSE]` (§7, lesson 12) — ✅ Implemented (one documented gap)
+### 7. FVG lifecycle & TF rules — `[COURSE]` (§7, **Lesson 12 verified**) — ✅ Implemented (one documented gap)
+> **Lesson 12 verified against the raw PDF.** Every rule matches our implementation: geometry (bullish
+> high₁<low₃ / bearish low₁>high₃); **body-close mitigation** ("closed when a candle closes it with its
+> body"); **P/D eligibility** (mark the FVG in the discount for longs / premium for shorts — the area
+> price returns to); **higher interval = stronger**; FVG marked on 5m/1m **only as part of the
+> entry/exit strategy** (v2 uses 1m as trigger, 5m as optional refine). CE (50%) entry is our chosen
+> in-FVG location (`[RES:fvg_entry_loc]`), consistent with the lesson. **One nuance, capability-present
+> / parameter-undefined:** Lesson 12 says a *"very large"* FVG should be re-marked on a smaller interval
+> — v2 has the optional MTF entry-refinement mode (`ICT_V2_REFINE`) that provides this capability, but
+> the **auto-trigger threshold ("very large") is not quantified by the course**, so it is not
+> auto-fired (parameter-blocked; refinement stays an explicit mode). No new mechanic; no code change.
 - v1: `fvg.py:44 detect_fvgs` — geometry (`:57`), CE (`:67`), **body-close-through-far-boundary mitigation** (`:75/:81`), full same-displacement-leg scan (`:53`), depends_on displacement+MSS. MTF refine variant `detect_fvgs_mtf:107`. P/D eligibility applied at the gate.
 - v2: FVG is the sole execution model (`entry_models.py fvg_entries`; ref=CE, invalidation=far edge, prefers unmitigated). DB: entry-model + lifecycle pill (`dashboard.py:655`), invalidation fact (`:647`).
 - ℹ️ **Same-P/D-zone tie-break** (>1 eligible FVG) is an **intentionally unresolved documented gap** (`ict_faithful/SPEC.md §7b`) — not silently invented.
@@ -290,8 +300,8 @@ no PnL tuning; verify against the spec, not by search):
 5. ~~**IRL classification** (§4, Lesson 10)~~ ✅ **DONE 2026-08-27** — `HTFContext.erl_irl()`, pools + NWOG/ORG tagged, DB breakdown.
 6. ~~**Support/resistance levels** (Lesson 11)~~ ✅ **DONE 2026-08-27** — re-framing of existing liquidity concepts; no new mechanic (documented §3b).
 7. **Lesson-by-lesson sweep of the remainder** (user mandate: continue without per-lesson approval, stop only on genuine ambiguity or an undefined parameter):
-   - **Lesson 12 (FVG)** — verify our §7 FVG against the raw lesson; document. ← **NEXT**
-   - **Lesson 15 (intraday trend changes)** → §21 intraday trend-change (currently missing).
+   - ~~**Lesson 12 (FVG)**~~ ✅ **DONE 2026-08-27** — verified; matches §7; nuance ("very large FVG → smaller TF") is capability-present/param-undefined.
+   - **Lesson 15 (intraday trend changes)** → §21 intraday trend-change (currently missing). ← **NEXT**
    - **Lesson 16 (Power of 3)** → §10 AMD phase + consolidation detector (currently missing).
    - **Lessons 3, 4** (orders; contract names/rollover) — expected informational/non-mechanical; verify + classify.
    - Then: course-filter layer (§16 ≥3R + killzone; removes §17 bias-veto), ordered target hierarchy + fib extensions 1.5–4 (§16), A/B/C grade (§22), assert ≥15m floor + ≥50%-pullback rules (§2/§6), market-structure surfacing + reversal states (§2).

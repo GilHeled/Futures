@@ -133,11 +133,19 @@ The W/D/4H→1H→15m→1m role split *is* v2's spine.
 - DB: target + RR + quality badge (`dashboard.py`).
 - **Gaps:** (a) build the course-filter layer (≥3R as a filter, + killzone filter from §11), (b) the ordered target hierarchy.
 
-### 17. Daily bias & 4H context labels — `[COURSE]`+`[RES]` (§17, lesson 8/15) — 🟡 Partial
-- ✅: bias computed; **HTF is not a hard veto** (`config.HTF_IS_VETO=False`); optional D/W anchor downgrades counter-trend 4H to neutral (`pipeline.py:280`).
-- ❌: the explicit **labels** — *HTF-aligned / counter-context / possible-manipulation / possible-distribution* (`[RES:htf_labeling]`) — are **not produced**.
-- DB: bias + anchor pills only.
-- **Gap:** compute & display the four context labels per setup.
+### 17. Daily bias & 4H context labels — `[COURSE]`+`[RES]` (§17, lesson 8/15) — 🟡 Partial (alignment labels done)
+- ✅ Labels: `context_label(direction, bias)` → `htf-aligned` / `counter-context` / `neutral-context`
+  (`pipeline.py`); every `Candidate` tagged `.context_label`, serialized, shown as a chip in the
+  candidate-card header (`dashboard.py` `.clabel`). `CONTEXT_LABELS` vocab carries all five values.
+- ❌ The **AMD-phase refinement** of the labels — `possible-manipulation` / `possible-distribution` —
+  is **not computed** (it needs the AMD phase read; deferred to §10, deliberately not invented).
+- ⚠️ **Veto contradiction (open).** §17 says HTF is a *label, not a veto*, but `align.gate_setup`
+  (`align.py:37-40`) still **fails a setup on bias-neutral or bias-mismatch** — a hard veto. The label
+  is now produced, but honoring "not a veto" (so counter-context setups can still be recommended)
+  requires the **course-filter refactor** (backlog item 11), where bias→label/quality and the ≥3R +
+  killzone rules become explicit course filters. Tracked there, not silently left.
+- Verified: `test_htf_context_labels`.
+- **Gaps:** (a) AMD-phase labels (with §10), (b) remove the bias veto in the filter refactor (item 11).
 
 ### 18. NWOG (New Week Opening Gap) — `[COURSE]`+`[NEC]` (§18) — ❌ Missing
 - Config knobs only (`NWOG_KEEP`, `NWOG_REBALANCE_NOTE_PTS`); explicitly excluded from v1 liquidity; **no detector** anywhere in the three layers.
@@ -174,7 +182,7 @@ The W/D/4H→1H→15m→1m role split *is* v2's spine.
 3. Fib ladder 0/0.62/0.79/1 (§6)
 4. Explicit AMD phase + consolidation/accumulation detector (§10)
 5. ~~Session/killzone context wired into v2 + shown on DB (§11)~~ ✅ **DONE 2026-08-27**
-6. HTF context labels — aligned / counter / possible-manipulation / possible-distribution (§17)
+6. HTF context labels (§17) — 🟡 alignment labels ✅ **DONE 2026-08-27**; AMD-phase labels pending §10; bias-veto removal pending item 11
 7. NWOG detector (§18)
 8. ORG detector (§19)
 9. Intraday trend-change / HTF-transition read (§21)
@@ -207,8 +215,8 @@ Ordered by faithfulness value × low risk (each is a self-contained increment; n
 no PnL tuning; verify against the spec, not by search):
 
 1. ~~**Sessions/killzones into v2 + DB** (§11)~~ ✅ **DONE 2026-08-27** — context tagged on every candidate + current-session chip on the V2 tab; killzone *filter* deferred to the filter layer.
-2. **HTF context labels** (§17) — aligned/counter/possible-manipulation/possible-distribution from data v2 already has. Pure labelling. ← **NEXT**
-3. **Equal-H/L clustering + pools-as-zones** (§3) and **surface the full pool set + nested ranges + fib ladder** (§3/§6) — liquidity/range completeness.
+2. ~~**HTF context labels** (§17)~~ ✅ **DONE 2026-08-27** (alignment axis) — AMD-phase labels come with §10; bias-veto removal is item 11.
+3. **Equal-H/L clustering + pools-as-zones** (§3) and **surface the full pool set + nested ranges + fib ladder** (§3/§6) — liquidity/range completeness. ← **NEXT**
 4. **NWOG & ORG detectors** (§18/§19) — new IRL context arrays; tracked, shown, usable as targets.
 5. **IRL classification** (§4) — depends on 3+4 (needs the internal arrays first).
 6. **Explicit AMD phase + consolidation detector** (§10) — the hardest; `[RES:amd_phase]`, needs its own mini-spec.

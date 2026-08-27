@@ -129,6 +129,30 @@ def test_session_and_killzone_context(monkeypatch):
             assert c["killzone"] == c["session"]           # a trading killzone is that same window
 
 
+def test_htf_context_labels(monkeypatch):
+    """METHODOLOGY §17 (lesson 8/15): each setup is LABELLED by its HTF context relationship — a
+    label, never a veto. Alignment axis is computable now (aligned/counter/neutral); the AMD-phase
+    refinement (possible-manipulation/distribution) is deferred to §10 and not invented here."""
+    assert v2.context_label("long", "long") == "htf-aligned"
+    assert v2.context_label("short", "short") == "htf-aligned"
+    assert v2.context_label("long", "short") == "counter-context"
+    assert v2.context_label("short", "long") == "counter-context"
+    assert v2.context_label("long", "neutral") == "neutral-context"
+    assert v2.context_label("long", "") == "neutral-context"
+    for lbl in ("htf-aligned", "counter-context", "neutral-context"):
+        assert lbl in v2.CONTEXT_LABELS
+    # every candidate carries a valid label, and it matches direction-vs-bias when a bias exists
+    st = v2.demo_state(seed=7)
+    bias = st.context.bias
+    for c in st.setup.cand_info:
+        assert c["context_label"] in v2.CONTEXT_LABELS
+        if bias in ("long", "short"):
+            expect = "htf-aligned" if c["direction"] == bias else "counter-context"
+            assert c["context_label"] == expect
+        else:
+            assert c["context_label"] == "neutral-context"
+
+
 def test_four_layer_cascade_runs():
     st = v2.demo_state(seed=7)
     assert st.context.tf == "4H" and st.setup.tf == "1H" and st.confirmation.tf == "15m"

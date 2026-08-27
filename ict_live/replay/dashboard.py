@@ -175,6 +175,10 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .v2sess{border-radius:999px;padding:2px 9px;font-size:10px;font-weight:700;letter-spacing:.03em;
    background:var(--panel2);color:var(--mut);border:1px solid var(--line);white-space:nowrap}
  .v2sess.kz{color:var(--accent,#c8a24a);border-color:var(--accent,#c8a24a)}   /* active trading killzone */
+ .clabel{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:1px 6px;
+   border-radius:999px;background:var(--panel2);color:var(--mut);border:1px solid var(--line)}
+ .clabel.htf-aligned{color:var(--long);border-color:transparent;background:var(--long-bg)}
+ .clabel.counter-context{color:var(--short);border-color:transparent;background:var(--short-bg)}
  .modal{position:fixed;inset:0;background:#000a;display:none;z-index:50;padding:22px}
  .modal.on{display:flex} .modal-box{background:var(--panel);border:1px solid var(--line);border-radius:14px;
    margin:auto;width:min(1120px,96vw);height:90vh;display:flex;flex-direction:column;overflow:hidden}
@@ -657,8 +661,10 @@ function _candCard(c){
     ? '<div class="creason ok">All checks passed — promoted to the next stage.</div>'
     : `<div class="creason ${st}"><div class=creason-hd>${hd}</div><ul>`
       + (c.reasons||[]).map(r=>`<li>${esc(r)}</li>`).join('') + `</ul></div>`;
+  const clab=c.context_label||'neutral-context';   // §17 HTF context label — a label, not a veto
+  const clabHtml=`<span class="clabel ${clab}" title="HTF context label (§17) — a label, not a veto">${_candEsc(clab.replace(/-/g,' '))}</span>`;
   return `<div class="ccard ${st}"><div class=ccard-hd>${dpill}`
-       + `<span class="cstate ${c.state}">${c.state}</span>`
+       + `<span class="cstate ${c.state}">${c.state}</span>${clabHtml}`
        + (eo?`<span class=emodel title="execution model · lifecycle (common state: ${_candEsc(eo.state)})">${_candEsc(eo.model+(eo.lifecycle?' · '+eo.lifecycle:''))}</span>`:'')
        + `<span class=ccard-gate>${badge}</span></div>`
        + `${chain}<div class=cfacts>${facts}</div>${rblock}</div>`;

@@ -39,6 +39,25 @@ def session_of(dt):
     return (windows[0] if windows else ""), (v1_sessions.killzone(dt) or "")
 
 
+# ---- HTF context labels (METHODOLOGY §17, lesson 8/15) — LABELS, not vetoes -----------------------
+# The course labels each setup by its relationship to the higher-timeframe context. The full set is
+# the ALIGNMENT axis (aligned vs counter) crossed with the AMD-PHASE read (manipulation vs
+# distribution). Only the alignment axis is computable from bias alone; the manipulation/distribution
+# refinement needs the AMD phase model (§10) and is added there — NOT invented here.
+CONTEXT_LABELS = ("htf-aligned", "counter-context", "possible-manipulation",
+                  "possible-distribution", "neutral-context")
+
+
+def context_label(direction: str, bias: str) -> str:
+    """The setup's HTF context label (§17). A LABEL/confidence read, never a veto (§1, §17;
+    `config.HTF_IS_VETO=False`). Alignment axis only for now:
+      direction == bias → 'htf-aligned'; opposite → 'counter-context'; no/neutral bias → 'neutral-context'.
+    The 'possible-manipulation' / 'possible-distribution' AMD-phase refinement arrives with §10."""
+    if not bias or bias == "neutral":
+        return "neutral-context"
+    return "htf-aligned" if direction == bias else "counter-context"
+
+
 # ---- the three layers -------------------------------------------------------------------------
 @dataclass
 class HTFContext:
@@ -185,6 +204,7 @@ class Candidate:
     setup: object = None                   # the assembled v1 Setup, if it reached one
     session: str = ""                      # session window of the manipulation (§11 context; "" if none)
     killzone: str = ""                     # trading killzone of the manipulation (london_active/ny_am/ny_pm)
+    context_label: str = "neutral-context" # §17 HTF context label (aligned/counter/neutral) — a label, not a veto
 
     def to_dict(self) -> dict:
         def px(x):
@@ -204,6 +224,7 @@ class Candidate:
                                                       "extreme": px(getattr(self.sweep, "extreme", None))},
             "mss_state": None if self.mss is None else getattr(self.mss, "state", None),
             "session": self.session, "killzone": self.killzone,   # §11 context (lesson 5)
+            "context_label": self.context_label,                   # §17 HTF label (not a veto)
             "actionable": self.actionable, "passed": self.passed, "reasons": list(self.reasons),
             "entry_model": self.entry_model,
             "entry_obj": (self.entry_obj.to_dict() if self.entry_obj is not None else None),  # common contract
@@ -345,7 +366,8 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
                          entry=None, stop=getattr(sw, "extreme", None),
                          target=getattr(objective, "price", None), rr=None, rr_quality=None,
                          actionable=False, passed=False, reasons=[reason], setup=None,
-                         session=sess, killzone=kz)
+                         session=sess, killzone=kz,
+                         context_label=context_label(direction, context.bias if context else ""))
 
     cands = []
     for r in ms.ranked_sweeps:                                           # anchor: the manipulation
@@ -414,7 +436,8 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
                                    dealing_range=dr, pd_location=(context.zone(E) if context else None),
                                    objective=obj, entry=E, stop=S, target=tgt, rr=rr, rr_quality=quality,
                                    actionable=actionable, passed=passed, reasons=reasons, setup=setup_ns,
-                                   session=sess, killzone=kz))
+                                   session=sess, killzone=kz,
+                                   context_label=context_label(direction, context.bias if context else "")))
     return cands
 
 

@@ -23,20 +23,27 @@ from ict_v2 import pipeline as P, recommend as REC
 _LOOKBACK_DAYS = 12          # history each cursor sees (enough for a 4H dealing range + context)
 
 
-def _stage_cands(ctx_bars, su_bars, cf_bars, tr_bars, stage):
-    """Run ONLY the cascade layers needed for `stage` (cheaper than the full analyze_mtf per cursor)."""
-    ctx = P.htf_context(ctx_bars, "4H")
-    setup = P.mtf_setup(su_bars, "1H", ctx)
+def _bars_for(tf, slc):
+    """Bars for a timeframe from the 5m slice: resample for 15m/1H/4H, the raw slice for 5m."""
+    return slc if tf == "5m" else D.resample(slc, tf)
+
+
+def _stage_cands(slc, stage, tfs):
+    """Run ONLY the cascade layers needed for `stage` (cheaper than the full analyze_mtf per cursor).
+    `tfs` = (context, setup, confirm, trigger) timeframe labels."""
+    ctf, stf, cftf, ttf = tfs
+    ctx = P.htf_context(_bars_for(ctf, slc), ctf)
+    setup = P.mtf_setup(_bars_for(stf, slc), stf, ctx)
     if stage == "setup":
         return setup.cand_info
-    conf = P.confirm_setup(cf_bars, "15m", ctx, setup)
+    conf = P.confirm_setup(_bars_for(cftf, slc), cftf, ctx, setup)
     if stage == "confirmation":
         return conf.cand_info
-    return P.execution_for(tr_bars, "5m", ctx, setup, conf).cand_info
+    return P.execution_for(_bars_for(ttf, slc), ttf, ctx, setup, conf).cand_info
 
 
 def enumerate_setups(symbol, start, end, *, stage="setup", relaxed=False,
-                     want=("TAKE",), step_min=60):
+                     want=("TAKE",), step_min=60, tfs=("4H", "1H", "15m", "5m")):
     """Replay the cascade at each `step_min` cursor in [start, end]; return de-duplicated setups on
     `stage` (setup/confirmation/execution) whose recommendation is in `want` (default TAKE).
     Each setup is reported once, at the cursor it first appears."""
@@ -57,8 +64,7 @@ def enumerate_setups(symbol, start, end, *, stage="setup", relaxed=False,
         i1 = bisect.bisect_right(times, cur)
         slc = bars5[i0:i1]
         if len(slc) >= 60:
-            ctx = D.resample(slc, "4H"); su = D.resample(slc, "1H"); cf = D.resample(slc, "15m")
-            for c in _stage_cands(ctx, su, cf, slc, stage):
+            for c in _stage_cands(slc, stage, tfs):
                 if c["recommendation"] not in want:
                     continue
                 # de-dup ACROSS cursors by PRICE (ids are index-based and shift as the window slides,
@@ -82,14 +88,22 @@ def main() -> None:
     ap.add_argument("--stage", default="setup", choices=["setup", "confirmation", "execution"])
     ap.add_argument("--relaxed", action="store_true", help="drop killzone + retrace, RR floor=1 (see more)")
     ap.add_argument("--want", default="TAKE", help="comma list of recommendations to list (TAKE,SKIP,WATCH)")
-    ap.add_argument("--step-min", type=int, default=15)
+    ap.add_argument("--step-min", type=int, default=60)
+    # cascade timeframes: default is the HTF/swing triad; for INTRADAY frequency use e.g.
+    #   --context 4H --setup 15m --confirm 5m --trigger 5m   (or --context 1H --setup 15m ...)
+    ap.add_argument("--context", default="4H", choices=["4H", "1H"])
+    ap.add_argument("--setup", default="1H", choices=["1H", "15m"])
+    ap.add_argument("--confirm", default="15m", choices=["15m", "5m"])
+    ap.add_argument("--trigger", default="5m", choices=["5m"])
     a = ap.parse_args()
     want = tuple(x.strip().upper() for x in a.want.split(","))
+    tfs = (a.context, a.setup, a.confirm, a.trigger)
     rows = enumerate_setups(a.symbol, a.start, a.end, stage=a.stage, relaxed=a.relaxed,
-                            want=want, step_min=a.step_min)
+                            want=want, step_min=a.step_min, tfs=tfs)
     mode = "RELAXED (killzone/retrace off, RR≥1)" if a.relaxed else "FAITHFUL (killzone/retrace on, RR≥2)"
-    print(f"# {a.symbol}  {a.stage} candidates  {a.start}→{a.end}  [{mode}]  want={','.join(want)}")
-    print(f"# {len(rows)} setup(s). 5m data → cascade 4H/1H/15m/5m. Pull each time (ET) up on a chart.\n")
+    casc = "/".join(tfs)
+    print(f"# {a.symbol}  {a.stage} candidates  {a.start}→{a.end}  [{mode}]  cascade {casc}  want={','.join(want)}")
+    print(f"# {len(rows)} setup(s). 5m data → cascade {casc}. Pull each time (ET) up on a chart.\n")
     if not rows:
         print("  (none — try --relaxed, a wider window, another --stage, or --want TAKE,WATCH)")
         return

@@ -163,6 +163,7 @@ class Candidate:
     actionable: bool = False               # a VALID ICT setup in v2's sense (structure ok, RR>1)
     passed: bool = False                   # cleared the HTF gate (fully validated on this TF)
     entry_model: str = "fvg"               # execution model that produced the entry (fvg | order_block | ...)
+    entry_obj: object = None               # the generic Entry (common contract) — None until an entry forms
     status: str = "incomplete"             # passed | incomplete (still developing) | rejected (permanently invalid)
     reasons: list = field(default_factory=list)   # EXPLICIT reasons it did not fully validate (empty ⇒ passed)
     checks: list = field(default_factory=list)    # the ordered pipeline (sweep→…→gate) w/ per-step status
@@ -188,6 +189,7 @@ class Candidate:
             "mss_state": None if self.mss is None else getattr(self.mss, "state", None),
             "actionable": self.actionable, "passed": self.passed, "reasons": list(self.reasons),
             "entry_model": self.entry_model,
+            "entry_obj": (self.entry_obj.to_dict() if self.entry_obj is not None else None),  # common contract
             "checks": [dict(c) for c in self.checks],
             "id": (getattr(self.setup, "id", "") if self.setup is not None
                    else getattr(self.sweep, "id", "")),
@@ -403,8 +405,18 @@ def generate_candidates(ms, context: HTFContext, entry_models=None) -> list:
             status = "rejected"
             checks.append(_mk("HTF context", "fail", _short_gate(reasons), True))
 
+        # the generic Entry (common contract) — sourced via the FVG detector; geometry above is the
+        # verified v1-backed path. quality/reason are filled from this candidate's computation.
+        entry_obj = None
+        if disp is not None:
+            ents = EM.fvg_entries(disp, ms)
+            if ents:
+                entry_obj = ents[0]
+                entry_obj.quality = quality
+                entry_obj.reason = reasons[0] if reasons else ""
+
         cands.append(Candidate(direction=direction, state=state, status=status, checks=checks,
-                               sweep=sw, displacement=disp, mss=mss, entry_model="fvg",
+                               sweep=sw, displacement=disp, mss=mss, entry_model="fvg", entry_obj=entry_obj,
                                fvg=fvg, dealing_range=dr, pd_location=pd, objective=objective,
                                entry=entry, stop=stop, target=target, rr=rr, rr_quality=quality,
                                actionable=actionable, passed=passed, reasons=reasons, setup=setup))

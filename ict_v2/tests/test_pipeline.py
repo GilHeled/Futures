@@ -38,6 +38,26 @@ def test_entry_models_registry_and_tagging():
     assert all(c["entry_model"] == "fvg" for c in st.setup.cand_info)
 
 
+def test_entry_common_contract():
+    """Every entry exposes the SAME contract; FVG conforms; geometry is assembled generically."""
+    from types import SimpleNamespace
+    from ict_v2 import entry_models as EM
+    FIELDS = {"model", "direction", "ref", "invalidation", "status", "quality", "reason"}
+    # the contract is uniform for any model
+    assert set(EM.Entry(model="x", direction="long", ref=1.0, invalidation=0.0).to_dict()) == FIELDS
+    # FVG candidates expose it, with a status from the common vocabulary
+    st = v2.demo_state(seed=7)
+    withentry = [c for c in st.setup.cand_info if c["entry_obj"]]
+    assert withentry and all(set(c["entry_obj"]) == FIELDS for c in withentry)
+    assert all(c["entry_obj"]["status"] in EM.STATUS for c in withentry)
+    assert all(c["entry_obj"]["model"] == "fvg" for c in withentry)
+    # assemble() is model-agnostic: same geometry contract for a non-FVG entry object
+    ent = EM.Entry(model="order_block", direction="long", ref=100.0, invalidation=98.0, status="valid")
+    g = EM.assemble(ent, sweep_extreme=97.0,
+                    active_erl=[SimpleNamespace(kind="high", price=110.0)], min_stop=2.0)
+    assert g["stop"] == 97.0 and g["target"] == 110.0 and g["reject"] == "" and g["rr"] == 3.33
+
+
 def test_four_layer_cascade_runs():
     st = v2.demo_state(seed=7)
     assert st.context.tf == "4H" and st.setup.tf == "1H" and st.confirmation.tf == "15m"

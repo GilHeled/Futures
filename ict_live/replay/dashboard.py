@@ -641,8 +641,10 @@ function _candCard(c){
   const hd=st==='passed'?'Confirmed':(st==='incomplete'?'Still developing — waiting for':'Rejected — reason');
   const rrq=c.rr_quality; // RR is a QUALITY grade, not a gate: low/good/high (reject only ≤1)
   const rrtxt=c.rr==null?'—':num(c.rr)+(rrq&&rrq!=='reject'?` <b class=rrq-${rrq}>${rrq}</b>`:'');
+  const eo=c.entry_obj||null;   // the generic entry contract (model-agnostic)
   const facts=[['entry',num(c.entry)],['stop',num(c.stop)],['target',num(c.target)],
-               ['RR',rrtxt],['P/D',c.pd_location||'—'],['draw',objtxt]]
+               ['RR',rrtxt],['P/D',c.pd_location||'—'],['draw',objtxt],
+               ['inval',eo?num(eo.invalidation):'—']]
     .map(([k,v])=>`<span class=cfact><i>${k}</i>${v}</span>`).join('');
   const rblock=st==='passed'
     ? '<div class="creason ok">All checks passed — promoted to the next stage.</div>'
@@ -650,7 +652,7 @@ function _candCard(c){
       + (c.reasons||[]).map(r=>`<li>${esc(r)}</li>`).join('') + `</ul></div>`;
   return `<div class="ccard ${st}"><div class=ccard-hd>${dpill}`
        + `<span class="cstate ${c.state}">${c.state}</span>`
-       + `<span class=emodel title="execution model">${_candEsc(c.entry_model||'fvg')}</span>`
+       + `<span class=emodel title="execution model · entry status">${_candEsc((c.entry_model||'fvg')+(eo?' · '+eo.status:''))}</span>`
        + `<span class=ccard-gate>${badge}</span></div>`
        + `${chain}<div class=cfacts>${facts}</div>${rblock}</div>`;
 }

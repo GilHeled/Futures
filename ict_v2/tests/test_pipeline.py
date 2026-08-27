@@ -271,24 +271,53 @@ def test_four_layer_cascade_runs():
     assert "CONTEXT" in d and "SETUP" in d and "CONFIRM" in d and "EXECUTION" in d
 
 
+def test_four_layer_semantics_and_no_bias_veto():
+    """The semantic layer on real candidates: every candidate carries structure / filters /
+    recommendation; TAKE ⟺ valid structure + all course filters pass; and — critically — a
+    counter-context (counter-HTF-bias) setup can still be TAKE (HTF bias is quality, NOT a veto)."""
+    from ict_v2 import recommend as REC
+    seen_take = seen_counter_take = seen_skip_filter = 0
+    for seed in range(1, 40):
+        st = v2.demo_state(seed)
+        for c in st.setup.cand_info:
+            assert c["structure"] in ("forming", "valid", "invalid")
+            assert c["recommendation"] in REC.RECOMMENDATIONS
+            # TAKE iff valid structure AND all course filters pass
+            if c["recommendation"] == "TAKE":
+                assert c["structure"] == "valid" and all(f["ok"] for f in c["filters"])
+                seen_take += 1
+                if c["context_label"] == "counter-context":
+                    seen_counter_take += 1                 # counter-bias TAKE ⇒ bias is not a veto
+            # a valid setup with a failing filter is SKIP (not invalid, not WATCH)
+            if c["structure"] == "valid" and c["filters"] and not all(f["ok"] for f in c["filters"]):
+                assert c["recommendation"] == "SKIP"
+                seen_skip_filter += 1
+            # forming ⇒ WATCH; invalid ⇒ SKIP
+            if c["structure"] == "forming":
+                assert c["recommendation"] == "WATCH"
+            if c["structure"] == "invalid":
+                assert c["recommendation"] == "SKIP"
+    assert seen_take and seen_counter_take and seen_skip_filter    # all three behaviours actually occur
+
+
 def test_execution_only_fires_when_whole_cascade_holds():
     st = v2.demo_state(seed=7)
-    c = st.context
-    if st.execution.executables:                          # a real trade requires the FULL chain
-        assert c.bias in ("long", "short")
-        assert st.setup.gated and st.confirmation.gated
+    if st.execution.executables:                          # a real trade requires the FULL chain of TAKEs
+        assert st.setup.gated and st.confirmation.gated   # every layer produced a TAKE (structure+filters)
         for ex in st.execution.executables:
-            assert ex.direction == c.bias                 # every layer aligned to the context bias
+            assert ex.direction in ("long", "short")      # a concrete side (NOT required to equal HTF bias —
+            #                                               HTF bias is context/quality now, not a gate)
     else:
         assert st.execution.decision.startswith("NO-TRADE")
 
 
 def test_execution_for_reports_the_stage_reached():
-    # staged NO-TRADE messages (early returns, no bars needed)
-    long_ctx = SimpleNamespace(bias="long")
+    # staged NO-TRADE messages (early returns, no bars needed). HTF bias is NOT a gate anymore, so a
+    # neutral/absent bias no longer short-circuits — the stage reported is purely about the cascade.
+    ctx = SimpleNamespace(bias="neutral")                 # neutral bias must NOT block (context, not veto)
     gated = SimpleNamespace(gated=[SimpleNamespace(setup=SimpleNamespace(direction="long"))])
     empty = SimpleNamespace(gated=[])
-    assert "no context bias" in v2.execution_for(None, "1m", None, gated, gated).decision
-    assert "no context bias" in v2.execution_for(None, "1m", SimpleNamespace(bias="neutral"), gated, gated).decision
-    assert "no 1H setup" in v2.execution_for(None, "1m", long_ctx, empty, gated).decision
-    assert "awaiting 15m confirmation" in v2.execution_for(None, "1m", long_ctx, gated, empty).decision
+    assert "no 1H setup" in v2.execution_for(None, "1m", ctx, empty, gated).decision
+    assert "awaiting 15m confirmation" in v2.execution_for(None, "1m", ctx, gated, empty).decision
+    # neutral bias with a full gated cascade still proceeds (no "context bias" veto)
+    assert "no context bias" not in v2.execution_for(None, "1m", ctx, gated, gated).decision

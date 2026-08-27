@@ -1,0 +1,60 @@
+"""The v2 SEMANTIC LAYER — four explicit, separated concerns (user decision 2026-08-27).
+
+    1. STRUCTURE      — is there a valid ICT setup? (the sweep→displacement→MSS→entry chain + valid
+                        geometry). INDEPENDENT of RR, HTF bias, and premium/discount.
+    2. QUALITY        — RR grade, HTF alignment, premium/discount, AMD phase, liquidity — MEASURED and
+                        displayed, NEVER gating.
+    3. COURSE FILTERS — course execution rules (≥3R, killzone, …) that decide TAKE vs SKIP. A failed
+                        filter is a SKIP, never structural invalidation.
+    4. RECOMMENDATION — TAKE / SKIP / WATCH, derived from the three above.
+
+HTF context (bias, premium/discount) is QUALITY — never a structural veto. This removes the old
+bias-veto contradiction and makes HTF behave as the course intends (§1/§17: context, not a veto).
+Pure functions; no v1 or engine state. `structure` is computed by the pipeline (it owns the chain);
+this module owns the FILTER and RECOMMENDATION logic.
+"""
+from __future__ import annotations
+
+# Course-faithful defaults. Each is a FILTER (→ SKIP), NEVER structural (→ invalid).
+COURSE_FILTERS = {
+    "min_rr": 3.0,      # §16 / FROZEN B4 (Lesson 8 R:R): the course's minimum 1:3 — a take/skip rule, not validity
+    "killzone": True,   # §11 / Lesson 5: the manipulation should occur inside a trading killzone
+}
+
+RECOMMENDATIONS = ("TAKE", "SKIP", "WATCH")
+
+
+def evaluate_filters(*, rr, killzone, cfg=None) -> list:
+    """The COURSE FILTERS for a structurally-valid setup → list of {name, ok, reason}. Each is a
+    course execution rule; failing one makes the recommendation SKIP (the setup stays structurally
+    valid). Defaults are course-faithful (≥3R + killzone); pass `cfg` to override/toggle."""
+    cfg = COURSE_FILTERS if cfg is None else cfg
+    out = []
+    mr = cfg.get("min_rr")
+    if mr:
+        has_rr = rr is not None and rr > 0
+        ok = has_rr and rr >= mr
+        reason = "" if ok else (f"RR {rr:g} < {mr:g}R" if has_rr else "no liquidity target / RR")
+        out.append({"name": f"≥{mr:g}R", "ok": ok, "reason": reason})
+    if cfg.get("killzone"):
+        ok = bool(killzone)
+        out.append({"name": "killzone", "ok": ok,
+                    "reason": "" if ok else "manipulation outside a trading killzone"})
+    return out
+
+
+def recommend(*, structure, structure_reason="", filters=()) -> tuple:
+    """Derive the RECOMMENDATION + its reasons from structure + course filters:
+      TAKE  — structure valid AND every course filter passes;
+      SKIP  — structure valid but a course filter failed (a valid setup, filtered out), OR invalid structure;
+      WATCH — structure still forming (the ICT chain is not yet complete).
+    Note SKIP never means 'not a valid setup' unless structure is invalid — it usually means a valid
+    setup the course's execution filters tell us to pass on."""
+    if structure == "forming":
+        return "WATCH", [structure_reason or "developing — the ICT chain is not yet complete"]
+    if structure == "invalid":
+        return "SKIP", [structure_reason or "invalid structure"]
+    fails = [f for f in filters if not f["ok"]]
+    if fails:
+        return "SKIP", [f"{f['name']} — {f['reason']}" for f in fails]
+    return "TAKE", []

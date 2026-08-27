@@ -1,5 +1,5 @@
-"""HTF gate (cross-TF confluence): a MTF setup passes only if it agrees with HTF bias, sits in the
-right premium/discount zone, and has an HTF liquidity objective in its direction."""
+"""Cross-TF confluence: the liquidity DRAW (target). HTF bias & premium/discount are QUALITY, not a
+veto (that lives in the semantic layer, ict_v2/recommend.py + pipeline) — see test_pipeline."""
 from types import SimpleNamespace
 
 from ict_v2 import align
@@ -18,51 +18,23 @@ def _ctx(bias, ce, pools):
     return HTFContext(tf="4H", bias=bias, dealing_range=_dr(ce), liquidity=pools)
 
 
-def _setup(direction, entry, stop=None):
-    if stop is None:                                   # default to a valid risk side
-        stop = entry + 10 if direction == "short" else entry - 10
-    return SimpleNamespace(direction=direction, entry=entry, stop=stop)
-
-
-def test_passes_when_all_three_axes_agree():
+def test_liquidity_objective_targets_buyside_for_long():
     ctx = _ctx("long", 150, [_pool("high", 210), _pool("low", 90)])
-    ok, reasons, obj = align.gate_setup(_setup("long", 120), ctx)      # long, in discount, BSL above
-    assert ok and reasons == []
-    assert obj.kind == "high" and obj.price == 210                     # targets the buy-side draw
+    obj = align.liquidity_objective(ctx, "long")
+    assert obj.kind == "high" and obj.price == 210          # long → nearest buy-side draw above EQ
 
 
-def test_rejects_direction_against_bias():
-    ctx = _ctx("long", 150, [_pool("high", 210)])
-    ok, reasons, _ = align.gate_setup(_setup("short", 120), ctx)
-    assert not ok and any("bias" in r for r in reasons)
-
-
-def test_rejects_wrong_pd_zone():
-    ctx = _ctx("long", 150, [_pool("high", 210)])
-    ok, reasons, _ = align.gate_setup(_setup("long", 180), ctx)        # long but entry in premium
-    assert not ok and any("premium" in r for r in reasons)
-
-
-def test_rejects_when_no_liquidity_objective():
-    ctx = _ctx("long", 150, [_pool("low", 90)])                        # only sell-side pools
-    ok, reasons, obj = align.gate_setup(_setup("long", 120), ctx)
-    assert not ok and obj is None and any("objective" in r for r in reasons)
-
-
-def test_neutral_bias_rejects():
-    ctx = _ctx("neutral", 150, [_pool("high", 210)])
-    ok, reasons, _ = align.gate_setup(_setup("long", 120), ctx)
-    assert not ok and any("neutral" in r for r in reasons)
-
-
-def test_short_targets_sellside_below():
+def test_liquidity_objective_targets_sellside_for_short():
     ctx = _ctx("short", 150, [_pool("low", 90), _pool("high", 210)])
-    ok, reasons, obj = align.gate_setup(_setup("short", 180), ctx)     # short, in premium, SSL below
-    assert ok and obj.kind == "low" and obj.price == 90
+    obj = align.liquidity_objective(ctx, "short")
+    assert obj.kind == "low" and obj.price == 90            # short → nearest sell-side draw below EQ
 
 
-def test_rejects_invalid_geometry_short_stop_below_entry():
-    # the MGC bug: a "short" whose stop sits BELOW the entry must be rejected
-    ctx = _ctx("short", 150, [_pool("low", 90)])
-    ok, reasons, _ = align.gate_setup(_setup("short", 120, stop=110), ctx)
-    assert not ok and any("geometry" in r for r in reasons)
+def test_liquidity_objective_none_when_no_pool_in_direction():
+    ctx = _ctx("long", 150, [_pool("low", 90)])             # only sell-side pools → no long draw
+    assert align.liquidity_objective(ctx, "long") is None
+
+
+def test_gate_setup_removed():
+    """The old HTF veto is gone — HTF bias/premium-discount are context/quality now, never a gate."""
+    assert not hasattr(align, "gate_setup")

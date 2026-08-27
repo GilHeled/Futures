@@ -191,13 +191,11 @@ levels (Lesson 11)". No new detector, no test (no new logic).
 
 ### 16. Targets & R:R — `[COURSE]` FROZEN B4 (§16) — 🟡 Partial (R:R architecture RESOLVED)
 - v1 ✅: nearest opposing active ERL target (`setup.py:70`); **`MIN_RR=3.0` hard reject** (`setup.py:92`).
-- **RESOLVED — three-concern separation (user decision 2026-08-27).** Structural validity, quality
-  metrics, and course filters are **separate** concerns and must not be mixed. R:R is a **quality
-  metric**, never a structural invalidation. The course's "minimum 1:3" is a **course filter**, so a
-  setup reads: *Structure ✅ · Course filter (≥3R) ❌ · Recommendation: Skip*. v2 already keeps RR as a
-  quality grade (`rr_quality`, `pipeline.py`; only RR≤1 blocks — itself a geometry sanity floor, not
-  the 3R rule). **To build (filter layer):** an explicit, separate **course-filter stage** (first
-  filter = ≥3R, lesson/§16), with the dashboard distinguishing Structure / Filters / Recommendation.
+- ✅ **RESOLVED + BUILT — the four-layer semantic model (2026-08-27, `ict_v2/recommend.py`).** Structure
+  / Quality / Course-Filters / Recommendation are now separate. R:R is a **quality** metric (never
+  structural); the course's ≥1:3 is a **course filter** (`min_rr=3.0`), so a setup reads exactly
+  *Structure ✅ · Course filter (≥3R) ❌ · Recommendation SKIP*. RR no longer gates structure at all
+  (the old RR≤1 block is gone). Dashboard shows all four layers per candidate.
 - 🟡 The **full target hierarchy** (opposing ERL · PDH/PDL · PWH/PWL · session H/L · equal H/L ·
   significant 15m+ swing · HTF) is **not walked** — only the nearest active ERL is used.
 - DB: target + RR + quality badge (`dashboard.py`).
@@ -210,13 +208,12 @@ levels (Lesson 11)". No new detector, no test (no new logic).
 - ✅ The **AMD-phase read** — `possible-manipulation` / `possible-distribution` — is now provided by
   §10's `amd_phase` (Lesson 16): manipulation → distribution, transition = confirmed MSS. Surfaced as a
   separate per-candidate chip (kept distinct from the alignment label, since they are two axes).
-- ⚠️ **Veto contradiction (open).** §17 says HTF is a *label, not a veto*, but `align.gate_setup`
-  (`align.py:37-40`) still **fails a setup on bias-neutral or bias-mismatch** — a hard veto. The label
-  is now produced, but honoring "not a veto" (so counter-context setups can still be recommended)
-  requires the **course-filter refactor** (backlog item 11), where bias→label/quality and the ≥3R +
-  killzone rules become explicit course filters. Tracked there, not silently left.
-- Verified: `test_htf_context_labels`.
-- **Gaps:** (a) AMD-phase labels (with §10), (b) remove the bias veto in the filter refactor (item 11).
+- ✅ **Veto contradiction RESOLVED (2026-08-27).** The old `align.gate_setup` bias/P/D veto is **removed**
+  (function deleted). HTF bias is now a QUALITY label (`context_label`) and premium/discount a quality
+  metric — neither invalidates structure nor blocks a recommendation. A counter-context setup can be
+  TAKE (verified: 11/16 demo TAKEs are counter-context). HTF is context, exactly as §1/§17 intend.
+- ✅ AMD-phase labels provided by §10 `amd_phase` (possible-manipulation / possible-distribution).
+- Verified: `test_htf_context_labels`, `test_four_layer_semantics_and_no_bias_veto`, `test_align`.
 
 ### 18. NWOG (New Week Opening Gap) — `[COURSE]` (§18, **Lesson 13**) — ✅ Implemented
 - Lesson 13 verified: NWOG = gap between the last price before the weekend (Fri close) and the new
@@ -346,8 +343,8 @@ no PnL tuning; verify against the spec, not by search):
    - ~~**Lesson 16 (Power of 3)**~~ ✅ **DONE 2026-08-27** → §10 AMD phase (manipulation/distribution); accumulation detector PARAMETER-BLOCKED (stop).
    - ~~**Lessons 3, 4, 5**~~ ✅ **DONE 2026-08-27** — informational (3/4) / verification of §11 (5); no new mechanic.
    - **ALL AVAILABLE LESSONS NOW READ & REPRESENTED.** Remaining work is cross-lesson SYNTHESIS, not new lessons:
-     - **Course-filter layer** (§16 ≥3R + §11 killzone + roll-week) — the Structure / Quality / Filter separation; also removes the §17 bias-veto. ← the big architectural piece.
-     - **Ordered target hierarchy + fib extensions 1.5–4** (§16, Lesson 8).
+     - ~~**Course-filter layer**~~ ✅ **DONE 2026-08-27** (`ict_v2/recommend.py`) — Structure / Quality / Course-Filters / Recommendation (TAKE/SKIP/WATCH); ≥3R + killzone as filters; §17 bias-veto removed; dashboard shows all four layers. ← the big architectural piece, landed.
+     - **Ordered target hierarchy + fib extensions 1.5–4** (§16, Lesson 8). ← **NEXT**
      - **A/B/C quality grade** (§22).
      - Assert **≥15m liquidity floor** + **≥50% pullback** rules (§2/§3/§6).
    - ⛔ Parameter-blocked (await a course rule or approved `[NEC]`): equal-H/L clustering + pools-as-zones (§3); accumulation/consolidation detector (§10).

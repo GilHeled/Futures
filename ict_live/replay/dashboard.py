@@ -254,6 +254,26 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .creason.rejected li{color:var(--short)}
  .creason.incomplete li{color:var(--warn)}
  .creason.ok{color:var(--long)}
+ .creason.take li,.creason.watch li{color:var(--warn)} .creason.skip li{color:var(--short)}
+ /* the four semantic layers (Structure / Quality / Course filters / Recommendation) */
+ .crec{font-size:11px;font-weight:800;padding:2px 11px;border-radius:999px;text-transform:uppercase;letter-spacing:.5px;
+   background:var(--panel2);color:var(--mut);border:1px solid var(--line)}
+ .crec.take{color:var(--long);background:var(--long-bg);border-color:transparent}
+ .crec.skip{color:var(--short);background:var(--short-bg);border-color:transparent}
+ .crec.watch{color:var(--warn);background:var(--warn-bg);border-color:transparent}
+ .ccard.rec-take{border-left:3px solid var(--long)} .ccard.rec-skip{border-left:3px solid var(--short)}
+ .ccard.rec-watch{border-left:3px solid var(--warn)}
+ .slayer{display:flex;gap:8px;align-items:flex-start;padding:5px 0;border-top:1px solid var(--line)}
+ .slabel{flex:0 0 92px;font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);font-weight:700;padding-top:3px}
+ .stag{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:1px 7px;border-radius:999px;margin-right:6px}
+ .stag.st-valid{color:var(--long);background:var(--long-bg)} .stag.st-invalid{color:var(--short);background:var(--short-bg)}
+ .stag.st-forming{color:var(--warn);background:var(--warn-bg)}
+ .qrow,.frow{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+ .qmetric{font-size:10px;font-family:"SF Mono",ui-monospace,Menlo,monospace}
+ .qmetric i{color:var(--mut);font-style:normal;margin-right:4px;text-transform:uppercase;font-size:9px;letter-spacing:.4px}
+ .cfilter{font-size:10px;font-weight:600;padding:1px 8px;border-radius:6px;border:1px solid var(--line)}
+ .cfilter.ok{color:var(--long);border-color:color-mix(in srgb,var(--long) 40%,var(--line))}
+ .cfilter.no{color:var(--short);border-color:color-mix(in srgb,var(--short) 45%,var(--line))}
  /* the ICT chain: sweep → displacement → MSS → FVG → entry → gate; ✓ ok / ✗ fail / — pending */
  .cchain{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
  .cchain i{color:var(--mut);font-style:normal;font-size:11px}
@@ -632,7 +652,7 @@ function v2Tables(rep){
     // current session / killzone (§11, lesson 5) — CONTEXT only, never a gate
     const sessHtml=s.session?`<span class="v2sess${s.killzone?' kz':''}" title="current session (ET)${s.killzone?' · trading killzone — lesson 5':''}">${_sessName(s.session)}${s.killzone?' ⏱':''}</span>`:'';
     const execLine=top?`${top.direction.toUpperCase()} entry ${num(top.entry)} · stop ${num(top.stop)} · target ${num(top.target)}${top.ltf_confirmed?' · ✓':''}`:fmt(e.decision);
-    const gline=(layer,x)=>`<button type=button class=candbtn onclick="openCandidates('${sym}','${layer}')"><b class=g-pass>${fmt(x.passed)}</b> passed<i></i><b class=g-inc>${fmt(x.incomplete)}</b> incomplete<i></i><b class=g-rej>${fmt(x.rejected)}</b> rejected</button>`;
+    const gline=(layer,x)=>`<button type=button class=candbtn onclick="openCandidates('${sym}','${layer}')"><b class=g-pass>${fmt(x.take)}</b> take<i></i><b class=g-inc>${fmt(x.watch)}</b> watch<i></i><b class=g-rej>${fmt(x.skip)}</b> skip</button>`;
     return `<div class="ticket ${execSide}">
       <div class="thead v2head"><span class=sym title="${sym}">${sym.includes(':')?sym.split(':')[1]:sym}</span>${lastHtml}
         <span class=thead-right>${sessHtml}${biasHtml}<span class="v2dec ${execSide}">${dec}</span></span></div>
@@ -670,37 +690,52 @@ function _candCard(c){
     const note=k.note?` <em>${esc(k.note)}</em>`:'';
     return (i?'<i>→</i>':'')+`<span class="cstep ${cls}">${esc(k.name)} ${sym}${note}</span>`;
   }).join('')+'</div>';
-  const objtxt=c.objective?`${c.objective.kind==='high'?'BSL':'SSL'} ${num(c.objective.price)}`:'—';
-  const st=c.status||'rejected';
-  const badge=st==='passed'?'<span class="cbadge pass">✓ Passed</span>'
-    :(st==='incomplete'?'<span class="cbadge inc">⏳ Incomplete</span>':'<span class="cbadge rej">❌ Rejected</span>');
-  const hd=st==='passed'?'Confirmed':(st==='incomplete'?'Still developing — waiting for':'Rejected — reason');
-  const rrq=c.rr_quality; // RR is a QUALITY grade, not a gate: low/good/high (reject only ≤1)
-  const rrtxt=c.rr==null?'—':num(c.rr)+(rrq&&rrq!=='reject'?` <b class=rrq-${rrq}>${rrq}</b>`:'');
   const eo=c.entry_obj||null;   // the generic entry contract (model-agnostic)
-  const sesstxt=c.session?(_sessName(c.session)+(c.killzone?' ⏱':'')):'—';   // session of the manipulation (§11)
-  const facts=[['entry',num(c.entry)],['stop',num(c.stop)],['target',num(c.target)],
-               ['RR',rrtxt],['P/D',c.pd_location||'—'],['draw',objtxt],
+  // ---- the FOUR SEMANTIC LAYERS (structure / quality / course filters / recommendation) ----
+  const rec=c.recommendation||'WATCH';
+  const recCls={TAKE:'take',SKIP:'skip',WATCH:'watch'}[rec]||'watch';
+  const recBadge=`<span class="crec ${recCls}" title="Recommendation = Structure + Course filters (HTF bias is context, not a gate)">${rec}</span>`;
+  // (1) STRUCTURE — the ICT chain + verdict (valid / invalid / forming)
+  const struct=c.structure||'forming';
+  const structTag=`<span class="stag st-${struct}">${struct}</span>`;
+  // (2) QUALITY — measured, non-gating
+  const rrq=c.rr_quality;
+  const rrtxt=c.rr==null?'—':num(c.rr)+(rrq?` <b class=rrq-${rrq}>${rrq}</b>`:'');
+  const clab=(c.context_label||'neutral-context').replace(/-/g,' ');
+  const amd=c.amd_phase||'—';
+  const qual=[['RR',rrtxt],['alignment',clab],['P/D',c.pd_location||'—'],['AMD',amd]]
+    .map(([k,v])=>`<span class=qmetric><i>${k}</i>${v}</span>`).join('');
+  // (3) COURSE FILTERS — each ✓/✗ with its reason (only meaningful for a valid structure)
+  const filters=(c.filters||[]);
+  const filtHtml=filters.length
+    ? filters.map(f=>`<span class="cfilter ${f.ok?'ok':'no'}" title="${esc(f.reason||'passes')}">${f.ok?'✓':'✗'} ${esc(f.name)}${f.ok?'':' — '+esc(f.reason)}</span>`).join('')
+    : '<span class=mut>— no course filters (structure not valid)</span>';
+  // (4) RECOMMENDATION reasons
+  const reasons=(c.reasons||[]);
+  const recReasons=rec==='TAKE'
+    ? '<div class="creason ok">Valid ICT setup and every course filter passes → TAKE.</div>'
+    : `<div class="creason ${recCls}"><div class=creason-hd>${rec==='WATCH'?'Developing':'Why SKIP'}</div><ul>`
+      + reasons.map(r=>`<li>${esc(r)}</li>`).join('') + `</ul></div>`;
+  // reference facts
+  const objtxt=c.objective?`${c.objective.kind==='high'?'BSL':'SSL'} ${num(c.objective.price)}`:'—';
+  const sesstxt=c.session?(_sessName(c.session)+(c.killzone?' ⏱':'')):'—';
+  const facts=[['entry',num(c.entry)],['stop',num(c.stop)],['target',num(c.target)],['draw',objtxt],
                ['inval',eo?num(eo.invalidation):'—'],['session',sesstxt]]
     .map(([k,v])=>`<span class=cfact><i>${k}</i>${v}</span>`).join('');
-  const rblock=st==='passed'
-    ? '<div class="creason ok">All checks passed — promoted to the next stage.</div>'
-    : `<div class="creason ${st}"><div class=creason-hd>${hd}</div><ul>`
-      + (c.reasons||[]).map(r=>`<li>${esc(r)}</li>`).join('') + `</ul></div>`;
-  const clab=c.context_label||'neutral-context';   // §17 HTF context label — a label, not a veto
-  const clabHtml=`<span class="clabel ${clab}" title="HTF context label (§17) — a label, not a veto">${_candEsc(clab.replace(/-/g,' '))}</span>`;
-  const amd=c.amd_phase||'';   // §10 Power-of-3 phase (Lesson 16): manipulation → distribution
-  const amdHtml=amd?`<span class="amd ${amd}" title="Power-of-3 / AMD phase (§10) — manipulation (the sweep) → distribution (the real move, on a confirmed trend change)">${amd}</span>`:'';
-  return `<div class="ccard ${st}"><div class=ccard-hd>${dpill}`
-       + `<span class="cstate ${c.state}">${c.state}</span>${clabHtml}${amdHtml}`
-       + (eo?`<span class=emodel title="execution model · lifecycle (common state: ${_candEsc(eo.state)})">${_candEsc(eo.model+(eo.lifecycle?' · '+eo.lifecycle:''))}</span>`:'')
-       + `<span class=ccard-gate>${badge}</span></div>`
-       + `${chain}<div class=cfacts>${facts}</div>${rblock}</div>`;
+  const emodel=eo?`<span class=emodel title="execution model · lifecycle (common state: ${_candEsc(eo.state)})">${_candEsc(eo.model+(eo.lifecycle?' · '+eo.lifecycle:''))}</span>`:'';
+  const layer=(name,body)=>`<div class=slayer><span class=slabel>${name}</span>${body}</div>`;
+  return `<div class="ccard rec-${recCls}"><div class=ccard-hd>${dpill}`
+       + `<span class="cstate ${c.state}">${c.state}</span>${emodel}<span class=ccard-gate>${recBadge}</span></div>`
+       + layer('Structure', structTag+chain)
+       + layer('Quality', `<div class=qrow>${qual}</div>`)
+       + layer('Course filters', `<div class=frow>${filtHtml}</div>`)
+       + layer('Recommendation', recReasons)
+       + `<div class=cfacts>${facts}</div></div>`;
 }
 function _candRender(){
   const ctx=window._candCtx; if(!ctx) return;
   const f=ctx.filter||'possible';
-  const shown=(f==='possible')?ctx.info:ctx.info.filter(c=>c.status===f);
+  const shown=(f==='possible')?ctx.info:ctx.info.filter(c=>c.recommendation===f);
   document.querySelectorAll('#candmodal .cchip').forEach(el=>el.classList.toggle('on',el.dataset.f===f));
   $('#cand-cards').innerHTML=shown.map(_candCard).join('')
     ||`<div class=cempty>no ${f==='possible'?'':f+' '}candidates on this timeframe${f==='possible'?' yet':''}</div>`;
@@ -709,7 +744,7 @@ function filterCand(f){ if(window._candCtx){ window._candCtx.filter=f; _candRend
 function openCandidates(sym,layer){
   const s=((window._v2last||{}).symbols||{})[sym]||{}; const info=((s[layer]||{}).candidates)||[];
   window._candCtx={sym,layer,info,filter:'possible'};
-  const n=st=>st==='possible'?info.length:info.filter(c=>c.status===st).length;
+  const n=rc=>rc==='possible'?info.length:info.filter(c=>c.recommendation===rc).length;
   const chip=(f,cls,lbl)=>`<button type=button class="cchip ${cls}" data-f="${f}" onclick="filterCand('${f}')">${n(f)} ${lbl}</button>`;
   $('#candmodal-title').innerHTML=`${sym}<span class=ctlayer>${layer} candidates</span>`;
   const em=(s.entry_models||{}); const cat=em.catalog||{}; const en=(em.enabled||['fvg']);
@@ -720,12 +755,12 @@ function openCandidates(sym,layer){
         return `<span class="emtag ${tag}" title="${_candEsc(cat[k].desc||'')}">${k}·${tag}</span>`;
       }).join(' ')+`</div>` : '';
   $('#candmodal-body').innerHTML=
-      `<div class=csum>${chip('possible','','possible')}${chip('passed','pass','passed')}`
-    + `${chip('incomplete','inc','incomplete')}${chip('rejected','rej','rejected')}</div>`
+      `<div class=csum>${chip('possible','','all')}${chip('TAKE','pass','take')}`
+    + `${chip('WATCH','inc','watch')}${chip('SKIP','rej','skip')}</div>`
     + `<div class=ccards id=cand-cards></div>`
-    + `<div class=cleg>click a badge to filter · <span class=lg-pass>green</span> = passed · `
-    + `<span class=lg-inc>amber</span> = incomplete (still developing) · `
-    + `<span class=lg-rej>red</span> = rejected (permanently invalid)</div>` + emline;
+    + `<div class=cleg>click a badge to filter · <span class=lg-pass>TAKE</span> = valid setup + all course filters pass · `
+    + `<span class=lg-inc>WATCH</span> = structure still forming · `
+    + `<span class=lg-rej>SKIP</span> = a course filter failed, or invalid structure</div>` + emline;
   _candRender();
   $('#candmodal').classList.add('on');
 }

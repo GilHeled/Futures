@@ -1,11 +1,10 @@
-"""Cross-timeframe confluence — the HTF context GATE applied to MTF setups.
+"""Cross-timeframe confluence helpers over v1 objects (no v1 code modified).
 
-An MTF setup passes only when it agrees with the higher-timeframe context on all three ICT axes:
-  1. directional bias   — setup direction == HTF bias
-  2. premium/discount   — longs in HTF discount, shorts in HTF premium (equilibrium tolerated)
-  3. liquidity objective — an HTF draw exists in the setup's direction (BSL above for longs / SSL below)
-
-Pure functions over v1 objects (Setup, DealingRange, SwingPool); no v1 code is modified.
+HISTORY: this module used to expose a `gate_setup` that VETOED a setup on HTF bias mismatch, wrong
+premium/discount, or a missing objective. That veto has been REMOVED — HTF bias and premium/discount
+are QUALITY / context (§1/§17: labels, not vetoes), and are surfaced by the pipeline's semantic layer
+(structure / quality / course-filters / recommendation, see `ict_v2/recommend.py`). What remains here
+is the pure computation of the liquidity DRAW (the target), which the pipeline uses as the objective.
 """
 from __future__ import annotations
 
@@ -23,29 +22,3 @@ def liquidity_objective(context, direction: str):
         return min(above, key=lambda p: p.price) if above else max(pools, key=lambda p: p.price)
     below = [p for p in pools if ce is None or p.price < ce]
     return max(below, key=lambda p: p.price) if below else min(pools, key=lambda p: p.price)
-
-
-def gate_setup(setup, context):
-    """Return (passed: bool, reasons: list[str], objective). `reasons` is the list of gate FAILURES
-    (empty ⇒ passed). `objective` is the HTF liquidity draw for the setup direction (may be None)."""
-    reasons = []
-    d = setup.direction
-    # 0. geometry sanity — the stop must be on the RISK side (short: above entry; long: below)
-    if (d == "long" and setup.stop >= setup.entry) or (d == "short" and setup.stop <= setup.entry):
-        reasons.append(f"Invalid geometry — {d} stop {setup.stop:g} not beyond entry {setup.entry:g}")
-    # 1. directional bias
-    if context.bias == "neutral":
-        reasons.append("HTF context not aligned — bias is neutral")
-    elif d != context.bias:
-        reasons.append(f"HTF bias mismatch — setup {d} vs HTF {context.bias}")
-    # 2. premium/discount location of the entry
-    zone = context.zone(setup.entry)
-    if zone is not None:
-        want = "discount" if d == "long" else "premium"
-        if zone not in (want, "equilibrium"):
-            reasons.append(f"Wrong Premium/Discount zone — entry in {zone}, want {want}")
-    # 3. liquidity objective in the setup direction
-    objective = liquidity_objective(context, d)
-    if objective is None:
-        reasons.append(f"No valid HTF liquidity objective in the {d} direction")
-    return (not reasons), reasons, objective

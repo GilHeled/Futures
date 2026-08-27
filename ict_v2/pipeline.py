@@ -23,6 +23,7 @@ from ict_live.engine import pipeline as v1        # frozen v1 engine, read-only
 from ict_live.market import sessions as v1_sessions   # ET/DST-safe session+killzone membership (read-only)
 from ict_v2 import align
 from ict_v2 import entry_models as EM              # pluggable execution/entry models (FVG + course set)
+from ict_v2 import recommend as REC               # the semantic layer: structure / quality / filters / recommendation
 
 
 # ---- sessions / killzones (METHODOLOGY §11, lesson 5) — CONTEXT, never a gate (§1 HTF-is-context) ---
@@ -159,14 +160,15 @@ def _short_reject(txt: str) -> str:
     return (txt or "invalid")[:24]
 
 
-def _v1_reject_kind(reject_reason: str) -> str:
-    """Classify a v1 rejection. 'rr' = the (course-inspired, [RES]-labelled) 3R minimum, which ICT
-    teaches as a QUALITY guideline, not a validity rule — v2 does NOT treat it as a veto. Anything
-    else (mitigated FVG / degenerate stop / bad geometry / no liquidity target) is a genuine
-    structural/execution invalidation v2 keeps. NB v1 checks RR last, so a pure 'rr' reject means the
-    setup already passed every structural check."""
-    t = (reject_reason or "").lower()
-    return "rr" if ("min_rr" in t or t.startswith("rr ")) else "structural"
+def _reject_is_structural(reject: str) -> bool:
+    """Classify an `assemble()` reject. STRUCTURAL (→ invalid setup): degenerate stop / bad geometry.
+    NOT structural (→ a course-filter / quality concern, structure stays valid): a missing liquidity
+    TARGET — the setup is a real ICT setup even if there is no draw to target (the ≥3R filter handles
+    that). Mitigated/invalidated entries are detected earlier via the entry's common state."""
+    t = (reject or "").lower()
+    if "target" in t or "opposing" in t:
+        return False
+    return bool(t)                                   # degenerate stop / geometry / any other = structural
 
 
 def rr_quality(rr):
@@ -183,47 +185,25 @@ def rr_quality(rr):
     return "high"
 
 
-def _short_gate(reasons: list) -> str:
-    r = (reasons[0] if reasons else "").lower()
-    if "bias mismatch" in r:
-        return "bias mismatch"
-    if "not aligned" in r or "neutral" in r:
-        return "bias neutral"
-    if "premium/discount" in r or "premium" in r or "discount" in r:
-        return "wrong P/D zone"
-    if "liquidity objective" in r:
-        return "no HTF objective"
-    if "geometry" in r:
-        return "bad geometry"
-    return (reasons[0] if reasons else "")[:24]
-
-
-def structural_checks(sw, disp, mss, entry, actionable, entry_note=""):
-    """The ICT chain as ordered checks — sweep → displacement → MSS → <entry-object> → setup — marking
-    where it stopped. MODEL-AGNOSTIC: the entry-object node is labelled from `entry.model` (data, not
-    a hardcoded 'FVG'), and its validity is read from the COMMON state only. Returns (checks, complete,
-    status): status is None when complete + actionable, else 'incomplete' or 'rejected'. `entry_note`
-    labels the setup-node failure."""
+def structural_checks(sw, disp, mss, entry, structure, struct_reason=""):
+    """The STRUCTURE layer as an ordered chain — sweep → displacement → MSS → <entry-object> — marking
+    where it stopped. MODEL-AGNOSTIC: the entry node is labelled from `entry.model` (data, not a
+    hardcoded 'FVG'). This is STRUCTURE ONLY: RR, HTF bias, and premium/discount are NOT here (they are
+    quality / course-filters). `structure` ∈ {forming, valid, invalid}; `struct_reason` labels an
+    invalid entry node. Returns the checks list."""
     olabel = (entry.model.replace("_", " ") if entry is not None else "entry")   # from the model itself
     checks = [_mk("sweep", "ok")]                                         # the manipulation = the anchor
     if disp is None:
-        return checks + [_mk("displacement", "fail", "waiting"), _mk("MSS", "pending"),
-                         _mk("entry", "pending"), _mk("setup", "pending")], False, "incomplete"
+        return checks + [_mk("displacement", "fail", "waiting"), _mk("MSS", "pending"), _mk("entry", "pending")]
     checks.append(_mk("displacement", "ok"))
     if mss is None:
-        return checks + [_mk("MSS", "fail", "waiting"), _mk("entry", "pending"),
-                         _mk("setup", "pending")], False, "incomplete"
+        return checks + [_mk("MSS", "fail", "waiting"), _mk("entry", "pending")]
     checks.append(_mk("MSS", "ok"))
     if entry is None:
-        return checks + [_mk("entry", "fail", "waiting"), _mk("setup", "pending")], False, "incomplete"
-    if entry.state in ("completed", "rejected"):                          # common state only
-        return checks + [_mk(olabel, "fail", entry.lifecycle or entry.state, True),
-                         _mk("setup", "pending")], False, "rejected"
-    checks.append(_mk(olabel, "ok"))
-    if not actionable:
-        return checks + [_mk("setup", "fail", entry_note or "invalid", True)], False, "rejected"
-    checks.append(_mk("setup", "ok"))
-    return checks, True, None
+        return checks + [_mk("entry", "fail", "waiting")]
+    if structure == "invalid":
+        return checks + [_mk(olabel, "fail", _short_reject(struct_reason), True)]
+    return checks + [_mk(olabel, "ok")]
 
 
 @dataclass
@@ -259,6 +239,10 @@ class Candidate:
     killzone: str = ""                     # trading killzone of the manipulation (london_active/ny_am/ny_pm)
     context_label: str = "neutral-context" # §17 HTF context label (aligned/counter/neutral) — a label, not a veto
     amd_phase: str = "manipulation"        # §10 Power-of-3 phase (manipulation/distribution; Lesson 16)
+    # --- the four semantic layers (see ict_v2/recommend.py) ---
+    structure: str = "forming"             # STRUCTURE: forming | valid | invalid (the ICT setup itself)
+    filters: list = field(default_factory=list)   # COURSE FILTERS: [{name, ok, reason}] (≥3R, killzone, …)
+    recommendation: str = "WATCH"          # RECOMMENDATION: TAKE | SKIP | WATCH (derived from the layers)
 
     def to_dict(self) -> dict:
         def px(x):
@@ -280,6 +264,9 @@ class Candidate:
             "session": self.session, "killzone": self.killzone,   # §11 context (lesson 5)
             "context_label": self.context_label,                   # §17 HTF label (not a veto)
             "amd_phase": self.amd_phase,                           # §10 Power-of-3 phase (Lesson 16)
+            "structure": self.structure,                           # STRUCTURE: forming|valid|invalid
+            "filters": [dict(f) for f in self.filters],            # COURSE FILTERS: [{name,ok,reason}]
+            "recommendation": self.recommendation,                 # RECOMMENDATION: TAKE|SKIP|WATCH
             "actionable": self.actionable, "passed": self.passed, "reasons": list(self.reasons),
             "entry_model": self.entry_model,
             "entry_obj": (self.entry_obj.to_dict() if self.entry_obj is not None else None),  # common contract
@@ -405,7 +392,8 @@ def htf_context(bars, tf: str, *, anchor: str = "", anchor_tf: str = "") -> HTFC
                       trend=ts["trend"], trend_change=ts["change"])
 
 
-def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=None, bars=None) -> list:
+def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=None, bars=None,
+                        filters_cfg=None) -> list:
     """GENERATE trade candidates from the manipulation, do NOT "find FVGs and filter".
 
     Every liquidity sweep is a possible trade idea (its direction is set by which side was raided).
@@ -433,13 +421,14 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
     active_erl = getattr(ms, "active_erl", [])
 
     def _partial(sw, disp, mss, direction, dr, objective):
-        """Chain has NOT reached an entry object yet (swept / displaced / mss) — model-agnostic."""
+        """Chain has NOT reached an entry object yet (swept / displaced / mss) — model-agnostic.
+        STRUCTURE is 'forming' → RECOMMENDATION WATCH (a developing idea, no course filters yet)."""
         state = "swept" if disp is None else ("displaced" if mss is None else "mss")
-        checks, _c, _s = structural_checks(sw, disp, mss, None, False, "")
-        checks.append(_mk("HTF context", "pending"))
-        reason = {"swept": "Incomplete — no displacement off the manipulation yet",
-                  "displaced": "Incomplete — no market-structure shift (MSS) yet",
-                  "mss": "Incomplete — structure shifted, no entry yet"}[state]
+        checks = structural_checks(sw, disp, mss, None, "forming", "")
+        reason = {"swept": "Developing — no displacement off the manipulation yet",
+                  "displaced": "Developing — no market-structure shift (MSS) yet",
+                  "mss": "Developing — structure shifted, no entry yet"}[state]
+        rec, rec_reasons = REC.recommend(structure="forming", structure_reason=reason)
         sess, kz = session_of(getattr(sw, "time", None))
         _bias = context.bias if context else ""
         return Candidate(direction=direction, state=state, status="incomplete", checks=checks,
@@ -447,10 +436,11 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
                          dealing_range=dr, pd_location=None, objective=objective,
                          entry=None, stop=getattr(sw, "extreme", None),
                          target=getattr(objective, "price", None), rr=None, rr_quality=None,
-                         actionable=False, passed=False, reasons=[reason], setup=None,
+                         actionable=False, passed=False, reasons=rec_reasons, setup=None,
                          session=sess, killzone=kz,
                          context_label=context_label(direction, _bias),
-                         amd_phase=amd_phase(direction, _bias, getattr(mss, "state", "")))
+                         amd_phase=amd_phase(direction, _bias, getattr(mss, "state", "")),
+                         structure="forming", filters=[], recommendation=rec)
 
     cands = []
     for r in ms.ranked_sweeps:                                           # anchor: the manipulation
@@ -478,51 +468,57 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
             tgt = getattr(objective, "price", None)
             if tgt is None:                                              # fall back to the setup-TF draw
                 tgt = geom["target"]
-            actionable = passed = False
-            reasons, entry_note = [], ""
             mvok, mvreason = EM.validate(entry.model, entry, geom, context)   # model-specific validation
-            if geom["reject"]:                                           # universal geometry reject
-                entry_note = _short_reject(geom["reject"]); reasons = [f"Setup not valid — {geom['reject']}"]
-            elif not mvok:
-                entry_note = (mvreason or "invalid")[:24]; reasons = [f"Setup not valid — {mvreason or 'invalid'}"]
-            elif rr is None or rr <= 1.0:                                # RR is a quality metric; only ≤1 rejects
-                r_txt = ("%g" % rr) if rr is not None else "?"
-                entry_note = f"RR {r_txt} ≤ 1"; reasons = [f"Reward does not exceed risk — RR {r_txt} ≤ 1"]
-            else:
-                actionable = True
-            if actionable:
-                ns = SimpleNamespace(direction=direction, entry=E, stop=S)
-                passed, gate_reasons, obj2 = align.gate_setup(ns, context)
-                if obj2 is not None:
-                    obj, tgt = obj2, getattr(obj2, "price", tgt)
-                reasons = list(gate_reasons)                             # HTF-gate failures (empty ⇒ passed)
+            sess, kz = session_of(getattr(sw, "time", None))
+            _bias = context.bias if context else ""
 
+            # (1) STRUCTURE — is there a valid ICT setup? The chain is complete here (entry exists);
+            #     a setup is INVALID only on a structural fault — a mitigated/invalidated entry, a
+            #     model-specific validation failure, a degenerate stop, or bad geometry. RR, HTF bias
+            #     and premium/discount are NOT structural (a missing target is a filter concern, not
+            #     invalidity — see `_reject_is_structural`).
+            if entry.state in ("completed", "rejected"):
+                structure, struct_reason = "invalid", f"entry {entry.lifecycle or entry.state} — no valid entry"
+            elif not mvok:
+                structure, struct_reason = "invalid", (mvreason or "invalid entry")
+            elif geom["reject"] and _reject_is_structural(geom["reject"]):
+                structure, struct_reason = "invalid", geom["reject"]
+            else:
+                structure, struct_reason = "valid", ""
+
+            # (2) QUALITY — measured, NEVER gating: RR grade, HTF alignment, premium/discount, AMD phase
             entry.quality = quality
+            pd = context.zone(E) if context else None
+            clabel = context_label(direction, _bias)
+            phase = amd_phase(direction, _bias, getattr(mss, "state", ""))
+
+            # (3) COURSE FILTERS — course execution rules (≥3R, killzone, …); only for a valid structure
+            filters = REC.evaluate_filters(rr=rr, killzone=kz, cfg=filters_cfg) if structure == "valid" else []
+
+            # (4) RECOMMENDATION — TAKE / SKIP / WATCH, derived from structure + filters
+            rec, reasons = REC.recommend(structure=structure, structure_reason=struct_reason, filters=filters)
             entry.reason = reasons[0] if reasons else ""
 
-            checks, complete, sstatus = structural_checks(sw, disp, mss, entry, actionable, entry_note)
-            if not complete:
-                status = sstatus; checks.append(_mk("HTF context", "pending"))
-            elif passed:
-                status = "passed"; checks.append(_mk("HTF context", "ok"))
-            else:
-                status = "rejected"; checks.append(_mk("HTF context", "fail", _short_gate(reasons), True))
+            # legacy fields, now DERIVED from the layers (cascade + dashboard compatibility):
+            #   actionable = a valid ICT setup exists (RR/bias/P/D no longer gate it);
+            #   passed = TAKE (valid + every course filter passes) — this is what removes the bias veto.
+            actionable = (structure == "valid")
+            passed = (rec == "TAKE")
+            status = "passed" if rec == "TAKE" else ("incomplete" if rec == "WATCH" else "rejected")
             state = "actionable" if actionable else "entry"
+            checks = structural_checks(sw, disp, mss, entry, structure, struct_reason)
 
             setup_ns = SimpleNamespace(id=entry.id, direction=direction, entry=E, stop=S, target=tgt,
-                                       rr=rr, actionable=actionable, reject_reason=geom["reject"],
+                                       rr=rr, actionable=actionable, reject_reason=(struct_reason or geom["reject"]),
                                        depends_on=(entry.id,))
-            sess, kz = session_of(getattr(sw, "time", None))
             cands.append(Candidate(direction=direction, state=state, status=status, checks=checks,
                                    sweep=sw, displacement=disp, mss=mss,
                                    entry_model=entry.model, entry_obj=entry,
-                                   dealing_range=dr, pd_location=(context.zone(E) if context else None),
+                                   dealing_range=dr, pd_location=pd,
                                    objective=obj, entry=E, stop=S, target=tgt, rr=rr, rr_quality=quality,
                                    actionable=actionable, passed=passed, reasons=reasons, setup=setup_ns,
-                                   session=sess, killzone=kz,
-                                   context_label=context_label(direction, context.bias if context else ""),
-                                   amd_phase=amd_phase(direction, context.bias if context else "",
-                                                       getattr(mss, "state", ""))))
+                                   session=sess, killzone=kz, context_label=clabel, amd_phase=phase,
+                                   structure=structure, filters=filters, recommendation=rec))
     return cands
 
 
@@ -621,8 +617,8 @@ def execution_for(bars, tf: str, context, setup, confirmation, *, min_stop=None,
     node — instead of staying empty until the cascade happens to be gated. NB the 1m entry FVG is
     already the finest timeframe, so there is no lower TF to refine it onto — `min_stop` (degenerate-
     stop floor) is the only refinement-mode parameter that applies here."""
-    if context is None or context.bias == "neutral":
-        return LTFExecution(tf=tf, decision="NO-TRADE (no context bias)")
+    # HTF bias is CONTEXT, not a gate (§1/§17): a neutral/absent bias no longer blocks execution —
+    # TAKE is decided by structure + course filters, so the cascade can still fire counter-context.
     # top-line decision from the cascade state (independent of the 1m candidate universe)
     if not (setup and setup.gated):
         decision = "NO-TRADE (no 1H setup)"

@@ -180,6 +180,12 @@ levels (Lesson 11)". No new detector, no test (no new logic).
   `generate_candidates` now collapses exact duplicates (dir+entry+stop+target+model), keeping the
   best-ranked. This is EXACT-match only (no tolerance — near-equal clustering remains the deferred
   equal-H/L parameter item, §3). Verified `test_no_duplicate_candidates` (0 dupes across 39 seeds).
+- **Leg identification (live-validation refinement, 2026-08-27):** re-verified there are NO remaining
+  duplicates — look-alike candidates are genuinely DISTINCT displacement legs (different bars/prices,
+  0 share a displacement id/span). To make that obvious, every candidate now carries a `leg` descriptor
+  (direction, price span `from→to`, bar range, displacement id) surfaced as a dashboard fact, and the
+  "waiting for FVG / MSS" reasons embed the leg span — so multiple pending setups are distinguishable
+  and chart-mappable instead of looking identical. Verified `test_incomplete_candidates_say_what_they_wait_for`.
 - v1: causal dependency chain sweeps→disp→MSS→FVG→setup (`pipeline.py:182`, each object's `depends_on`).
 - v2: made explicit as ordered checks (`pipeline.py structural_checks`): sweep→displacement→MSS→entry→setup→HTF-gate.
 - DB: rendered as the ✓/✗/— step chain in `_candCard` (`dashboard.py:631`).

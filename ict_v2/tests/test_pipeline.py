@@ -330,6 +330,16 @@ def test_incomplete_candidates_say_what_they_wait_for():
                 assert c["recommendation"] == "WATCH"
                 assert any("retrace" in r.lower() for r in c["reasons"])
     assert {"displacement", "market-structure shift", "entry FVG"} <= seen   # the forming reasons appear
+    # each candidate names WHICH displacement leg it tracks, so look-alikes are distinguishable
+    st = v2.demo_state(seed=11)
+    withleg = [c for c in st.setup.cand_info if c["leg"]]
+    assert withleg
+    for c in withleg:
+        lg = c["leg"]
+        assert set(lg) == {"from", "to", "bars", "dir", "id"} and lg["from"] is not None
+    # the "waiting for FVG" (mss-state) reasons embed the leg span (price arrow) so they differ
+    fvgwait = [c for c in st.setup.cand_info if "entry FVG on the displacement leg" in " ".join(c["reasons"])]
+    assert len(fvgwait) >= 2 and len({r for c in fvgwait for r in c["reasons"]}) == len(fvgwait)  # all distinct
 
 
 def test_four_layer_semantics_and_no_bias_veto():

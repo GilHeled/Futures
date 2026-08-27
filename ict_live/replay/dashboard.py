@@ -721,8 +721,10 @@ function _candCard(c){
   // reference facts
   const objtxt=c.objective?`${c.objective.kind==='high'?'BSL':'SSL'} ${num(c.objective.price)}`:'—';
   const sesstxt=c.session?(_sessName(c.session)+(c.killzone?' ⏱':'')):'—';
+  const lg=c.leg;   // WHICH displacement leg this candidate tracks (distinguishes look-alike candidates)
+  const legtxt=lg?`${lg.dir==='bullish'?'▲':'▼'} ${num(lg.from)}→${num(lg.to)} <span class=mut>b${lg.bars[0]}–${lg.bars[1]}</span>`:'—';
   const facts=[['entry',num(c.entry)],['stop',num(c.stop)],['target',num(c.target)],['draw',objtxt],
-               ['inval',eo?num(eo.invalidation):'—'],['session',sesstxt]]
+               ['inval',eo?num(eo.invalidation):'—'],['leg',legtxt],['session',sesstxt]]
     .map(([k,v])=>`<span class=cfact><i>${k}</i>${v}</span>`).join('');
   const emodel=eo?`<span class=emodel title="execution model · lifecycle (common state: ${_candEsc(eo.state)})">${_candEsc(eo.model+(eo.lifecycle?' · '+eo.lifecycle:''))}</span>`:'';
   const layer=(name,body)=>`<div class=slayer><span class=slabel>${name}</span>${body}</div>`;

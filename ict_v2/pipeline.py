@@ -304,6 +304,13 @@ class Candidate:
             "sweep": None if self.sweep is None else {"pool": px(getattr(self.sweep, "pool_price", None)),
                                                       "extreme": px(getattr(self.sweep, "extreme", None))},
             "mss_state": None if self.mss is None else getattr(self.mss, "state", None),
+            "leg": (None if self.displacement is None else {   # WHICH displacement leg this candidate tracks
+                "from": px(getattr(self.displacement, "start_price", None)),
+                "to": px(getattr(self.displacement, "end_price", None)),
+                "bars": [getattr(self.displacement, "start_index", None),
+                         getattr(self.displacement, "end_index", None)],
+                "dir": getattr(self.displacement, "direction", None),
+                "id": getattr(self.displacement, "id", None)}),
             "session": self.session, "killzone": self.killzone,   # §11 context (lesson 5)
             "context_label": self.context_label,                   # §17 HTF label (not a veto)
             "amd_phase": self.amd_phase,                           # §10 Power-of-3 phase (Lesson 16)
@@ -468,9 +475,13 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
         """Chain has NOT reached an entry object yet (swept / displaced / mss) — model-agnostic.
         STRUCTURE is 'forming' → RECOMMENDATION WATCH (a developing idea, no course filters yet)."""
         state = "swept" if disp is None else ("displaced" if mss is None else "mss")
-        reason = {"swept": "Waiting for a displacement (energetic move) off the manipulation",
-                  "displaced": "Waiting for a market-structure shift (MSS) to confirm the reversal",
-                  "mss": "Waiting for an entry FVG to form on the displacement leg"}[state]
+        # name the specific level/leg so near-looking candidates are distinguishable on the chart
+        swept = f" (swept {getattr(sw, 'pool_price', 0):g}, extreme {getattr(sw, 'extreme', 0):g})"
+        leg = ("" if disp is None else
+               f" [{disp.direction} {disp.start_price:g}→{disp.end_price:g}, bars {disp.start_index}–{disp.end_index}]")
+        reason = {"swept": f"Waiting for a displacement (energetic move) off the manipulation{swept}",
+                  "displaced": f"Waiting for a market-structure shift (MSS) on the displacement{leg}",
+                  "mss": f"Waiting for an entry FVG on the displacement leg{leg}"}[state]
         checks = structural_checks(sw, disp, mss, None, "forming", "")
         rec, rec_reasons = REC.recommend(structure="forming", structure_reason=reason)
         sess, kz = session_of(getattr(sw, "time", None))

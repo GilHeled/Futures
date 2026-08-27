@@ -75,6 +75,13 @@ services:
       # OPTIONAL MTF entry-refinement: set ICT_V2_REFINE=5m to refine the 1H entry FVG onto 5m
       # (fresh gaps for fast instruments). Empty = OFF (standard v2). Overridable from the host env.
       ICT_V2_REFINE: "${ICT_V2_REFINE:-}"
+      ICT_V2_ANCHOR: "${ICT_V2_ANCHOR:-}"                 # Daily/Weekly context anchor (D/W); empty = OFF
+      ICT_V2_ENTRY_MODELS: "${ICT_V2_ENTRY_MODELS:-}"     # execution models (default FVG only)
+      # VALIDATION / TUNING knobs (NOT course methodology; faithful defaults = 2R / killzone on /
+      # retrace on). Relax to see more signals while validating against charts:
+      ICT_V2_MIN_RR: "${ICT_V2_MIN_RR:-}"                 # e.g. 1  (take/skip R:R floor)
+      ICT_V2_KILLZONE: "${ICT_V2_KILLZONE:-}"             # off = don't require a killzone manipulation
+      ICT_V2_REQUIRE_RETRACE: "${ICT_V2_REQUIRE_RETRACE:-}"  # off = armed setups read as TAKE (not WATCH)
     command: ["python", "-m", "ict_v2.serve"]
     ports:
       - "127.0.0.1:8020:8020"

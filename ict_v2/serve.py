@@ -41,6 +41,19 @@ class V2Service:
         # run. Unset = FVG only. Not-yet-implemented models are inert (see entry_models.REGISTRY).
         em = os.environ.get("ICT_V2_ENTRY_MODELS", "").strip()
         self.entry_models = tuple(x.strip() for x in em.split(",") if x.strip()) or None
+        # VALIDATION / TUNING knobs for the take/skip course filters (NOT course methodology — the
+        # faithful defaults are min_rr=2.0, killzone=on, require_retrace=on). Relax these to make the
+        # pipeline fire on more setups while eyeballing the logic against charts:
+        #   ICT_V2_MIN_RR=1            lower/raise the R:R floor
+        #   ICT_V2_KILLZONE=off        stop requiring the manipulation to be in a killzone
+        #   ICT_V2_REQUIRE_RETRACE=off let ARMED (un-retraced) setups read as TAKE, not WATCH
+        from ict_v2 import recommend as _REC
+        _off = lambda v: v.strip().lower() in ("off", "0", "false", "no")
+        mr = os.environ.get("ICT_V2_MIN_RR", "").strip()
+        _REC.configure(
+            min_rr=(float(mr) if mr else None),
+            killzone=(False if _off(os.environ.get("ICT_V2_KILLZONE", "")) else None),
+            require_retrace=(False if _off(os.environ.get("ICT_V2_REQUIRE_RETRACE", "")) else None))
 
     def ingest_new(self) -> int:
         """Feed any NEW 1m bars appended to the shared store through each symbol's V2Live. Returns the

@@ -25,7 +25,24 @@ COURSE_FILTERS = {
     "killzone": True,   # §11 / Lesson 5: the manipulation should occur inside a trading killzone
 }
 
+# When True (faithful default), a valid+filtered setup whose FVG is NOT yet retraced is ARMED → WATCH
+# ("waiting for retrace", course §14). Set False (a VALIDATION relaxation) to let armed setups read as
+# TAKE immediately — so the pipeline fires on more setups when eyeballing the logic against charts.
+REQUIRE_RETRACE = True
+
 RECOMMENDATIONS = ("TAKE", "SKIP", "WATCH")
+
+
+def configure(*, min_rr=None, killzone=None, require_retrace=None) -> None:
+    """Set the take/skip knobs from the service (env-driven). These are validation/tuning levers, NOT
+    course methodology — the faithful defaults are min_rr=2.0, killzone=on, require_retrace=on."""
+    global REQUIRE_RETRACE
+    if min_rr is not None:
+        COURSE_FILTERS["min_rr"] = float(min_rr)
+    if killzone is not None:
+        COURSE_FILTERS["killzone"] = bool(killzone)
+    if require_retrace is not None:
+        REQUIRE_RETRACE = bool(require_retrace)
 
 
 def evaluate_filters(*, rr, killzone, cfg=None) -> list:
@@ -64,6 +81,6 @@ def recommend(*, structure, structure_reason="", filters=(), entry_live=True) ->
     fails = [f for f in filters if not f["ok"]]
     if fails:
         return "SKIP", [f"{f['name']} — {f['reason']}" for f in fails]
-    if not entry_live:
+    if not entry_live and REQUIRE_RETRACE:
         return "WATCH", ["armed — waiting for price to retrace into the entry (FVG not yet touched)"]
     return "TAKE", []

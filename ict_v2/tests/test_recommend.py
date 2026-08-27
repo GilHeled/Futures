@@ -48,3 +48,20 @@ def test_armed_entry_is_watch_not_take():
     # a failing filter still SKIPs even if armed (filter check precedes the retrace check)
     bad = REC.evaluate_filters(rr=1.0, killzone="ny_am")
     assert REC.recommend(structure="valid", filters=bad, entry_live=False)[0] == "SKIP"
+
+
+def test_configure_validation_knobs():
+    """The take/skip knobs are tunable (for validation), with faithful defaults restored after."""
+    good = REC.evaluate_filters(rr=4.0, killzone="ny_am")
+    assert REC.REQUIRE_RETRACE is True and REC.COURSE_FILTERS["min_rr"] == 2.0   # faithful defaults
+    # by default an armed setup is WATCH
+    assert REC.recommend(structure="valid", filters=good, entry_live=False)[0] == "WATCH"
+    try:
+        REC.configure(require_retrace=False, min_rr=1.0, killzone=False)
+        # relaxed: armed setup now TAKE; killzone filter dropped; RR floor lowered
+        assert REC.recommend(structure="valid", filters=good, entry_live=False) == ("TAKE", [])
+        f = REC.evaluate_filters(rr=1.0, killzone="")     # killzone off ⇒ only the RR filter, at 1.0
+        assert [x["name"] for x in f] == ["≥1R"] and f[0]["ok"] is True
+    finally:
+        REC.configure(require_retrace=True, min_rr=2.0, killzone=True)     # restore faithful defaults
+    assert REC.REQUIRE_RETRACE is True and REC.COURSE_FILTERS["killzone"] is True

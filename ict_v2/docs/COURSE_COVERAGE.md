@@ -52,11 +52,16 @@ The W/D/4H→1H→15m→1m role split *is* v2's spine.
 - DB: four stage rows per symbol (`dashboard.py:606`); anchor/refine in banner (`:577`).
 - ℹ️ Nuance: no literal per-candidate "signal TF" field; each stage's TF is implicit in its layer. **Minor gap** if you want it stamped on every candidate.
 
-### 2. Market structure — `[COURSE]` (§2) — 🟡 Partial (v1 complete; v2/DB surface only bias)
-- v1 ✅: fractal swings + confirm-width (`swings.py:31`), HH/HL/LH/LL skeleton + dominant/broken/protected (`significance.py:46`). Potential vs confirmed reversal is carried by MSS states (§9).
-- v2 🟡: derives only a directional **bias** from the last structural leg (`pipeline.py:259 _bias_from_range`, `htf_bias_of:263`); does not re-expose the HH/HL structure.
-- DB 🟡: shows bias per stage; **raw swing structure / reversal state not visualized**.
-- **Gap:** surface the structural read (HH/HL sequence, potential-vs-confirmed reversal) in v2/DB.
+### 2. Market structure — `[COURSE]` (§2, **Lesson 15 verified**) — ✅ Implemented (trend read surfaced)
+- Lesson 15 verified: uptrend = higher highs AND higher lows; downtrend = lower highs AND lower lows;
+  a high that fails to break the prior high (or a strong level + turn) = a **potential** trend change;
+  the opposite HH/HL sequence actually forming = a **confirmed** trend change.
+- v1 ✅: fractal swings + confirm-width (`swings.py`), HH/HL/LH/LL skeleton + dominant/broken/protected (`significance.py`); potential/candidate/confirmed carried by MSS states (§9).
+- v2 ✅: `trend_state(ms)` (`pipeline.py`) is a VERDICT over v1's skeleton + MSS (no new detection) →
+  `trend` up/down/none (last-two HH/HL rule) + `change` confirmed/potential/"". Surfaced on `HTFContext`
+  (`.trend`, `.trend_change`) + `snapshot.context.trend[_change]`; DB shows "trend up · potential/confirmed"
+  in the 4H context read. Verified `test_trend_state_verdict`.
+- ℹ️ Per-candidate MSS state is also shown in the candidate chain (the structural break itself).
 
 ### 3. Liquidity pools / BSL/SSL — `[COURSE]`+`[NEC]` (§3, **Lesson 6**) — 🟡 Partial (full set now surfaced)
 - Lesson 6 verified: liquidity = stops above highs / below lows; **BSL** = high swing (stops above),
@@ -224,9 +229,15 @@ levels (Lesson 11)". No new detector, no test (no new logic).
 - v2: staged NO-TRADE strings per cascade depth (`pipeline.py execution_for:492`); every candidate carries explicit `reasons` + `checks`.
 - DB: NO-TRADE decision pill + reason list (`_candCard:649`).
 
-### 21. Intraday trend change — `[COURSE]` (implied; §2/§10/§17) — ❌ Missing (proxies only)
-- No dedicated detector. Proxies: MSS state machine (§9) and lifecycle opposing-MSS supersession / session expiry. `HTF_REVERSING` is a **DEFERRED** sentinel (a genuine HTF transition, not one isolated MSS).
-- **Gap:** an explicit intraday trend-change / HTF-transition read (distinct from a single MSS).
+### 21. Intraday trend change — `[COURSE]` (§21, **Lesson 15 verified**) — ✅ Implemented
+- Lesson 15: intraday trend change is the SAME trend-change model (§2) on a small interval (1m/5m/15m),
+  occurring at high-liquidity areas (equal H/L, HTF FVG) with an energetic/momentum move.
+- v2 ✅: the `trend_state` verdict (trend + potential/confirmed change) is computed from each analyzed
+  TF's structure/MSS — surfaced for the context, and the intraday stages (1H/15m/1m) already carry
+  their MSS state (potential→candidate→confirmed) per candidate = the intraday structure break. The
+  energetic-move requirement is the displacement (§8) already in the chain.
+- ℹ️ `config.HTF_REVERSING` (a *major* HTF regime transition beyond one MSS) stays DEFERRED — that is a
+  distinct, larger concept than Lesson 15's trend-change and the course gives no threshold for it.
 
 ### 22. Recommendation output & quality grade — `[COURSE map]`+`[RES]` (§ "Recommendation output") — 🟡 Partial
 - ✅: structured output — v1 `Recommendation` (`setup.py:48`), v2 `Candidate.to_dict` (`pipeline.py:170`) + `snapshot` (`live.py:128`).
@@ -301,8 +312,8 @@ no PnL tuning; verify against the spec, not by search):
 6. ~~**Support/resistance levels** (Lesson 11)~~ ✅ **DONE 2026-08-27** — re-framing of existing liquidity concepts; no new mechanic (documented §3b).
 7. **Lesson-by-lesson sweep of the remainder** (user mandate: continue without per-lesson approval, stop only on genuine ambiguity or an undefined parameter):
    - ~~**Lesson 12 (FVG)**~~ ✅ **DONE 2026-08-27** — verified; matches §7; nuance ("very large FVG → smaller TF") is capability-present/param-undefined.
-   - **Lesson 15 (intraday trend changes)** → §21 intraday trend-change (currently missing). ← **NEXT**
-   - **Lesson 16 (Power of 3)** → §10 AMD phase + consolidation detector (currently missing).
+   - ~~**Lesson 15 (intraday trend changes)**~~ ✅ **DONE 2026-08-27** → §2 + §21 via `trend_state` (verdict over v1 skeleton+MSS).
+   - **Lesson 16 (Power of 3)** → §10 AMD phase + consolidation detector (currently missing). ← **NEXT**
    - **Lessons 3, 4** (orders; contract names/rollover) — expected informational/non-mechanical; verify + classify.
    - Then: course-filter layer (§16 ≥3R + killzone; removes §17 bias-veto), ordered target hierarchy + fib extensions 1.5–4 (§16), A/B/C grade (§22), assert ≥15m floor + ≥50%-pullback rules (§2/§6), market-structure surfacing + reversal states (§2).
    - Parameter-blocked (skip until a rule/param): equal-H/L clustering + pools-as-zones (§3).

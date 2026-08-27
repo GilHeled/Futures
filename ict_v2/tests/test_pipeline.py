@@ -153,6 +153,32 @@ def test_htf_context_labels(monkeypatch):
             assert c["context_label"] == "neutral-context"
 
 
+def test_trend_state_verdict():
+    """Lesson 15 / §2/§21: trend = up (higher highs AND higher lows) / down (lower/lower) / none;
+    change = confirmed (a confirmed MSS) / potential (potential-or-candidate MSS) / ''. A verdict over
+    v1's existing skeleton + MSS — no new structural detection."""
+    def sw(kind, price, i):
+        return SimpleNamespace(kind=kind, price=price, index=i)
+
+    def ms(highs, lows, mss_states=()):
+        structural = [sw("high", p, 2 * i) for i, p in enumerate(highs)] + \
+                     [sw("low", p, 2 * i + 1) for i, p in enumerate(lows)]
+        ranked = [SimpleNamespace(item=SimpleNamespace(state=s)) for s in mss_states]
+        return SimpleNamespace(structural=structural, ranked_mss=ranked)
+
+    assert v2.trend_state(ms([100, 110], [90, 95]))["trend"] == "up"      # HH + HL
+    assert v2.trend_state(ms([110, 100], [95, 90]))["trend"] == "down"    # LH + LL
+    assert v2.trend_state(ms([100, 110], [95, 90]))["trend"] == "none"    # HH but LL → transition
+    assert v2.trend_state(ms([100], [90]))["trend"] == "none"             # not enough swings
+    assert v2.trend_state(ms([100, 110], [90, 95], ("confirmed",)))["change"] == "confirmed"
+    assert v2.trend_state(ms([100, 110], [90, 95], ("candidate",)))["change"] == "potential"
+    assert v2.trend_state(ms([100, 110], [90, 95], ()))["change"] == ""
+    # surfaced on the context + snapshot
+    st = v2.demo_state(seed=7)
+    assert st.context.trend in ("up", "down", "none")
+    assert st.context.trend_change in ("confirmed", "potential", "")
+
+
 def test_erl_irl_classification():
     """METHODOLOGY §4 / Lesson 10: a price ABOVE the range high or BELOW the range low is EXTERNAL
     range liquidity (ERL); a price BETWEEN low and high is INTERNAL (IRL). Relative to the active

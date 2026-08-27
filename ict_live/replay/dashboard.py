@@ -188,6 +188,7 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .fibx.premium{border-color:var(--short)} .fibx.discount{border-color:var(--long)}
  .fibx.equilibrium{border-color:var(--accent,#c8a24a);font-weight:700}
  .rangx.closed{opacity:.5;text-decoration:line-through}   /* NWOG/ORG rebalanced */
+ .tc-confirmed{color:var(--accent,#c8a24a)} .tc-potential{color:var(--mut)}   /* trend-change state */
  .modal{position:fixed;inset:0;background:#000a;display:none;z-index:50;padding:22px}
  .modal.on{display:flex} .modal-box{background:var(--panel);border:1px solid var(--line);border-radius:14px;
    margin:auto;width:min(1120px,96vw);height:90vh;display:flex;flex-direction:column;overflow:hidden}
@@ -634,7 +635,7 @@ function v2Tables(rep){
         <span class=thead-right>${sessHtml}${biasHtml}<span class="v2dec ${execSide}">${dec}</span></span></div>
       <div class=reads>
         <div class="read ${biasSide}"><div class=rhd><span class=rsy>4H</span><span class=rnn>context</span></div>
-          <div class=why><span class=wc>bias <b>${fmt(c.bias)}</b></span>${c.anchor_tf?`<span class=wc>${c.anchor_tf}-anchor <b>${fmt(c.anchor_bias||'neutral')}</b></span>`:''}<span class=wc>range <b>${drs}</b></span><span class=wc>draw <b>${objs}</b></span>${poolsHtml}</div>
+          <div class=why><span class=wc>bias <b>${fmt(c.bias)}</b></span><span class=wc title="structural trend (HH/HL rule) + trend change (Lesson 15)">trend <b>${fmt(c.trend||'none')}</b>${c.trend_change?` <b class=tc-${c.trend_change}>${c.trend_change}</b>`:''}</span>${c.anchor_tf?`<span class=wc>${c.anchor_tf}-anchor <b>${fmt(c.anchor_bias||'neutral')}</b></span>`:''}<span class=wc>range <b>${drs}</b></span><span class=wc>draw <b>${objs}</b></span>${poolsHtml}</div>
           ${fibHtml}${nestedHtml}${nwogHtml}${orgHtml}
           <div class=rfoot>updated ${fmt(u[tf.context])}</div></div>
         <div class="read ${setupSide}"><div class=rhd><span class=rsy>1H</span><span class=rnn>setup</span></div>

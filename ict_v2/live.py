@@ -171,6 +171,8 @@ class V2Live:
             "context": None if not c else {
                 "bias": c.bias, "anchor_bias": getattr(c, "anchor_bias", ""),
                 "anchor_tf": getattr(c, "anchor_tf", ""),
+                "trend": getattr(c, "trend", "none"),          # §2/§21 structural trend (Lesson 15)
+                "trend_change": getattr(c, "trend_change", ""),  # confirmed | potential | ""
                 "dealing_range": None if dr is None else {"low": _px(dr.low), "high": _px(dr.high),
                                                           "ce": _px(dr.ce), "direction": dr.direction},
                 "fib": fib,                                   # §6 fib ladder 0/0.5/0.62/0.79/1 (Lesson 8)

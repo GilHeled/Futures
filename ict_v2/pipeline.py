@@ -72,6 +72,8 @@ class HTFContext:
     anchor_bias: str = ""                  # Daily/Weekly anchor bias ("" if no anchor); vetoes the 4H bias
     anchor_tf: str = ""                    # the anchor timeframe ("D"/"W"), "" if none
     ranges: list = field(default_factory=list)   # ALL dealing ranges on this TF (source_tf-tagged), for nesting
+    trend: str = "none"                    # §2/§21 structural trend (up/down/none) — HH/HL rule (Lesson 15)
+    trend_change: str = ""                 # §2/§21 trend-change: confirmed | potential | "" (from MSS)
 
     def zone(self, price: float) -> Optional[str]:
         """premium / discount / equilibrium of `price` within the HTF dealing range (None if no range)."""
@@ -335,6 +337,29 @@ def _bias_from_range(dr) -> str:
     return "long" if (dr and dr.direction == "up") else "short" if (dr and dr.direction == "down") else "neutral"
 
 
+def trend_state(ms) -> dict:
+    """The course trend-change read (Lesson 15, §2/§21) as a VERDICT over v1's existing structural
+    skeleton + MSS — no new structural detection, just the interpretation v1 deliberately withholds.
+
+    trend  (Lesson 15: uptrend = higher highs AND higher lows; downtrend = lower highs AND lower lows):
+      'up' if the last two structural highs are rising AND the last two lows are rising; 'down' if both
+      falling; else 'none' (transition). change:
+      'confirmed' if a CONFIRMED MSS exists on this TF (structure actually broke = confirmed trend
+      change); 'potential' if an MSS is still potential/candidate (a high/low failed to extend); else ''.
+    The same model on the HTF is the main trend; on 1m/5m/15m it is the *intraday* trend change (§21)."""
+    swings = getattr(ms, "structural", None) or []
+    highs = [s for s in swings if s.kind == "high"]
+    lows = [s for s in swings if s.kind == "low"]
+    rising = lambda seq: len(seq) >= 2 and seq[-1].price > seq[-2].price
+    falling = lambda seq: len(seq) >= 2 and seq[-1].price < seq[-2].price
+    trend = ("up" if rising(highs) and rising(lows)
+             else "down" if falling(highs) and falling(lows) else "none")
+    states = {getattr(r.item, "state", "") for r in getattr(ms, "ranked_mss", [])}
+    change = ("confirmed" if "confirmed" in states
+              else "potential" if (states & {"potential", "candidate"}) else "")
+    return {"trend": trend, "change": change}
+
+
 def htf_bias_of(bars, tf: str) -> str:
     """Directional bias from a timeframe's dealing-range leg — used for the Daily/Weekly ANCHOR."""
     ms = v1.analyze(bars, tf)
@@ -354,8 +379,10 @@ def htf_context(bars, tf: str, *, anchor: str = "", anchor_tf: str = "") -> HTFC
     bias = _bias_from_range(dr)
     if anchor in ("long", "short") and bias in ("long", "short") and bias != anchor:
         bias = "neutral"                                 # 4H opposes the Daily/Weekly anchor → stand aside
+    ts = trend_state(ms)                                 # §2/§21 trend + potential/confirmed change (Lesson 15)
     return HTFContext(tf=tf, bias=bias, dealing_range=dr, liquidity=list(ms.active_erl),
-                      anchor_bias=(anchor or ""), anchor_tf=(anchor_tf or ""), ranges=list(ms.ranges))
+                      anchor_bias=(anchor or ""), anchor_tf=(anchor_tf or ""), ranges=list(ms.ranges),
+                      trend=ts["trend"], trend_change=ts["change"])
 
 
 def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=None, bars=None) -> list:

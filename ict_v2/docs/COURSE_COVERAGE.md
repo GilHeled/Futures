@@ -260,6 +260,23 @@ levels (Lesson 11)". No new detector, no test (no new logic).
 
 ---
 
+## Lessons 3 / 4 / 5 — basics & verification (no new mechanic)
+- **Lesson 3 (trading orders)** — the 4 order types (Market / Limit / Stop-Limit / Stop-Loss) and
+  passive-vs-aggressive execution. Order-mechanics education, **informational**. Our entry is a resting
+  **limit** at the FVG (arm k+1, fill on a later retrace, §14), which is exactly the passive-limit model.
+- **Lesson 4 (contract names & rollovers)** — contract naming, "trade the most-liquid (front) contract",
+  3-month rollovers (CME roll dates), and a caution that **roll week is noisy** ("less speculation, more
+  bureaucracy"). Data/instrument-layer, **informational**. The roll-week caution is a *possible* future
+  **course filter** (skip trading during roll week) but needs the CME roll calendar and is stated as a
+  caution, not a hard rule — logged, not built.
+- **Lesson 5 (sessions/killzones)** — **verifies §11**: London recommended window 02:00–05:00 ET matches
+  `config.SESSIONS["london_active"]`; Asia = overnight consolidation, London breaks Asia's range (ties to
+  the AMD manipulation, Lesson 16). Already implemented (§11); this confirms the windows.
+
+> **Lesson coverage:** all lessons present on disk (3,4,5,6,8,9,10,11,12,13,14,15,16) have now been read
+> and represented. Lessons **1, 2, 7 are not on disk** (numbering gaps / intro not provided) — flagged;
+> re-verify if they are added.
+
 ## New course rules found by reading the raw lessons (not in the distillation)
 
 Reading the PDFs surfaced concrete mechanical rules the 20-section distillation had dropped or blurred:
@@ -327,9 +344,13 @@ no PnL tuning; verify against the spec, not by search):
    - ~~**Lesson 12 (FVG)**~~ ✅ **DONE 2026-08-27** — verified; matches §7; nuance ("very large FVG → smaller TF") is capability-present/param-undefined.
    - ~~**Lesson 15 (intraday trend changes)**~~ ✅ **DONE 2026-08-27** → §2 + §21 via `trend_state` (verdict over v1 skeleton+MSS).
    - ~~**Lesson 16 (Power of 3)**~~ ✅ **DONE 2026-08-27** → §10 AMD phase (manipulation/distribution); accumulation detector PARAMETER-BLOCKED (stop).
-   - **Lessons 3, 4** (orders; contract names/rollover) — expected informational/non-mechanical; verify + classify. ← **NEXT**
-   - Then: course-filter layer (§16 ≥3R + killzone; removes §17 bias-veto), ordered target hierarchy + fib extensions 1.5–4 (§16), A/B/C grade (§22), assert ≥15m floor + ≥50%-pullback rules (§2/§6), market-structure surfacing + reversal states (§2).
-   - Parameter-blocked (skip until a rule/param): equal-H/L clustering + pools-as-zones (§3).
+   - ~~**Lessons 3, 4, 5**~~ ✅ **DONE 2026-08-27** — informational (3/4) / verification of §11 (5); no new mechanic.
+   - **ALL AVAILABLE LESSONS NOW READ & REPRESENTED.** Remaining work is cross-lesson SYNTHESIS, not new lessons:
+     - **Course-filter layer** (§16 ≥3R + §11 killzone + roll-week) — the Structure / Quality / Filter separation; also removes the §17 bias-veto. ← the big architectural piece.
+     - **Ordered target hierarchy + fib extensions 1.5–4** (§16, Lesson 8).
+     - **A/B/C quality grade** (§22).
+     - Assert **≥15m liquidity floor** + **≥50% pullback** rules (§2/§3/§6).
+   - ⛔ Parameter-blocked (await a course rule or approved `[NEC]`): equal-H/L clustering + pools-as-zones (§3); accumulation/consolidation detector (§10).
 4. **NWOG & ORG detectors** (§18/§19) — new IRL context arrays; tracked, shown, usable as targets.
 5. **IRL classification** (§4) — depends on 3+4 (needs the internal arrays first).
 6. **Explicit AMD phase + consolidation detector** (§10) — the hardest; `[RES:amd_phase]`, needs its own mini-spec.

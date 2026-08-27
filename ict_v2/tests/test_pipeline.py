@@ -33,9 +33,11 @@ def test_entry_models_registry_and_tagging():
     assert EM.resolve(None) == ("fvg",)
     assert EM.resolve(["order_block", "breaker"]) == ("fvg",)         # planned models drop → FVG kept
     assert EM.resolve(["fvg"]) == ("fvg",)
-    # every generated candidate carries entry_model="fvg" today
+    # every candidate that HAS an entry is tagged with the model that produced it (fvg today);
+    # partial candidates (no entry object yet) carry no model
     st = v2.demo_state(seed=7)
-    assert all(c["entry_model"] == "fvg" for c in st.setup.cand_info)
+    assert all(c["entry_model"] == "fvg" for c in st.setup.cand_info if c["entry_obj"])
+    assert all(c["entry_model"] == "" for c in st.setup.cand_info if not c["entry_obj"])
 
 
 def test_entry_common_contract():

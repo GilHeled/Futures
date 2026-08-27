@@ -14,6 +14,7 @@ READ-ONLY and never modified.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Optional
 
 from ict_live.engine import pipeline as v1        # frozen v1 engine, read-only
@@ -45,7 +46,7 @@ class GatedSetup:
 
 
 # progressive ICT workflow stages a candidate can reach (least → most complete)
-CANDIDATE_STATES = ("swept", "displaced", "mss", "fvg", "actionable")
+CANDIDATE_STATES = ("swept", "displaced", "mss", "entry", "actionable")
 
 
 def _mk(name, status, note="", permanent=False):
@@ -108,33 +109,31 @@ def _short_gate(reasons: list) -> str:
     return (reasons[0] if reasons else "")[:24]
 
 
-def structural_checks(sw, disp, mss, fvg, setup, actionable, entry_note=""):
-    """The ICT chain rendered as ordered checks — sweep → displacement → MSS → FVG → entry — marking
-    the exact point it stopped progressing. Returns (checks, complete, status): `status` is None when
-    the chain is complete AND the setup is actionable (ready for the HTF gate), else 'incomplete'
-    (still developing, could still become valid) or 'rejected' (permanently invalid). `entry_note`
-    overrides the entry-node failure label (v2 supplies its own, e.g. an RR≤1 reject)."""
-    fvg_mit = fvg is not None and getattr(fvg, "status", None) == "mitigated"
+def structural_checks(sw, disp, mss, entry, actionable, entry_note=""):
+    """The ICT chain as ordered checks — sweep → displacement → MSS → <entry-object> → setup — marking
+    where it stopped. MODEL-AGNOSTIC: the entry-object node is labelled from `entry.model` (data, not
+    a hardcoded 'FVG'), and its validity is read from the COMMON state only. Returns (checks, complete,
+    status): status is None when complete + actionable, else 'incomplete' or 'rejected'. `entry_note`
+    labels the setup-node failure."""
+    olabel = (entry.model.replace("_", " ") if entry is not None else "entry")   # from the model itself
     checks = [_mk("sweep", "ok")]                                         # the manipulation = the anchor
     if disp is None:
         return checks + [_mk("displacement", "fail", "waiting"), _mk("MSS", "pending"),
-                         _mk("FVG", "pending"), _mk("entry", "pending")], False, "incomplete"
+                         _mk("entry", "pending"), _mk("setup", "pending")], False, "incomplete"
     checks.append(_mk("displacement", "ok"))
     if mss is None:
-        return checks + [_mk("MSS", "fail", "waiting"), _mk("FVG", "pending"),
-                         _mk("entry", "pending")], False, "incomplete"
+        return checks + [_mk("MSS", "fail", "waiting"), _mk("entry", "pending"),
+                         _mk("setup", "pending")], False, "incomplete"
     checks.append(_mk("MSS", "ok"))
-    if fvg is None:
-        return checks + [_mk("FVG", "fail", "waiting"), _mk("entry", "pending")], False, "incomplete"
-    if fvg_mit:
-        return checks + [_mk("FVG", "fail", "mitigated", True), _mk("entry", "pending")], False, "rejected"
-    checks.append(_mk("FVG", "ok"))
-    if setup is None:
-        return checks + [_mk("entry", "fail", "no valid setup yet")], False, "incomplete"
+    if entry is None:
+        return checks + [_mk("entry", "fail", "waiting"), _mk("setup", "pending")], False, "incomplete"
+    if entry.state in ("completed", "rejected"):                          # common state only
+        return checks + [_mk(olabel, "fail", entry.lifecycle or entry.state, True),
+                         _mk("setup", "pending")], False, "rejected"
+    checks.append(_mk(olabel, "ok"))
     if not actionable:
-        note = entry_note or _short_reject(getattr(setup, "reject_reason", ""))
-        return checks + [_mk("entry", "fail", note, True)], False, "rejected"
-    checks.append(_mk("entry", "ok"))
+        return checks + [_mk("setup", "fail", entry_note or "invalid", True)], False, "rejected"
+    checks.append(_mk("setup", "ok"))
     return checks, True, None
 
 
@@ -151,7 +150,6 @@ class Candidate:
     sweep: object = None                   # the manipulation (the anchor — always present)
     displacement: object = None
     mss: object = None
-    fvg: object = None
     dealing_range: object = None
     pd_location: Optional[str] = None      # premium | discount | equilibrium of the entry (HTF)
     objective: object = None               # opposing liquidity pool = the draw (target)
@@ -182,10 +180,9 @@ class Candidate:
             "objective": None if obj is None else {"kind": getattr(obj, "kind", None),
                                                    "price": px(getattr(obj, "price", None))},
             "components": {"sweep": self.sweep is not None, "displacement": self.displacement is not None,
-                           "mss": self.mss is not None, "fvg": self.fvg is not None},
+                           "mss": self.mss is not None, "entry": self.entry_obj is not None},
             "sweep": None if self.sweep is None else {"pool": px(getattr(self.sweep, "pool_price", None)),
                                                       "extreme": px(getattr(self.sweep, "extreme", None))},
-            "fvg_status": None if self.fvg is None else getattr(self.fvg, "status", None),
             "mss_state": None if self.mss is None else getattr(self.mss, "state", None),
             "actionable": self.actionable, "passed": self.passed, "reasons": list(self.reasons),
             "entry_model": self.entry_model,
@@ -286,7 +283,7 @@ def htf_context(bars, tf: str, *, anchor: str = "", anchor_tf: str = "") -> HTFC
                       anchor_bias=(anchor or ""), anchor_tf=(anchor_tf or ""))
 
 
-def generate_candidates(ms, context: HTFContext, entry_models=None) -> list:
+def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=None) -> list:
     """GENERATE trade candidates from the manipulation, do NOT "find FVGs and filter".
 
     Every liquidity sweep is a possible trade idea (its direction is set by which side was raided).
@@ -296,30 +293,37 @@ def generate_candidates(ms, context: HTFContext, entry_models=None) -> list:
     full tradeable Setup we adopt its authoritative geometry/actionability; otherwise the candidate
     still exists at whatever `state` it reached, for the next timeframe to reject / refine / promote.
 
-    EXECUTION MODELS (pluggable): `entry_models` selects which course entry models run (default FVG
-    only). FVG uses v1's frozen entry detector below; additional models (order_block, breaker, …) are
-    added in their own verified increments and, when enabled, emit extra candidates tagged with their
-    `entry_model`. See ict_v2/entry_models.py."""
-    models = EM.resolve(entry_models)                 # implemented subset; always includes "fvg"
-    disp_by_sweep, fvg_by_disp, mss_by_disp = {}, {}, {}
+    DATA-DRIVEN EXECUTION MODELS: the engine never names a model. For each manipulation→displacement,
+    it asks every enabled model's detector for entries (`EM.detect`), assembles geometry uniformly
+    (`EM.assemble`), validates (universal geometry reject + the model's optional `EM.validate`), gates
+    by the HTF context, and builds a Candidate tagged with `entry.model`. Adding a model (order_block,
+    breaker, …) is a registry entry, NOT an engine change. See ict_v2/entry_models.py."""
+    models = EM.resolve(entry_models)                                    # implemented subset (≥ fvg)
+    disp_by_sweep, mss_by_disp = {}, {}
     for r in ms.ranked_displacements:
         d = r.item
         if d.depends_on:
             disp_by_sweep.setdefault(d.depends_on[0], []).append(d)      # depends_on[0] = sweep id
-    for r in ms.ranked_fvgs:
-        f = r.item
-        if f.depends_on:
-            fvg_by_disp.setdefault(f.depends_on[0], []).append(f)        # depends_on[0] = displacement id
     for r in ms.ranked_mss:
         m = r.item
         if m.depends_on:
             mss_by_disp.setdefault(m.depends_on[0], []).append(m)        # depends_on[0] = displacement id
-    setup_by_fvg = {}
-    for r in ms.ranked_setups:
-        su = r.item
-        deps = getattr(su, "depends_on", None) or ()
-        if deps:
-            setup_by_fvg[deps[0]] = su                                   # depends_on[0] = source FVG id
+    active_erl = getattr(ms, "active_erl", [])
+
+    def _partial(sw, disp, mss, direction, dr, objective):
+        """Chain has NOT reached an entry object yet (swept / displaced / mss) — model-agnostic."""
+        state = "swept" if disp is None else ("displaced" if mss is None else "mss")
+        checks, _c, _s = structural_checks(sw, disp, mss, None, False, "")
+        checks.append(_mk("HTF context", "pending"))
+        reason = {"swept": "Incomplete — no displacement off the manipulation yet",
+                  "displaced": "Incomplete — no market-structure shift (MSS) yet",
+                  "mss": "Incomplete — structure shifted, no entry yet"}[state]
+        return Candidate(direction=direction, state=state, status="incomplete", checks=checks,
+                         sweep=sw, displacement=disp, mss=mss, entry_model="", entry_obj=None,
+                         dealing_range=dr, pd_location=None, objective=objective,
+                         entry=None, stop=getattr(sw, "extreme", None),
+                         target=getattr(objective, "price", None), rr=None, rr_quality=None,
+                         actionable=False, passed=False, reasons=[reason], setup=None)
 
     cands = []
     for r in ms.ranked_sweeps:                                           # anchor: the manipulation
@@ -327,104 +331,66 @@ def generate_candidates(ms, context: HTFContext, entry_models=None) -> list:
         direction = "long" if sw.direction == "bullish" else "short"     # sell-side raid → long, buy-side → short
         disps = disp_by_sweep.get(sw.id, [])
         disp = disps[0] if disps else None                               # best-ranked displacement off it
-        fvg = mss = setup = None
-        if disp is not None:
-            fvgs = fvg_by_disp.get(disp.id, [])
-            fvgs = sorted(fvgs, key=lambda f: 0 if getattr(f, "status", "") != "mitigated" else 1)
-            fvg = fvgs[0] if fvgs else None
-            msss = mss_by_disp.get(disp.id, [])
-            mss = msss[0] if msss else None
-        if fvg is not None:
-            setup = setup_by_fvg.get(getattr(fvg, "id", None))
-
-        stop = sw.extreme                                                # stop at the manipulation extreme
-        entry = getattr(fvg, "ce", None) if fvg is not None else None
+        mss = (mss_by_disp.get(disp.id, []) or [None])[0] if disp is not None else None
         dr = context.dealing_range if context else None
-        pd = context.zone(entry) if (context and entry is not None) else None
         objective = align.liquidity_objective(context, direction) if context else None
-        target = getattr(objective, "price", None) if objective is not None else None
 
-        actionable = passed = False
-        reasons, entry_note, rr, quality = [], "", None, None
-        if setup is not None:
-            entry, stop = setup.entry, setup.stop
-            if target is None:
-                target = setup.target
-            rr = getattr(setup, "rr", None)
-            quality = rr_quality(rr)
-            if bool(getattr(setup, "actionable", False)):                # v1 says fully actionable (RR≥3)
-                actionable = True
-            elif _v1_reject_kind(getattr(setup, "reject_reason", "")) == "rr":
-                # v2 separates VALID SETUP from GOOD TRADE: the 3R minimum is a QUALITY guideline, not a
-                # validity veto. A structurally sound setup (v1 rejected ONLY on RR) stays valid as long
-                # as reward exceeds risk (RR > 1); RR is surfaced as a quality grade. Only RR ≤ 1 rejects.
-                if rr is not None and rr > 1.0:
-                    actionable = True
-                else:
-                    entry_note = f"RR {rr:g} ≤ 1" if rr is not None else "reward ≤ risk"
-                    reasons = [f"Reward does not exceed risk — RR {('%g' % rr) if rr is not None else '?'} ≤ 1"]
-            else:                                                        # a genuine structural/execution reject
-                entry_note = _short_reject(getattr(setup, "reject_reason", ""))
-                reasons = [f"Setup not valid — {getattr(setup, 'reject_reason', '') or 'invalid'}"]
-            if actionable:
-                passed, gate_reasons, obj2 = align.gate_setup(setup, context)
-                if obj2 is not None:
-                    objective, target = obj2, getattr(obj2, "price", target)
-                reasons = list(gate_reasons)                             # HTF-gate failures (empty ⇒ passed)
-        else:
-            risk = abs(stop - entry) if entry is not None else 0.0
-            reward = abs(entry - target) if (entry is not None and target is not None) else 0.0
-            rr = round(reward / risk, 2) if risk > 0 else None
-            quality = rr_quality(rr)
-
-        if disp is None:
-            state = "swept"
-        elif actionable:
-            state = "actionable"
-        elif fvg is not None:
-            state = "fvg"
-        elif mss is not None:
-            state = "mss"
-        else:
-            state = "displaced"
-        if not reasons and not passed:                                   # partial idea: explain the stage reached
-            reasons = [{"swept": "Incomplete — no displacement off the manipulation yet",
-                        "displaced": "Incomplete — no market-structure shift (MSS) yet",
-                        "mss": "Incomplete — structure shifted, no valid entry FVG yet",
-                        "fvg": "Incomplete — entry FVG present, not yet a valid setup"}.get(state, "Incomplete")]
-
-        # build the step-by-step pipeline: structural chain + the HTF-context gate node
-        checks, complete, sstatus = structural_checks(sw, disp, mss, fvg, setup, actionable, entry_note)
-        if not complete:
-            status = sstatus
-            checks.append(_mk("HTF context", "pending"))
-        elif passed:
-            status = "passed"
-            checks.append(_mk("HTF context", "ok"))
-        else:
-            status = "rejected"
-            checks.append(_mk("HTF context", "fail", _short_gate(reasons), True))
-
-        # the generic Entry (common contract) — sourced via the FVG detector; geometry above is the
-        # verified v1-backed path. quality/reason are filled from this candidate's computation.
-        entry_obj = None
+        entries = []                                                     # ask every enabled model
         if disp is not None:
-            ents = EM.fvg_entries(disp, ms)
-            if ents:
-                entry_obj = ents[0]
-                entry_obj.quality = quality
-                entry_obj.reason = reasons[0] if reasons else ""
+            for name in models:
+                entries += EM.detect(name, disp, mss, ms, direction)
+        if not entries:
+            cands.append(_partial(sw, disp, mss, direction, dr, objective))
+            continue
 
-        cands.append(Candidate(direction=direction, state=state, status=status, checks=checks,
-                               sweep=sw, displacement=disp, mss=mss, entry_model="fvg", entry_obj=entry_obj,
-                               fvg=fvg, dealing_range=dr, pd_location=pd, objective=objective,
-                               entry=entry, stop=stop, target=target, rr=rr, rr_quality=quality,
-                               actionable=actionable, passed=passed, reasons=reasons, setup=setup))
-    # EXTENSION POINT — additional execution models emit extra candidates here (tagged entry_model),
-    # each added + verified in its own increment. Only "fvg" is implemented today:
-    #   for m in models:
-    #       if m == "fvg": continue
-    #       cands += _entries_for_model(m, ms, context, ...)   # -> Candidate(entry_model=m, ...)
+        for entry in entries:                                            # one candidate per entry object
+            geom = EM.assemble(entry, sw.extreme, active_erl, min_stop)  # uniform geometry
+            rr = geom["rr"]; quality = rr_quality(rr)
+            E, S = geom["entry"], geom["stop"]
+            obj = objective                                              # displayed draw = HTF objective
+            tgt = getattr(objective, "price", None)
+            if tgt is None:                                              # fall back to the setup-TF draw
+                tgt = geom["target"]
+            actionable = passed = False
+            reasons, entry_note = [], ""
+            mvok, mvreason = EM.validate(entry.model, entry, geom, context)   # model-specific validation
+            if geom["reject"]:                                           # universal geometry reject
+                entry_note = _short_reject(geom["reject"]); reasons = [f"Setup not valid — {geom['reject']}"]
+            elif not mvok:
+                entry_note = (mvreason or "invalid")[:24]; reasons = [f"Setup not valid — {mvreason or 'invalid'}"]
+            elif rr is None or rr <= 1.0:                                # RR is a quality metric; only ≤1 rejects
+                r_txt = ("%g" % rr) if rr is not None else "?"
+                entry_note = f"RR {r_txt} ≤ 1"; reasons = [f"Reward does not exceed risk — RR {r_txt} ≤ 1"]
+            else:
+                actionable = True
+            if actionable:
+                ns = SimpleNamespace(direction=direction, entry=E, stop=S)
+                passed, gate_reasons, obj2 = align.gate_setup(ns, context)
+                if obj2 is not None:
+                    obj, tgt = obj2, getattr(obj2, "price", tgt)
+                reasons = list(gate_reasons)                             # HTF-gate failures (empty ⇒ passed)
+
+            entry.quality = quality
+            entry.reason = reasons[0] if reasons else ""
+
+            checks, complete, sstatus = structural_checks(sw, disp, mss, entry, actionable, entry_note)
+            if not complete:
+                status = sstatus; checks.append(_mk("HTF context", "pending"))
+            elif passed:
+                status = "passed"; checks.append(_mk("HTF context", "ok"))
+            else:
+                status = "rejected"; checks.append(_mk("HTF context", "fail", _short_gate(reasons), True))
+            state = "actionable" if actionable else "entry"
+
+            setup_ns = SimpleNamespace(id=entry.id, direction=direction, entry=E, stop=S, target=tgt,
+                                       rr=rr, actionable=actionable, reject_reason=geom["reject"],
+                                       depends_on=(entry.id,))
+            cands.append(Candidate(direction=direction, state=state, status=status, checks=checks,
+                                   sweep=sw, displacement=disp, mss=mss,
+                                   entry_model=entry.model, entry_obj=entry,
+                                   dealing_range=dr, pd_location=(context.zone(E) if context else None),
+                                   objective=obj, entry=E, stop=S, target=tgt, rr=rr, rr_quality=quality,
+                                   actionable=actionable, passed=passed, reasons=reasons, setup=setup_ns))
     return cands
 
 
@@ -442,7 +408,7 @@ def mtf_setup(bars, tf: str, context: HTFContext, *, refine_bars=None, min_stop=
     fast instrument a fresh, unmitigated entry gap. `min_stop` rejects degenerate stops. Both default
     off, so the standard v2 behaviour is unchanged."""
     ms = v1.analyze(bars, tf, refine_bars=refine_bars, min_stop=min_stop)
-    all_cands = generate_candidates(ms, context, entry_models=entry_models)
+    all_cands = generate_candidates(ms, context, entry_models=entry_models, min_stop=min_stop)
     gated, candidates, cand_info = [], [], []
     for c in all_cands:
         cand_info.append(c.to_dict())

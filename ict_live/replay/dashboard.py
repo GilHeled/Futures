@@ -652,7 +652,7 @@ function _candCard(c){
       + (c.reasons||[]).map(r=>`<li>${esc(r)}</li>`).join('') + `</ul></div>`;
   return `<div class="ccard ${st}"><div class=ccard-hd>${dpill}`
        + `<span class="cstate ${c.state}">${c.state}</span>`
-       + `<span class=emodel title="execution model · lifecycle (common state: ${eo?_candEsc(eo.state):'—'})">${_candEsc((c.entry_model||'fvg')+(eo&&eo.lifecycle?' · '+eo.lifecycle:''))}</span>`
+       + (eo?`<span class=emodel title="execution model · lifecycle (common state: ${_candEsc(eo.state)})">${_candEsc(eo.model+(eo.lifecycle?' · '+eo.lifecycle:''))}</span>`:'')
        + `<span class=ccard-gate>${badge}</span></div>`
        + `${chain}<div class=cfacts>${facts}</div>${rblock}</div>`;
 }

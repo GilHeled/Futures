@@ -116,7 +116,21 @@ DEFAULT_MODELS: tuple[str, ...] = ("fvg",)          # only FVG is on by default
 _FVG_STATUS = {"unfilled": "waiting", "touched": "valid", "mitigated": "mitigated"}
 
 
-def fvg_entries(disp, ms) -> list:
+def detect(model: str, disp, mss, ms, direction) -> list:
+    """Ask a model for its entries on one displacement leg — the engine calls THIS, never a
+    model-specific function. Returns [] for models without a detector (planned)."""
+    fn = REGISTRY.get(model, {}).get("detect")
+    return fn(disp, mss, ms, direction) if fn else []
+
+
+def validate(model: str, entry: Entry, geom: dict, context) -> tuple:
+    """Optional MODEL-SPECIFIC validation beyond the universal geometry checks in assemble(). Returns
+    (ok, reason). Default (no validator) = (True, "")."""
+    fn = REGISTRY.get(model, {}).get("validate")
+    return fn(entry, geom, context) if fn else (True, "")
+
+
+def fvg_entries(disp, mss, ms, direction) -> list:
     """The FVG entry(ies) on one displacement leg, as generic Entry objects. Sources v1's frozen FVG
     detector (`ms.ranked_fvgs`, linked to the displacement); prefers an unmitigated gap. Entry ref =
     the gap CE (B8); invalidation = the far edge of the gap."""

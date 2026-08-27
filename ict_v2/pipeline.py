@@ -17,9 +17,26 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Optional
 
+from datetime import timezone
+
 from ict_live.engine import pipeline as v1        # frozen v1 engine, read-only
+from ict_live.market import sessions as v1_sessions   # ET/DST-safe session+killzone membership (read-only)
 from ict_v2 import align
 from ict_v2 import entry_models as EM              # pluggable execution/entry models (FVG + course set)
+
+
+# ---- sessions / killzones (METHODOLOGY §11, lesson 5) — CONTEXT, never a gate (§1 HTF-is-context) ---
+def session_of(dt):
+    """(session, killzone) of a timestamp, ET/DST-correct. session ∈ {asia, london_active, ny_am,
+    ny_pm, ""}; killzone is the active TRADING killzone (london_active/ny_am/ny_pm) or "". Naive
+    datetimes are assumed UTC (mirrors live `_et_iso`) so the ET conversion is correct. Reuses v1's
+    frozen `market.sessions`; the course tracks these windows for SIGNIFICANCE/timing, not as a veto."""
+    if dt is None:
+        return "", ""
+    if getattr(dt, "tzinfo", None) is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    windows = v1_sessions.active_windows(dt)                 # windows don't overlap → 0 or 1
+    return (windows[0] if windows else ""), (v1_sessions.killzone(dt) or "")
 
 
 # ---- the three layers -------------------------------------------------------------------------
@@ -166,6 +183,8 @@ class Candidate:
     reasons: list = field(default_factory=list)   # EXPLICIT reasons it did not fully validate (empty ⇒ passed)
     checks: list = field(default_factory=list)    # the ordered pipeline (sweep→…→gate) w/ per-step status
     setup: object = None                   # the assembled v1 Setup, if it reached one
+    session: str = ""                      # session window of the manipulation (§11 context; "" if none)
+    killzone: str = ""                     # trading killzone of the manipulation (london_active/ny_am/ny_pm)
 
     def to_dict(self) -> dict:
         def px(x):
@@ -184,6 +203,7 @@ class Candidate:
             "sweep": None if self.sweep is None else {"pool": px(getattr(self.sweep, "pool_price", None)),
                                                       "extreme": px(getattr(self.sweep, "extreme", None))},
             "mss_state": None if self.mss is None else getattr(self.mss, "state", None),
+            "session": self.session, "killzone": self.killzone,   # §11 context (lesson 5)
             "actionable": self.actionable, "passed": self.passed, "reasons": list(self.reasons),
             "entry_model": self.entry_model,
             "entry_obj": (self.entry_obj.to_dict() if self.entry_obj is not None else None),  # common contract
@@ -318,12 +338,14 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
         reason = {"swept": "Incomplete — no displacement off the manipulation yet",
                   "displaced": "Incomplete — no market-structure shift (MSS) yet",
                   "mss": "Incomplete — structure shifted, no entry yet"}[state]
+        sess, kz = session_of(getattr(sw, "time", None))
         return Candidate(direction=direction, state=state, status="incomplete", checks=checks,
                          sweep=sw, displacement=disp, mss=mss, entry_model="", entry_obj=None,
                          dealing_range=dr, pd_location=None, objective=objective,
                          entry=None, stop=getattr(sw, "extreme", None),
                          target=getattr(objective, "price", None), rr=None, rr_quality=None,
-                         actionable=False, passed=False, reasons=[reason], setup=None)
+                         actionable=False, passed=False, reasons=[reason], setup=None,
+                         session=sess, killzone=kz)
 
     cands = []
     for r in ms.ranked_sweeps:                                           # anchor: the manipulation
@@ -385,12 +407,14 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
             setup_ns = SimpleNamespace(id=entry.id, direction=direction, entry=E, stop=S, target=tgt,
                                        rr=rr, actionable=actionable, reject_reason=geom["reject"],
                                        depends_on=(entry.id,))
+            sess, kz = session_of(getattr(sw, "time", None))
             cands.append(Candidate(direction=direction, state=state, status=status, checks=checks,
                                    sweep=sw, displacement=disp, mss=mss,
                                    entry_model=entry.model, entry_obj=entry,
                                    dealing_range=dr, pd_location=(context.zone(E) if context else None),
                                    objective=obj, entry=E, stop=S, target=tgt, rr=rr, rr_quality=quality,
-                                   actionable=actionable, passed=passed, reasons=reasons, setup=setup_ns))
+                                   actionable=actionable, passed=passed, reasons=reasons, setup=setup_ns,
+                                   session=sess, killzone=kz))
     return cands
 
 

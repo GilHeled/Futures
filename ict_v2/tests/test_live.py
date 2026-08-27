@@ -66,6 +66,8 @@ def test_snapshot_is_persistable(tmp_path):
                                   "refine": None, "anchor": None}     # refine + anchor OFF by default
     assert "setup" in snap and "confirmation" in snap and "execution" in snap
     assert snap["updated"]["1m"] is not None
+    assert "session" in snap and "killzone" in snap                     # §11 current-session context
+    assert snap["session"] in {"asia", "london_active", "ny_am", "ny_pm", ""}
     p = tmp_path / "v2_state.json"
     v.save(p)
     reloaded = json.loads(p.read_text())

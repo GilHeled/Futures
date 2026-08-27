@@ -172,6 +172,9 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
    background:var(--panel2);color:var(--mut);border:1px solid var(--line);white-space:nowrap}
  .v2dec.long{color:var(--long);background:var(--long-bg);border-color:transparent}
  .v2dec.short{color:var(--short);background:var(--short-bg);border-color:transparent}
+ .v2sess{border-radius:999px;padding:2px 9px;font-size:10px;font-weight:700;letter-spacing:.03em;
+   background:var(--panel2);color:var(--mut);border:1px solid var(--line);white-space:nowrap}
+ .v2sess.kz{color:var(--accent,#c8a24a);border-color:var(--accent,#c8a24a)}   /* active trading killzone */
  .modal{position:fixed;inset:0;background:#000a;display:none;z-index:50;padding:22px}
  .modal.on{display:flex} .modal-box{background:var(--panel);border:1px solid var(--line);border-radius:14px;
    margin:auto;width:min(1120px,96vw);height:90vh;display:flex;flex-direction:column;overflow:hidden}
@@ -597,11 +600,13 @@ function v2Tables(rep){
     const lastHtml=lst?`<span class="lastpx ${lst.dir||''}">${num(lst.price)}<i>${larr}</i></span>`:'';
     // direction: when there IS a trade the decision pill already shows it; otherwise show the 4H bias
     const biasHtml=(execSide==='flat'&&c.bias)?`<span class="dirtag ${biasSide}">${c.bias.toUpperCase()}</span>`:'';
+    // current session / killzone (§11, lesson 5) — CONTEXT only, never a gate
+    const sessHtml=s.session?`<span class="v2sess${s.killzone?' kz':''}" title="current session (ET)${s.killzone?' · trading killzone — lesson 5':''}">${_sessName(s.session)}${s.killzone?' ⏱':''}</span>`:'';
     const execLine=top?`${top.direction.toUpperCase()} entry ${num(top.entry)} · stop ${num(top.stop)} · target ${num(top.target)}${top.ltf_confirmed?' · ✓':''}`:fmt(e.decision);
     const gline=(layer,x)=>`<button type=button class=candbtn onclick="openCandidates('${sym}','${layer}')"><b class=g-pass>${fmt(x.passed)}</b> passed<i></i><b class=g-inc>${fmt(x.incomplete)}</b> incomplete<i></i><b class=g-rej>${fmt(x.rejected)}</b> rejected</button>`;
     return `<div class="ticket ${execSide}">
       <div class="thead v2head"><span class=sym title="${sym}">${sym.includes(':')?sym.split(':')[1]:sym}</span>${lastHtml}
-        <span class=thead-right>${biasHtml}<span class="v2dec ${execSide}">${dec}</span></span></div>
+        <span class=thead-right>${sessHtml}${biasHtml}<span class="v2dec ${execSide}">${dec}</span></span></div>
       <div class=reads>
         <div class="read ${biasSide}"><div class=rhd><span class=rsy>4H</span><span class=rnn>context</span></div>
           <div class=why><span class=wc>bias <b>${fmt(c.bias)}</b></span>${c.anchor_tf?`<span class=wc>${c.anchor_tf}-anchor <b>${fmt(c.anchor_bias||'neutral')}</b></span>`:''}<span class=wc>range <b>${drs}</b></span><span class=wc>draw <b>${objs}</b></span></div>
@@ -624,6 +629,7 @@ async function pollV2(){
   catch(e){$('#v2-body').innerHTML='<div class="card mut">v2 (experimental) service not reachable — start it with <code>python -m ict_v2.serve</code>.</div>';}
 }
 function _candEsc(t){return (t||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
+function _sessName(x){return ({asia:'Asia',london_active:'London',ny_am:'NY-AM',ny_pm:'NY-PM'})[x]||'—';}
 function _candCard(c){
   const esc=_candEsc;
   const dpill=`<span class="cdir ${c.direction==='long'?'long':'short'}">${(c.direction||'').toUpperCase()}</span>`;
@@ -642,9 +648,10 @@ function _candCard(c){
   const rrq=c.rr_quality; // RR is a QUALITY grade, not a gate: low/good/high (reject only ≤1)
   const rrtxt=c.rr==null?'—':num(c.rr)+(rrq&&rrq!=='reject'?` <b class=rrq-${rrq}>${rrq}</b>`:'');
   const eo=c.entry_obj||null;   // the generic entry contract (model-agnostic)
+  const sesstxt=c.session?(_sessName(c.session)+(c.killzone?' ⏱':'')):'—';   // session of the manipulation (§11)
   const facts=[['entry',num(c.entry)],['stop',num(c.stop)],['target',num(c.target)],
                ['RR',rrtxt],['P/D',c.pd_location||'—'],['draw',objtxt],
-               ['inval',eo?num(eo.invalidation):'—']]
+               ['inval',eo?num(eo.invalidation):'—'],['session',sesstxt]]
     .map(([k,v])=>`<span class=cfact><i>${k}</i>${v}</span>`).join('');
   const rblock=st==='passed'
     ? '<div class="creason ok">All checks passed — promoted to the next stage.</div>'

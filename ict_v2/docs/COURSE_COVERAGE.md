@@ -92,10 +92,12 @@ The W/D/4H→1H→15m→1m role split *is* v2's spine.
 - v2: ranked sweeps are the candidate anchors. DB: candidate list + per-item reasons.
 - **Gap:** name & expose the AMD phase per candidate; consolidation/accumulation detector.
 
-### 11. Sessions / killzones — `[COURSE map]`+`[NEC]` (§11, lesson 5) — 🟡 Partial (v1 done, v2 not wired)
-- v1 ✅: `market/sessions.py` (`in_session`, `killzone`, DST-safe) + `config.SESSIONS` (Asia/London/NY-AM/NY-PM, ET); session-day used by lifecycle expiry.
-- v2 ❌: **not wired** — no killzone context/gating on the cascade, session not shown on the V2 tab.
-- **Gap:** surface the active session/killzone in v2 context + DB (course uses it for significance & timing, even if not a hard veto).
+### 11. Sessions / killzones — `[COURSE map]`+`[NEC]` (§11, lesson 5) — ✅ Implemented (as context)
+- v1 ✅: `market/sessions.py` (`active_windows`, `in_session`, `killzone`, DST-safe) + `config.SESSIONS` (Asia/London/NY-AM/NY-PM, ET).
+- v2 ✅: `pipeline.session_of(dt)` (`pipeline.py`, reuses v1, naive→UTC normalized) → `(session, killzone)`; every `Candidate` tagged `.session`/`.killzone` (of the manipulation) in both `_partial` and full paths; `to_dict` serializes them; live `snapshot()` adds the **current** `session`/`killzone` (`live.py`).
+- DB ✅: current-session chip in each V2 ticket header (`.v2sess`, highlighted when a trading killzone `.kz`); per-candidate "session" fact in the drill-down card (`_candCard`).
+- ℹ️ **Context, not a gate** — faithful to §11 (significance/timing) and §1 (HTF is context, not a veto). The stricter "entries only inside killzones" rule (faithful §5, lesson 5) is deferred to the **course-filter layer** (see §16 resolution), where it will be an optional named filter, not structural invalidation.
+- Verified: `test_session_and_killzone_context` (DST-correct summer/winter; candidate tagging), `test_snapshot_is_persistable` (snapshot keys).
 
 ### 12. Sweep / manipulation — `[COURSE]` (§12) — ✅ Implemented
 - v1: `manipulation.py:41 detect_sweeps` — wick-through + close-back rejection; keeps **pool_price / bar_index / extreme separate** (`Sweep:27`); first-penetration via swing_liquidity; ranked by rejection strength (`pipeline.py:48`).
@@ -117,12 +119,19 @@ The W/D/4H→1H→15m→1m role split *is* v2's spine.
 - v2: `S = sweep_extreme`; degenerate reject in `assemble`. DB: stop fact.
 - ℹ️ `STOP_BUFFER` is a **DEFERRED** sentinel (needs instrument tick/noise analysis) — deliberately not guessed.
 
-### 16. Targets & R:R — `[COURSE]` FROZEN B4 (§16) — 🟡 Partial + ⚠️ deliberate divergence
-- v1 ✅: nearest opposing active ERL target (`setup.py:70`); **`MIN_RR=3.0` hard reject** (`setup.py:92`) — the course's "minimum 1:3 liquidity opportunity".
-- v2 ⚠️ **divergence**: RR is demoted to a **quality grade** (reject/low/good/high; only **RR ≤ 1 rejects**) — `rr_quality` (`pipeline.py:83`), per your earlier explicit instruction that the hard 3R gate should not carry into v2. **This is a conscious departure from §16's ≥1:3 rule and must be reconciled** (see Divergences below).
-- 🟡 The **full target hierarchy** (opposing ERL · PDH/PDL · PWH/PWL · session H/L · equal H/L · significant 15m+ swing · HTF) is **not walked** — only the nearest active ERL is used.
-- DB: target + RR + quality badge (`dashboard.py:642`).
-- **Gaps:** (a) reconcile the min-1:3 rule, (b) implement the ordered target hierarchy.
+### 16. Targets & R:R — `[COURSE]` FROZEN B4 (§16) — 🟡 Partial (R:R architecture RESOLVED)
+- v1 ✅: nearest opposing active ERL target (`setup.py:70`); **`MIN_RR=3.0` hard reject** (`setup.py:92`).
+- **RESOLVED — three-concern separation (user decision 2026-08-27).** Structural validity, quality
+  metrics, and course filters are **separate** concerns and must not be mixed. R:R is a **quality
+  metric**, never a structural invalidation. The course's "minimum 1:3" is a **course filter**, so a
+  setup reads: *Structure ✅ · Course filter (≥3R) ❌ · Recommendation: Skip*. v2 already keeps RR as a
+  quality grade (`rr_quality`, `pipeline.py`; only RR≤1 blocks — itself a geometry sanity floor, not
+  the 3R rule). **To build (filter layer):** an explicit, separate **course-filter stage** (first
+  filter = ≥3R, lesson/§16), with the dashboard distinguishing Structure / Filters / Recommendation.
+- 🟡 The **full target hierarchy** (opposing ERL · PDH/PDL · PWH/PWL · session H/L · equal H/L ·
+  significant 15m+ swing · HTF) is **not walked** — only the nearest active ERL is used.
+- DB: target + RR + quality badge (`dashboard.py`).
+- **Gaps:** (a) build the course-filter layer (≥3R as a filter, + killzone filter from §11), (b) the ordered target hierarchy.
 
 ### 17. Daily bias & 4H context labels — `[COURSE]`+`[RES]` (§17, lesson 8/15) — 🟡 Partial
 - ✅: bias computed; **HTF is not a hard veto** (`config.HTF_IS_VETO=False`); optional D/W anchor downgrades counter-trend 4H to neutral (`pipeline.py:280`).
@@ -164,22 +173,24 @@ The W/D/4H→1H→15m→1m role split *is* v2's spine.
 2. IRL classification / ERL-IRL labelling (§4)
 3. Fib ladder 0/0.62/0.79/1 (§6)
 4. Explicit AMD phase + consolidation/accumulation detector (§10)
-5. Session/killzone context wired into v2 + shown on DB (§11)
+5. ~~Session/killzone context wired into v2 + shown on DB (§11)~~ ✅ **DONE 2026-08-27**
 6. HTF context labels — aligned / counter / possible-manipulation / possible-distribution (§17)
 7. NWOG detector (§18)
 8. ORG detector (§19)
 9. Intraday trend-change / HTF-transition read (§21)
 10. Ordered target hierarchy (§16)
-11. A/B/C quality grade — or a reasoned decision to keep the RR grade (§22)
+11. Course-filter layer (§16 ≥3R + §11 killzone) with Structure/Filter/Recommendation separation
+12. A/B/C quality grade — or a reasoned decision to keep the RR grade (§22)
 
 **🟡 Partial (surface / complete in v2 + DB):**
 - Market-structure read (HH/HL, reversal state) surfaced in v2/DB (§2)
 - Full liquidity pool set + nested dealing-range hierarchy surfaced (§3, §6)
 
-**⚠️ Deliberate divergences to reconcile (course vs current v2):**
-- **§16 min 1:3 R:R.** Course = hard ≥1:3 reject; v2 = RR-as-quality (only ≤1 rejects), per your earlier
-  instruction. Faithful-completeness now reopens this: keep as documented divergence, restore the gate,
-  or make it a configurable mode? (Ripples into §22's grade.)
+**✅ Resolved architectural decisions:**
+- **§16 min 1:3 R:R (resolved 2026-08-27).** The engine separates **structural validity** / **quality
+  metrics** (RR, P/D, liquidity distance) / **course filters**. R:R is a quality metric and never a
+  structural invalidation; the course's ≥3R becomes a **course filter** → *Structure ✅ · Course filter
+  (≥3R) ❌ · Recommendation: Skip*. Filter layer still to be built (§16 backlog item 11).
 
 **✅ Implemented & faithful:** §1 MTF cascade, §5 premium/discount, §7 FVG lifecycle, §8 displacement,
 §9 MSS, §12 sweep, §13 setup sequence, §14 entry, §15 stop, §20 NO-TRADE.
@@ -195,8 +206,8 @@ same-P/D-zone FVG tie-break; multi-bar displacement/reclaim; STOP_BUFFER; NWOG/O
 Ordered by faithfulness value × low risk (each is a self-contained increment; no engine `if model==`;
 no PnL tuning; verify against the spec, not by search):
 
-1. **Sessions/killzones into v2 + DB** (§11) — v1 already computes it; just wire context + display. Cheapest, high visibility.
-2. **HTF context labels** (§17) — aligned/counter/possible-manipulation/possible-distribution from data v2 already has. Pure labelling.
+1. ~~**Sessions/killzones into v2 + DB** (§11)~~ ✅ **DONE 2026-08-27** — context tagged on every candidate + current-session chip on the V2 tab; killzone *filter* deferred to the filter layer.
+2. **HTF context labels** (§17) — aligned/counter/possible-manipulation/possible-distribution from data v2 already has. Pure labelling. ← **NEXT**
 3. **Equal-H/L clustering + pools-as-zones** (§3) and **surface the full pool set + nested ranges + fib ladder** (§3/§6) — liquidity/range completeness.
 4. **NWOG & ORG detectors** (§18/§19) — new IRL context arrays; tracked, shown, usable as targets.
 5. **IRL classification** (§4) — depends on 3+4 (needs the internal arrays first).

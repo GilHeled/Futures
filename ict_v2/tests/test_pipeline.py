@@ -105,6 +105,30 @@ def test_engine_has_no_model_specific_branching():
         assert needle not in lowered, f"engine branches on a model name: {needle!r}"
 
 
+def test_session_and_killzone_context(monkeypatch):
+    """METHODOLOGY §11 (lesson 5): track Asia/London/NY-AM/NY-PM, ET/DST-correct, as CONTEXT (not a
+    gate). session_of maps a timestamp to (session, killzone); every candidate is tagged with the
+    session/killzone of its manipulation; the fields serialize for the dashboard."""
+    from datetime import datetime, timezone
+    utc = timezone.utc
+    # 2026-06-01 is EDT (UTC-4): 09:00 ET = 13:00 UTC (NY-AM), 03:00 ET = 07:00 UTC (London),
+    # 18:00 ET = 22:00 UTC (Asia, not a trading killzone), 12:00 ET = 16:00 UTC (between windows).
+    assert v2.session_of(datetime(2026, 6, 1, 13, 0, tzinfo=utc)) == ("ny_am", "ny_am")
+    assert v2.session_of(datetime(2026, 6, 1, 7, 0, tzinfo=utc)) == ("london_active", "london_active")
+    assert v2.session_of(datetime(2026, 6, 1, 22, 0, tzinfo=utc)) == ("asia", "")   # asia ≠ killzone
+    assert v2.session_of(datetime(2026, 6, 1, 16, 0, tzinfo=utc)) == ("", "")        # no window
+    # naive datetimes are assumed UTC (mirrors live _et_iso), so ET conversion is still correct
+    assert v2.session_of(datetime(2026, 6, 1, 13, 0)) == ("ny_am", "ny_am")
+    assert v2.session_of(None) == ("", "")
+    # every candidate carries the session/killzone of its manipulation, and it serializes
+    st = v2.demo_state(seed=7)
+    allowed = {"asia", "london_active", "ny_am", "ny_pm", ""}
+    for c in st.setup.cand_info:
+        assert c["session"] in allowed and c["killzone"] in {"london_active", "ny_am", "ny_pm", ""}
+        if c["killzone"]:
+            assert c["killzone"] == c["session"]           # a trading killzone is that same window
+
+
 def test_four_layer_cascade_runs():
     st = v2.demo_state(seed=7)
     assert st.context.tf == "4H" and st.setup.tf == "1H" and st.confirmation.tf == "15m"

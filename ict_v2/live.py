@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 from ict_live.market.bar_builder import BarBuilder
 from ict_v2.engine import MTFEngine
 from ict_v2 import entry_models as EM
+from ict_v2.pipeline import session_of              # ET/DST-safe session+killzone (§11, context)
 
 _WINDOW = 240          # context/setup/confirmation structural window
 _EXEC_WINDOW = 400     # recent 1m bars for the execution trigger
@@ -137,9 +138,12 @@ class V2Live:
         tb = self.buf.get(self.trigger_tf) or []                  # last 1m bar = the latest price
         last = tb[-1] if tb else None
         last_dir = None
+        sess = kz = ""
         if last is not None:
             last_dir = "up" if last.close > last.open else "down" if last.close < last.open else "flat"
+            sess, kz = session_of(last.close_time)          # current session/killzone (§11 context)
         return {
+            "session": sess, "killzone": kz,                # "it is now …" — context, not a gate
             "timeframes": {"context": self.context_tf, "setup": self.setup_tf,
                            "confirm": self.confirm_tf, "trigger": self.trigger_tf,
                            "refine": self.refine_tf, "anchor": self.anchor_tf},

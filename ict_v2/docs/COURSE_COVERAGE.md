@@ -218,13 +218,17 @@ levels (Lesson 11)". No new detector, no test (no new logic).
 - v1 ✅: nearest opposing active ERL target (`setup.py:70`); **`MIN_RR=3.0` hard reject** (`setup.py:92`).
 - ✅ **RESOLVED + BUILT — the four-layer semantic model (2026-08-27, `ict_v2/recommend.py`).** Structure
   / Quality / Course-Filters / Recommendation are now separate. R:R is a **quality** metric (never
-  structural); the course's ≥1:3 is a **course filter** (`min_rr=3.0`), so a setup reads exactly
-  *Structure ✅ · Course filter (≥3R) ❌ · Recommendation SKIP*. RR no longer gates structure at all
+  structural); a **min-R:R course filter** decides take/skip, so a setup reads exactly
+  *Structure ✅ · Course filter (≥R) ❌ · Recommendation SKIP*. RR no longer gates structure at all
   (the old RR≤1 block is gone). Dashboard shows all four layers per candidate.
+- ⚠️ **The R:R number is NOT course-specified.** Verified against the raw lessons (2026-08-27): they give
+  NO numeric R:R — only Lesson 9's qualitative "better risk/reward in premium/discount". The old 3.0 came
+  from the distilled §16 / FROZEN B4 (a project choice), NOT the course. `COURSE_FILTERS["min_rr"]` is a
+  tunable take/skip threshold; **set to 2.0 by the user (2026-08-27, "around 2R")**. Not a fidelity issue.
 - 🟡 The **full target hierarchy** (opposing ERL · PDH/PDL · PWH/PWL · session H/L · equal H/L ·
   significant 15m+ swing · HTF) is **not walked** — only the nearest active ERL is used.
 - DB: target + RR + quality badge (`dashboard.py`).
-- **Gaps:** (a) build the course-filter layer (≥3R as a filter, + killzone filter from §11), (b) the ordered target hierarchy.
+- **Gaps:** the ordered target hierarchy (typed-pool data merge, deferred).
 
 ### 17. Daily bias & 4H context labels — `[COURSE]`+`[RES]` (§17, lesson 8/15) — 🟡 Partial (alignment labels done)
 - ✅ Labels: `context_label(direction, bias)` → `htf-aligned` / `counter-context` / `neutral-context`
@@ -337,10 +341,11 @@ Reading the PDFs surfaced concrete mechanical rules the 20-section distillation 
 - Full liquidity pool set + nested dealing-range hierarchy surfaced (§3, §6)
 
 **✅ Resolved architectural decisions:**
-- **§16 min 1:3 R:R (resolved 2026-08-27).** The engine separates **structural validity** / **quality
+- **§16 R:R (resolved 2026-08-27; floor set to ~2R, and the raw course specifies no number).** The engine separates **structural validity** / **quality
   metrics** (RR, P/D, liquidity distance) / **course filters**. R:R is a quality metric and never a
-  structural invalidation; the course's ≥3R becomes a **course filter** → *Structure ✅ · Course filter
-  (≥3R) ❌ · Recommendation: Skip*. Filter layer still to be built (§16 backlog item 11).
+  structural invalidation; a min-R:R **course filter** decides take/skip → *Structure ✅ · Course filter
+  (≥R) ❌ · Recommendation: Skip*. The raw course specifies no R:R number (only qualitative); the floor
+  is a tunable project threshold, **user-set to ~2R (2026-08-27)**, not course methodology.
 
 **✅ Implemented & faithful:** §1 MTF cascade, §5 premium/discount, §7 FVG lifecycle, §8 displacement,
 §9 MSS, §12 sweep, §13 setup sequence, §14 entry, §15 stop, §20 NO-TRADE.

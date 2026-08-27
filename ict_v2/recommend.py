@@ -16,8 +16,12 @@ this module owns the FILTER and RECOMMENDATION logic.
 from __future__ import annotations
 
 # Course-faithful defaults. Each is a FILTER (→ SKIP), NEVER structural (→ invalid).
+# NOTE on min_rr: the RAW lessons give NO numeric R:R (only Lesson 9's qualitative "better risk/reward
+# in premium/discount"). The old 3.0 came from the distilled METHODOLOGY §16 / FROZEN B4 — a PROJECT
+# choice, not course methodology. Set to 2.0 by the user (2026-08-27): "around 2R". It is a tunable
+# take/skip threshold, not a course rule; RR itself remains a quality metric (rr_quality grade).
 COURSE_FILTERS = {
-    "min_rr": 3.0,      # §16 / FROZEN B4 (Lesson 8 R:R): the course's minimum 1:3 — a take/skip rule, not validity
+    "min_rr": 2.0,      # user-set take/skip R:R floor (~2R); NOT a course-specified number
     "killzone": True,   # §11 / Lesson 5: the manipulation should occur inside a trading killzone
 }
 

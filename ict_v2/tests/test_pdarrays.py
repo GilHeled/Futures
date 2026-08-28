@@ -121,3 +121,97 @@ def test_org_none_before_open_or_without_prior_day():
     pre = [_bar15(d1.replace(hour=16, minute=0), 100, 100),
            _bar15(d2.replace(hour=8, minute=0), 150, 150)]    # 08:00, before 09:30
     assert pdarrays.org(pre) is None
+
+
+# ---- PDArray object + contextual role (Lessons 10-12): LIFECYCLE ≠ ROLE ------------------------
+from types import SimpleNamespace
+
+
+def _fvg(direction="bullish", top=105.0, bottom=100.0, status="unfilled", tf="1m"):
+    return SimpleNamespace(id="F1", direction=direction, top=top, bottom=bottom,
+                           ce=(top + bottom) / 2.0, status=status, tf=tf)
+
+
+def test_tf_class_lesson12_scoping():
+    assert pdarrays.tf_class("1m") == "LTF" and pdarrays.tf_class("5m") == "LTF"
+    assert pdarrays.tf_class("15m") == "MTF" and pdarrays.tf_class("1H") == "MTF"
+    assert pdarrays.tf_class("4H") == "HTF" and pdarrays.tf_class("D") == "HTF"
+
+
+def test_from_fvg_adapter_preserves_lifecycle_and_geometry():
+    a = pdarrays.from_fvg(_fvg(top=110, bottom=100, status="touched", tf="15m"))
+    assert (a.kind, a.tf, a.polarity, a.status) == ("fvg", "15m", "bullish", "touched")
+    assert a.top == 110 and a.bottom == 100 and a.ce == 105 and a.role == ""   # role not yet assigned
+
+
+def test_from_nwog_org_are_nondirectional_with_closed_as_mitigated():
+    n = pdarrays.from_nwog({"top": 10, "bottom": 8, "mid": 9, "closed": True})
+    o = pdarrays.from_org({"top": 5, "bottom": 4, "mid": 4.5, "closed": False})
+    assert (n.kind, n.polarity, n.status) == ("nwog", "", "mitigated")
+    assert (o.kind, o.polarity, o.status) == ("org", "", "unfilled")
+
+
+def test_role_ltf_discount_is_entry_even_when_unfilled_long():
+    # user correction #1: an UNFILLED 1m FVG in the retracement (discount) area is already the
+    # planned ENTRY — role must NOT be read off status.
+    a = pdarrays.role_of(pdarrays.from_fvg(_fvg(status="unfilled", tf="1m")),
+                         direction="long", zone="discount")
+    assert a.role == "entry" and a.role_basis["lifecycle"] == "unfilled"
+
+
+def test_role_htf_draw_side_is_draw_long():
+    a = pdarrays.role_of(pdarrays.from_fvg(_fvg(tf="4H")), direction="long", zone="premium")
+    assert a.role == "draw" and a.role_basis["side"] == "draw"
+
+
+def test_role_mtf_retrace_is_reaction_not_entry():
+    # Lesson 12 limits ENTRY to 5m/1m: a 15m FVG in the retracement zone is reaction (quality), not entry
+    a = pdarrays.role_of(pdarrays.from_fvg(_fvg(tf="15m")), direction="long", zone="discount")
+    assert a.role == "reaction"
+
+
+def test_role_short_mirrors_long():
+    entry = pdarrays.role_of(pdarrays.from_fvg(_fvg(direction="bearish", tf="1m")),
+                             direction="short", zone="premium")
+    draw = pdarrays.role_of(pdarrays.from_fvg(_fvg(direction="bearish", tf="4H")),
+                            direction="short", zone="discount")
+    assert entry.role == "entry" and draw.role == "draw"
+
+
+def test_mitigated_fvg_inactive_but_closed_nwog_stays_reaction():
+    fvg = pdarrays.role_of(pdarrays.from_fvg(_fvg(status="mitigated", tf="1m")),
+                           direction="long", zone="discount")
+    nwog = pdarrays.role_of(pdarrays.from_nwog({"top": 10, "bottom": 8, "mid": 9, "closed": True}),
+                            direction="long", zone="premium")
+    assert fvg.role == "inactive"                 # spent FVG drops out
+    assert nwog.role == "reaction"                # Lesson 13: keep the marking after close
+
+
+def test_role_equilibrium_or_no_range_is_reaction():
+    a = pdarrays.role_of(pdarrays.from_fvg(_fvg(tf="4H")), direction="long", zone=None)
+    assert a.role == "reaction" and a.role_basis["side"] == "neutral"
+
+
+def test_role_basis_is_a_full_auditable_trace():
+    # every role decision must expose all dimensions + a human rule (no hidden methodology)
+    a = pdarrays.role_of(pdarrays.from_fvg(_fvg(status="touched", tf="1m")),
+                         direction="long", zone="discount", erl_irl="IRL")
+    b = a.role_basis
+    for k in ("tf_class", "dealing_range_position", "liquidity_class", "seeking_vs_reacting",
+              "side", "polarity", "lifecycle", "rule", "role"):
+        assert k in b, f"missing trace key {k}"
+    assert b["tf_class"] == "LTF" and b["dealing_range_position"] == "discount"
+    assert b["liquidity_class"] == "IRL" and b["seeking_vs_reacting"] == "reacting"   # touched → reacting
+    assert b["role"] == "entry" and a.role == "entry"
+    assert "Lesson 12" in b["rule"]                        # the rule cites the course
+
+
+def test_seeking_vs_reacting_tracks_lifecycle_not_role():
+    seek = pdarrays.role_of(pdarrays.from_fvg(_fvg(status="unfilled", tf="1m")),
+                            direction="long", zone="discount")
+    react = pdarrays.role_of(pdarrays.from_fvg(_fvg(status="touched", tf="1m")),
+                             direction="long", zone="discount")
+    # SAME role (entry) but DIFFERENT seeking/reacting — the two dimensions are independent
+    assert seek.role == react.role == "entry"
+    assert seek.role_basis["seeking_vs_reacting"] == "seeking"
+    assert react.role_basis["seeking_vs_reacting"] == "reacting"

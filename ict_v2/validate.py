@@ -124,6 +124,66 @@ def _simulate_one(row, bars_after, *, fill_bars=48, horizon_bars=288, target_r=N
     return None
 
 
+def _diagnose_one(row, bars_after, *, fill_bars=48, horizon_bars=288, target_r=2.0):
+    """Like _simulate_one but records the MECHANICS: MFE (max favourable excursion, R), MAE (max
+    adverse excursion, R), whether it hit target/stop, bars-to-fill, bars-to-exit. Diagnostic only —
+    no costs (we're analysing raw price behaviour, not net PnL)."""
+    d, entry, stop = row["direction"], row["entry"], row["stop"]
+    if None in (entry, stop):
+        return None
+    risk = abs(stop - entry)
+    if risk <= 0:
+        return None
+    tgt_px = (entry - target_r * risk) if d == "short" else (entry + target_r * risk)
+    filled_at = None
+    mfe = mae = 0.0
+    for i, b in enumerate(bars_after):
+        if filled_at is None:
+            if i >= fill_bars:
+                return None
+            if not (b.low <= entry <= b.high):
+                continue
+            filled_at = i
+        fav = (entry - b.low) / risk if d == "short" else (b.high - entry) / risk   # best case this bar
+        adv = (b.high - entry) / risk if d == "short" else (entry - b.low) / risk   # worst case this bar
+        mfe = max(mfe, fav); mae = max(mae, adv)
+        hit_stop = adv >= 1.0
+        hit_tgt = fav >= target_r
+        if hit_stop and hit_tgt:
+            return {"R": -1.0, "outcome": "stop", "mfe": mfe, "mae": mae, "fill": filled_at, "bars": i - filled_at, "row": row}
+        if hit_stop:
+            return {"R": -1.0, "outcome": "stop", "mfe": mfe, "mae": mae, "fill": filled_at, "bars": i - filled_at, "row": row}
+        if hit_tgt:
+            return {"R": target_r, "outcome": "target", "mfe": mfe, "mae": mae, "fill": filled_at, "bars": i - filled_at, "row": row}
+        if i - filled_at >= horizon_bars:
+            R = (entry - b.close) / risk if d == "short" else (b.close - entry) / risk
+            return {"R": R, "outcome": "time", "mfe": mfe, "mae": mae, "fill": filled_at, "bars": i - filled_at, "row": row}
+    return None
+
+
+def diagnose(symbol, start, end, *, tfs=("4H", "15m", "5m", "5m"), target_r=2.0, step_min=90):
+    """Enumerate MES setups (killzone off, armed=tradeable, min_stop) and return per-trade mechanics."""
+    from ict_live import config as _C
+    try:
+        ms = _C.min_stop_for(symbol)
+    except Exception:
+        ms = None
+    REC.configure(min_rr=2.0, killzone=False, require_retrace=False)
+    rows = enumerate_setups(symbol, start, end, want=("TAKE",), step_min=step_min, tfs=tfs, min_stop=ms)
+    REC.configure(min_rr=2.0, killzone=True, require_retrace=True)
+    import pandas as pd
+    bars5 = D.load_5m(symbol, start=(pd.Timestamp(start, tz="UTC") - pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+                      end=(pd.Timestamp(end, tz="UTC") + pd.Timedelta(days=5)).strftime("%Y-%m-%d"))
+    times = [b.open_time for b in bars5]
+    out = []
+    for r in rows:
+        j = bisect.bisect_right(times, r["time"])
+        rec = _diagnose_one(r, bars5[j:j + 400], target_r=target_r)
+        if rec is not None:
+            out.append(rec)
+    return out
+
+
 def simulate(symbol, start, end, *, tfs=("4H", "15m", "5m", "5m"), stage="setup",
              relaxed_retrace=True, min_rr=2.0, killzone=True, step_min=30, target_r=None,
              cost_dollars=0.0, min_stop=None):

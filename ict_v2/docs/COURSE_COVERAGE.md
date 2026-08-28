@@ -50,7 +50,7 @@ The W/D/4H→1H→15m→1m role split *is* v2's spine.
 - v1: TF roles/widths in `config.TF_ROLES`, `FRACTAL_WIDTH`; pipeline accepts `structural_by_tf`/`refine_bars` (`pipeline.py:155`).
 - v2: `analyze_mtf` (`pipeline.py:520`), `MTFEngine` (`engine.py:20`), live resampling (`live.py:56`); optional `refine_tf`=5m, `anchor_tf`=D/W.
 - DB: four stage rows per symbol (`dashboard.py:606`); anchor/refine in banner (`:577`).
-- ℹ️ Nuance: no literal per-candidate "signal TF" field; each stage's TF is implicit in its layer. **Minor gap** if you want it stamped on every candidate.
+- ✅ Per-candidate **`tf` stamp** (2026-08-28): every candidate now carries the literal timeframe its structure lives on (`Candidate.tf`, serialized, shown as a `TF` fact in the card) — chart-mappable; the earlier minor gap is closed.
 
 ### 2. Market structure — `[COURSE]` (§2, **Lesson 15 verified**) — ✅ Implemented (trend read surfaced)
 - Lesson 15 verified: uptrend = higher highs AND higher lows; downtrend = lower highs AND lower lows;
@@ -103,6 +103,12 @@ levels (Lesson 11)". No new detector, no test (no new logic).
 - v2 ✅: `HTFContext.erl_irl(price)` → `"ERL"`/`"IRL"` vs the dealing range. Every surfaced pool is
   tagged `loc` (`live.py`), and NWOG/ORG mids too; DB shows an `ERL n / IRL m` breakdown on the pools
   chip + `[ERL]/[IRL]` per pool in the tooltip. Verified `test_erl_irl_classification`.
+- ✅ **DRAW SELECTION IS NOW ERL/IRL CLASS-AWARE (2026-08-28, Lesson 10).** `align.next_draw()` decides
+  the liquidity **class first** (ERL taken → seek IRL; IRL/FVG rebalanced → seek ERL), then the objective
+  inside it. The ERL branch = the same opposing unswept pool as before (edge unchanged); the IRL branch
+  lets an **unfilled internal FVG become the objective** when no external pool remains (multi-candidate =
+  surfaced `[RES:irl_draw_tiebreak]`). The objective carries `klass` (ERL/IRL) + `array_kind`
+  (swing/fvg/nwog/org), shown on the DB draw fact. Verified `test_align` (ERL-preferred, IRL-fallback).
 
 ### 5. Premium / Discount — `[COURSE]` (§5, lesson 9) — ✅ Implemented
 - v1: `dealing_range.py:40 zone_of` (premium/discount/EQ, CE `:59`).
@@ -119,6 +125,19 @@ levels (Lesson 11)". No new detector, no test (no new logic).
 - v2 ✅ nested ranges: each cascade stage's dealing range (4H/1H/15m, `source_tf`-tagged) is exposed —
   `MTFSetup.dealing_range` + `snapshot.dealing_ranges`; DB renders a `ranges` row. Verified.
 - v1 basis: dealing range = most-recent completed opposing structural leg (`dealing_range.py:48`), each `source_tf`-tagged.
+
+> **FVG-AS-PD-ARRAY REDESIGN (2026-08-28) — the FVG is NO LONGER hard-coded as "the entry model".**
+> Re-verified against the RAW lessons: Lesson 12 titles the FVG "Support/Resistance — FVG candle" and
+> scopes its ENTRY use to 5m/1m only; Lesson 10 classes it as internal-range liquidity (IRL, a PD array);
+> Lesson 11 lists a higher-interval FVG among the levels price DRAWS TOWARD. So the FVG is a **role-neutral
+> PD array** whose ROLE is context-assigned (draw / reaction / entry / inactive) — LIFECYCLE (unfilled/
+> touched/mitigated) and ROLE are separate. `pdarrays.PDArray` + adapters (`from_fvg`/`from_nwog`/
+> `from_org`) + `role_of()` (tf_class × dealing-range position × direction → role; polarity surfaced, not
+> gated). Verified on real MES: the `entry` role appears **only at the LTF (5m)**, never on the 1H/15m
+> setup stages (Lesson 12 holding). Role assignment is FULLY AUDITABLE — `role_basis` carries the whole
+> decision trace (tf_class / dealing_range_position / liquidity_class ERL-IRL / seeking_vs_reacting /
+> side / polarity / lifecycle / human `rule` / role), surfaced in the snapshot JSON + DB tooltips. The
+> role is **surfaced, not yet a take/skip gate** — validate against real charts before gating.
 
 ### 7. FVG lifecycle & TF rules — `[COURSE]` (§7, **Lesson 12 verified**) — ✅ Implemented (one documented gap)
 > **Lesson 12 verified against the raw PDF.** Every rule matches our implementation: geometry (bullish
@@ -253,6 +272,9 @@ levels (Lesson 11)". No new detector, no test (no new logic).
   Friday-close edge, Lesson-12 convention; keeps 3 + old-unclosed>3wk). Surfaced `snapshot.context.nwog`
   (top/bottom/mid/closed/age); DB renders an `NWOG` row (closed struck-through). Runs off the 4H
   context buffer (~8 weeks). Verified `test_pdarrays.py` (detection, midpoint, closed, retention).
+- ✅ **Contextual ROLE (2026-08-28):** each NWOG now runs through `role_of` (Lessons 13/14 call it S/R +
+  magnet/**target** = a draw/reaction) and carries the same auditable `role`/`role_basis` trace as an
+  FVG, coloured + traced in the DB NWOG row tooltip. Surfaced only — not yet fed into target selection.
 
 ### 19. ORG (Opening Range Gap) — `[COURSE]` (§19, **Lesson 14**) — ✅ Implemented
 - Lesson 14 verified: ORG = gap between the **prior day's close (16:15 ET)** and the **current day's
@@ -262,6 +284,8 @@ levels (Lesson 11)". No new detector, no test (no new logic).
   'closed' = body close back through the prior-day-close edge). Surfaced `snapshot.context.org`; DB
   renders an `ORG` row with the 50% level. Runs off the 15m confirm buffer (09:30/16:15 land on 15m
   boundaries; ~2.5-day span). Verified `test_pdarrays.py` (midpoint 150 example, closed, guards).
+- ✅ **Contextual ROLE (2026-08-28):** ORG runs through `role_of` (Lesson 14 magnet/target) and carries
+  the auditable `role`/`role_basis` trace, coloured + traced in the DB ORG row tooltip. Surfaced only.
 
 ### 20. NO-TRADE is first-class — `[COURSE]` (§20) — ✅ Implemented
 - v1: `recommend` returns NO-TRADE with per-setup reject reasons (`setup.py:122`).

@@ -38,3 +38,35 @@ def test_liquidity_objective_none_when_no_pool_in_direction():
 def test_gate_setup_removed():
     """The old HTF veto is gone — HTF bias/premium-discount are context/quality now, never a gate."""
     assert not hasattr(align, "gate_setup")
+
+
+# ---- ERL/IRL class-aware draw selection (Lesson 10, user decision 2026-08-28) -----------------
+def _arr(ce, status="unfilled", kind="fvg"):
+    return SimpleNamespace(ce=ce, status=status, kind=kind)
+
+
+def test_next_draw_prefers_erl_when_opposing_pool_unswept():
+    ctx = _ctx("long", 150, [_pool("high", 210), _pool("low", 90)])
+    d = align.next_draw(ctx, "long", internal_arrays=[_arr(180)])
+    assert d.klass == "ERL" and d.kind == "high" and d.price == 210      # ERL wins the class decision
+    assert d.array_kind == "swing"
+
+
+def test_next_draw_falls_back_to_irl_when_no_opposing_erl():
+    # only sell-side external pools → no ERL draw for a long → seek internal rebalance (Lesson 10)
+    ctx = _ctx("long", 150, [_pool("low", 90)])
+    d = align.next_draw(ctx, "long", internal_arrays=[_arr(180), _arr(200)])
+    assert d.klass == "IRL" and d.array_kind == "fvg"
+    assert d.price == 180 and d.tiebreak_n == 2                          # nearest EQ on the draw side; [RES] surfaced
+
+
+def test_next_draw_irl_ignores_mitigated_and_wrong_side():
+    ctx = _ctx("long", 150, [_pool("low", 90)])
+    d = align.next_draw(ctx, "long", internal_arrays=[_arr(200, status="mitigated"), _arr(120)])
+    # 200 is mitigated (spent), 120 is on the discount (retrace) side → neither is a long draw
+    assert d is None
+
+
+def test_next_draw_none_when_no_class_yields_a_draw():
+    ctx = _ctx("long", 150, [_pool("low", 90)])
+    assert align.next_draw(ctx, "long", internal_arrays=None) is None

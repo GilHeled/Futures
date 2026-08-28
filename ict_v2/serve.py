@@ -72,13 +72,13 @@ class V2Service:
             for sym in list(store._bars.keys()):
                 live = self.lives.get(sym)
                 if live is None:
-                    mstop = None
-                    if self.refine_tf:                       # degenerate-stop floor only matters w/ refinement
-                        try:
-                            from ict_live import config as _C
-                            mstop = _C.min_stop_for(sym)
-                        except Exception:
-                            mstop = None
+                    # degenerate-stop floor per instrument: rejects tiny-stop setups so the execution
+                    # monitor never surfaces an absurd-RR order (e.g. a 0.25-pt stop with a 290-pt target).
+                    try:
+                        from ict_live import config as _C
+                        mstop = _C.min_stop_for(sym)
+                    except Exception:
+                        mstop = None
                     live = self.lives.setdefault(sym, V2Live(
                         self.context_tf, self.setup_tf, self.confirm_tf, self.trigger_tf,
                         refine_tf=self.refine_tf, min_stop=mstop, anchor_tf=self.anchor_tf,

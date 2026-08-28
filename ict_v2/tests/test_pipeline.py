@@ -250,7 +250,7 @@ def test_full_pool_set_and_nested_ranges_surfaced():
                         min(o, c) - (x % 4) * 0.4, c, 100.0)); px = c
     v = v2live.run_bars(bars)
     snap = v.snapshot()
-    ctx = snap["context"]
+    ctx = snap["strategic"]                               # H4 strategic context
     assert ctx is not None
     assert isinstance(ctx["pools"], list) and isinstance(ctx["fib"], list)  # full set + ladder present
     assert "dealing_ranges" in snap and isinstance(snap["dealing_ranges"], list)

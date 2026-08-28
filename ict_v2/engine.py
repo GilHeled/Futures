@@ -1,94 +1,161 @@
-"""ICT v2 — stateful four-layer cascade with per-timeframe CADENCE, mapped to the course workflow:
+"""ICT v2 — cascade organized by the RESPONSIBILITY of each timeframe (user redesign 2026-08-28):
 
-    context 4H  ->  setup 1H  ->  confirmation 15m  ->  execution 1m
+    4H  = STRATEGIC context   (bias, dealing range, P/D, IRL/ERL, pools, HTF PD-arrays, fib, draws)
+    1H  = INTRADAY context    (confirm bias | establish intraday direction; more contextual PD-arrays)
+          → SCENARIO LAYER: maintain the top 2-3 stable market theses from ALL liquidity objectives
+    15m = EXECUTION setup     (monitor the scenarios: is one retracing into its entry zone?)
+    1m  = EXECUTION trigger   (entry-role PD array retraced into → that scenario is the trade)
 
-    on_context_close(bars) -> 4H context  (bias, dealing range, liquidity draw)
-    on_setup_close(bars)   -> 1H setup     (manipulation/displacement/MSS/FVG, gated by context)
-    on_confirm_close(bars) -> 15m confirmation (its OWN sweep/MSS/displacement/FVG, in the setup
-                              direction — confirms the 1H setup is developing)
-    on_trigger_close(bars) -> 1m execution (the final trigger; fires only when the whole cascade holds:
-                              context bias -> gated 1H setup -> gated 15m confirmation -> 1m entry FVG)
+The context stages complete on their structural read — NEVER on whether an FVG happened to form on
+that timeframe (that concept is gone from the context stages). FVG is just one liquidity objective whose
+role is context-assigned. Scenarios are (re)built only on a context close and persist structurally, so
+the active set is stable and changes only on a meaningful structural event, not on price noise.
 
-Each layer recomputes only when ITS timeframe closes; higher layers stay fixed until their own close.
-Reuses the stage functions in `pipeline` (which reuse the frozen v1 engine read-only).
+Each `on_*_close` recomputes only its layer; higher layers stay fixed until their own close. Reuses the
+stage helpers in `pipeline` (which reuse the frozen v1 engine read-only). v1 is never modified.
 """
 from __future__ import annotations
 
+from ict_live.engine import pipeline as v1
+from ict_v2 import liquidity as LQ
+from ict_v2 import pdarrays as PDA
 from ict_v2 import pipeline as P
+from ict_v2 import scenarios as SC
+
+_SCENARIO_TARGET = 2       # user: keep the top 2 theses …
+_SCENARIO_MAX = 3          # … at most 3
 
 
 class MTFEngine:
     def __init__(self, context_tf: str = "4H", setup_tf: str = "1H", confirm_tf: str = "15m",
                  trigger_tf: str = "1m", refine_tf: str | None = None, min_stop: float | None = None,
                  anchor_tf: str | None = None, entry_models=None):
-        # ≥15-minute liquidity floor (Lesson 6/8): structure/liquidity TFs must be ≥15m; the 1m
+        # ≥15-minute liquidity floor (Lesson 6/8): the CONTEXT/execution-setup TFs must be ≥15m; the 1m
         # trigger (and refine) may be finer — they only trigger, they do not mark liquidity.
         P.assert_liquidity_floor(context_tf, setup_tf, confirm_tf)
         self.context_tf, self.setup_tf = context_tf, setup_tf
         self.confirm_tf, self.trigger_tf = confirm_tf, trigger_tf
-        self.refine_tf = refine_tf     # None = MTF entry-refinement OFF (default); else the entry TF
-        self.min_stop = min_stop       # degenerate-stop floor (price), used with refinement
-        self.anchor_tf = anchor_tf     # None = no Daily/Weekly anchor (default); else "D"/"W"
-        self.entry_models = entry_models   # None = FVG only (default); else the enabled execution models
-        self.context = None            # HTFContext — fixed until the next 4H close
-        self.setup = None              # 1H MTFSetup (gated by context) — fixed until the next 1H close
-        self.confirmation = None       # 15m MTFSetup (its own gated setup) — fixed until the next 15m close
-        self.execution = None          # 1m LTFExecution (the final trigger)
+        self.refine_tf, self.min_stop, self.anchor_tf = refine_tf, min_stop, anchor_tf
+        self.entry_models = entry_models
+        # --- responsibility-based state ---
+        self.strategic = None          # 4H StrategicContext (HTFContext) — fixed until next 4H close
+        self.intraday = None           # 1H IntradayContext  (HTFContext) — fixed until next 1H close
+        self.book = SC.ScenarioBook(target=_SCENARIO_TARGET, maxn=_SCENARIO_MAX)
+        self.objectives: list = []     # latest full liquidity-objective inventory (for the dashboard)
+        self.exec_tf = None            # the TF the current execution states were monitored on
+        self.last_price = None
+        self._ctx_bars = None          # last 4H bars (NWOG window)
+        self._confirm_bars = None      # last 15m bars (ORG window + execution setup)
+        self._trigger_bars = None      # last 1m bars (execution trigger)
 
+    # ---- context stages (produce context; NEVER require an FVG) --------------------------------
     def on_context_close(self, bars, anchor_bars=None):
-        """4H context. If a Daily/Weekly anchor is configured, its bias vetoes a counter-trend 4H
-        bias to neutral (trade only with the higher timeframe)."""
-        anchor = (P.htf_bias_of(anchor_bars, self.anchor_tf)
-                  if (self.anchor_tf and anchor_bars) else "")
-        self.context = P.htf_context(bars, self.context_tf, anchor=anchor,
-                                     anchor_tf=(self.anchor_tf if anchor else ""))
-        return self.context
+        """4H strategic context. Optional Daily/Weekly anchor vetoes a counter-trend 4H bias to neutral."""
+        self._ctx_bars = bars
+        anchor = (P.htf_bias_of(anchor_bars, self.anchor_tf) if (self.anchor_tf and anchor_bars) else "")
+        self.strategic = P.htf_context(bars, self.context_tf, anchor=anchor,
+                                       anchor_tf=(self.anchor_tf if anchor else ""))
+        self._rebuild_scenarios(self._ctx_key(bars))
+        return self.strategic
 
     def on_setup_close(self, bars, refine_bars=None):
-        if self.context is None:
+        """1H intraday context — REUSES the context builder (bias/range/draws/trend). It is context, not
+        a setup: it never 'waits for a 1H FVG'. Its close refreshes the scenario set."""
+        if self.strategic is None:
             return None
-        rb = refine_bars if self.refine_tf else None      # only refine when the mode is enabled
-        self.setup = P.mtf_setup(bars, self.setup_tf, self.context, refine_bars=rb, min_stop=self.min_stop,
-                                 entry_models=self.entry_models)
-        return self.setup
+        self.intraday = P.htf_context(bars, self.setup_tf)
+        self._rebuild_scenarios(self._ctx_key(bars))
+        return self.intraday
 
+    # ---- execution stages (monitor the scenarios; the ONLY place an entry lives) ---------------
     def on_confirm_close(self, bars, refine_bars=None):
-        """15m confirmation: its OWN actionable setup that must confirm the 1H setup (same direction as
-        a gated 1H setup). Computed whenever a context exists (so the dashboard can show what is
-        developing and WHY each 15m candidate is rejected); it only promotes when the 1H setup is gated.
-        When refinement is on, the 15m entry FVG is refined onto the lower TF too."""
-        if self.context is None:
-            return None
-        rb = refine_bars if self.refine_tf else None
-        self.confirmation = P.confirm_setup(bars, self.confirm_tf, self.context, self.setup,
-                                            refine_bars=rb, min_stop=self.min_stop,
-                                            entry_models=self.entry_models)
-        return self.confirmation
+        """15m execution setup — monitor whether any active scenario is retracing into its entry zone."""
+        self._confirm_bars = bars
+        self._monitor(bars, self.confirm_tf)
+        return self.book.active
 
     def on_trigger_close(self, bars):
-        """1m trigger — fires only when the full cascade holds; otherwise a NO-TRADE that says how far
-        the cascade got. The 1m entry is already the finest TF (no lower to refine onto); the
-        degenerate-stop floor still applies via min_stop."""
-        self.execution = P.execution_for(bars, self.trigger_tf, self.context, self.setup,
-                                         self.confirmation, min_stop=self.min_stop,
-                                         entry_models=self.entry_models)
-        return self.execution
+        """1m execution trigger — the precise entry: an entry-role PD array retraced into its zone."""
+        self._trigger_bars = bars
+        if bars:
+            self.last_price = bars[-1].close
+        self._monitor(bars, self.trigger_tf)
+        return self.book.active
 
-    def state(self) -> P.MTFState:
-        return P.MTFState(context=self.context, setup=self.setup, confirmation=self.confirmation,
-                          execution=self.execution)
+    # ---- scenario maintenance -----------------------------------------------------------------
+    @staticmethod
+    def _ctx_key(bars) -> str:
+        return bars[-1].close_time.isoformat() if bars else ""
+
+    def _gaps(self):
+        """NWOG (from the 4H buffer) + ORG (from the 15m buffer) as liquidity-objective source dicts."""
+        gaps = []
+        for g in (PDA.nwogs(self._ctx_bars or [])):
+            g = dict(g); g["_kind"] = "nwog"; g["tf"] = self.context_tf; gaps.append(g)
+        org = PDA.org(self._confirm_bars or [])
+        if org:
+            org = dict(org); org["_kind"] = "org"; org["tf"] = self.confirm_tf; gaps.append(org)
+        return gaps
+
+    def _rebuild_scenarios(self, context_key: str):
+        """Collect EVERY liquidity objective from the 4H + 1H context, build ranked scenario proposals,
+        and reconcile the stable active set. Called only on a context (4H/1H) close."""
+        if self.strategic is None:
+            return
+        objs = LQ.collect_objectives(self.strategic, direction=(self.strategic.bias or None),
+                                     gaps=self._gaps())
+        if self.intraday is not None:
+            objs += LQ.collect_objectives(self.intraday, direction=(self.intraday.bias or None))
+        self.objectives = objs
+        proposals = SC.build_scenarios(self.strategic, self.intraday or self.strategic, objs,
+                                       price=self.last_price)
+        rk = SC._range_key(self.strategic.dealing_range)
+        self.book.observe(proposals, context_key=context_key, cur_range_key=rk)
+        # refresh execution state on the finest bars we have, so a rebuild doesn't blank the states
+        self._monitor(self._trigger_bars or self._confirm_bars,
+                      self.trigger_tf if self._trigger_bars else self.confirm_tf)
+
+    def _monitor(self, bars, tf):
+        """Update each active scenario's execution state from entry candidates on the execution TF —
+        membership is untouched (pure state refresh, no churn)."""
+        if not self.book.active:
+            return
+        if not bars or self.strategic is None:
+            self.book.monitor(lambda s: None)
+            return
+        ms = v1.analyze(bars, tf, min_stop=self.min_stop)
+        cands = P.generate_candidates(ms, self.strategic, tf=tf, min_stop=self.min_stop, bars=bars)
+        price = bars[-1].close
+        self.book.monitor(lambda s: P.execution_for_scenario(s, cands, price))
+        self.exec_tf = tf
+
+    # ---- accessors ----------------------------------------------------------------------------
+    def state(self):
+        return self
+
+    def describe(self) -> str:
+        sc = self.book.active
+        head = (f"4H {getattr(self.strategic, 'bias', '?')} · 1H {getattr(self.intraday, 'bias', '?')} · "
+                f"{len(sc)} scenario(s)")
+        lines = [head]
+        for s in sc:
+            ex = s.execution or {}
+            lines.append(f"  #{s.rank} {s.direction} → {s.draw.label} {round(s.draw.price, 2)} "
+                         f"[{s.state}] {ex.get('why', '')}")
+        return "\n".join(lines)
 
 
 def _demo() -> None:
     base = P._base_1m(20000, 7)
     h4, h1, m15 = P.resample(base, 240, "4H"), P.resample(base, 60, "1H"), P.resample(base, 15, "15m")
     eng = MTFEngine("4H", "1H", "15m", "1m")
+    eng.on_trigger_close(base[-400:])          # prime price
     eng.on_context_close(h4)
     eng.on_setup_close(h1)
     eng.on_confirm_close(m15)
     eng.on_trigger_close(base[-400:])
-    print("ICT v2 — 4H context -> 1H setup -> 15m confirmation -> 1m execution\n")
-    print(eng.state().describe())
+    print("ICT v2 — responsibility cascade + scenario layer\n")
+    print(eng.describe())
 
 
 if __name__ == "__main__":

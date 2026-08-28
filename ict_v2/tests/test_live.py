@@ -37,9 +37,9 @@ def test_per_timeframe_cadence_from_1m_stream():
             if v.updated[tf] != prev[tf]:
                 counts[tf] += 1
                 prev[tf] = v.updated[tf]
-        if v.engine.context is not prev_ctx:         # context changes only on a 4H close
+        if v.engine.strategic is not prev_ctx:       # strategic context changes only on a 4H close
             assert counts["4H"] > 0 and v.updated["4H"] == prev["4H"]
-            prev_ctx = v.engine.context
+            prev_ctx = v.engine.strategic
     assert counts["1m"] == len(bars)                 # 1m trigger every minute
     # 4H rarest, then 1H, then 15m, then 1m — strict cadence ordering
     assert 1 <= counts["4H"] < counts["1H"] < counts["15m"] < counts["1m"]
@@ -64,7 +64,9 @@ def test_snapshot_is_persistable(tmp_path):
     snap = v.snapshot()
     assert snap["timeframes"] == {"context": "4H", "setup": "1H", "confirm": "15m", "trigger": "1m",
                                   "refine": None, "anchor": None}     # refine + anchor OFF by default
-    assert "setup" in snap and "confirmation" in snap and "execution" in snap
+    # scenario-centric shape: H4 strategic + H1 intraday context + the 2-3 scenarios
+    assert "strategic" in snap and "intraday" in snap and "scenarios" in snap and "scenario_summary" in snap
+    assert isinstance(snap["scenarios"], list) and len(snap["scenarios"]) <= 3
     assert snap["updated"]["1m"] is not None
     assert "session" in snap and "killzone" in snap                     # §11 current-session context
     assert snap["session"] in {"asia", "london_active", "ny_am", "ny_pm", ""}

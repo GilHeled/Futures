@@ -24,6 +24,7 @@ from ict_live.engine import pipeline as v1        # frozen v1 engine, read-only
 from ict_live.market import sessions as v1_sessions   # ET/DST-safe session+killzone membership (read-only)
 from ict_v2 import align
 from ict_v2 import entry_models as EM              # pluggable execution/entry models (FVG + course set)
+from ict_v2 import pdarrays as PD                 # role-neutral PD-array objects + contextual role (Lessons 10-12)
 from ict_v2 import recommend as REC               # the semantic layer: structure / quality / filters / recommendation
 
 
@@ -131,6 +132,7 @@ class HTFContext:
     ranges: list = field(default_factory=list)   # ALL dealing ranges on this TF (source_tf-tagged), for nesting
     trend: str = "none"                    # §2/§21 structural trend (up/down/none) — HH/HL rule (Lesson 15)
     trend_change: str = ""                 # §2/§21 trend-change: confirmed | potential | "" (from MSS)
+    draws: list = field(default_factory=list)   # HTF PD-array DRAWS (role='draw' FVGs): objectives price seeks (Lesson 11/16)
 
     def zone(self, price: float) -> Optional[str]:
         """premium / discount / equilibrium of `price` within the HTF dealing range (None if no range)."""
@@ -284,6 +286,9 @@ class Candidate:
     # --- the four semantic layers (see ict_v2/recommend.py) ---
     pullback: "float|None" = None          # QUALITY: entry retrace depth into the displacement leg (§/Lesson 8; ≥0.5 good)
     fvg_tiebreak: int = 0                  # # of unmitigated FVGs the entry was picked among; >1 ⇒ [RES:fvg_tiebreak] exercised
+    entry_role: str = ""                   # CONTEXT ROLE of the entry PD array: entry (LTF) | reaction | draw (Lessons 10-12)
+    entry_role_basis: dict = field(default_factory=dict)   # WHY the role (tf_class / zone / side / lifecycle)
+    tf: str = ""                           # the timeframe this candidate's structure lives on (§1; chart-mappable)
     structure: str = "forming"             # STRUCTURE: forming | valid | invalid (the ICT setup itself)
     filters: list = field(default_factory=list)   # COURSE FILTERS: [{name, ok, reason}] (≥3R, killzone, …)
     recommendation: str = "WATCH"          # RECOMMENDATION: TAKE | SKIP | WATCH (derived from the layers)
@@ -299,7 +304,9 @@ class Candidate:
             "rr_quality": self.rr_quality,
             "pd_location": self.pd_location,
             "objective": None if obj is None else {"kind": getattr(obj, "kind", None),
-                                                   "price": px(getattr(obj, "price", None))},
+                                                   "price": px(getattr(obj, "price", None)),
+                                                   "klass": getattr(obj, "klass", "ERL"),        # ERL|IRL (Lesson 10)
+                                                   "array_kind": getattr(obj, "array_kind", "swing")},  # swing|fvg|nwog|org
             "components": {"sweep": self.sweep is not None, "displacement": self.displacement is not None,
                            "mss": self.mss is not None, "entry": self.entry_obj is not None},
             "sweep": None if self.sweep is None else {"pool": px(getattr(self.sweep, "pool_price", None)),
@@ -317,6 +324,9 @@ class Candidate:
             "amd_phase": self.amd_phase,                           # §10 Power-of-3 phase (Lesson 16)
             "pullback": self.pullback,                             # QUALITY: retrace depth of the leg (≥0.5 good, Lesson 8)
             "fvg_tiebreak": self.fvg_tiebreak,                     # >1 ⇒ [RES:fvg_tiebreak] picked among N unmitigated FVGs
+            "entry_role": self.entry_role,                         # PD-array role of the entry (entry/reaction/draw) — Lessons 10-12
+            "entry_role_basis": dict(self.entry_role_basis),       # WHY (tf_class/zone/side/lifecycle)
+            "tf": self.tf,                                         # the timeframe this candidate's structure lives on (§1)
             "structure": self.structure,                           # STRUCTURE: forming|valid|invalid
             "filters": [dict(f) for f in self.filters],            # COURSE FILTERS: [{name,ok,reason}]
             "recommendation": self.recommendation,                 # RECOMMENDATION: TAKE|SKIP|WATCH
@@ -440,13 +450,23 @@ def htf_context(bars, tf: str, *, anchor: str = "", anchor_tf: str = "") -> HTFC
     if anchor in ("long", "short") and bias in ("long", "short") and bias != anchor:
         bias = "neutral"                                 # 4H opposes the Daily/Weekly anchor → stand aside
     ts = trend_state(ms)                                 # §2/§21 trend + potential/confirmed change (Lesson 15)
-    return HTFContext(tf=tf, bias=bias, dealing_range=dr, liquidity=list(ms.active_erl),
-                      anchor_bias=(anchor or ""), anchor_tf=(anchor_tf or ""), ranges=list(ms.ranges),
-                      trend=ts["trend"], trend_change=ts["change"])
+    ctx = HTFContext(tf=tf, bias=bias, dealing_range=dr, liquidity=list(ms.active_erl),
+                     anchor_bias=(anchor or ""), anchor_tf=(anchor_tf or ""), ranges=list(ms.ranges),
+                     trend=ts["trend"], trend_change=ts["change"])
+    # HTF PD-array DRAWS (Lesson 11/16): a higher-timeframe FVG on the DRAW side of the dealing range
+    # is an objective price is pulled toward. Role-neutral detection (v1's FVGs) → contextual role;
+    # keep the ones the context labels 'draw'. Needs a range + a directional bias to have a draw side.
+    if dr is not None and bias in ("long", "short"):
+        for r in getattr(ms, "ranked_fvgs", []):
+            arr = PD.role_of(PD.from_fvg(r.item, tf), direction=bias,
+                             zone=dr.zone_of(r.item.ce), erl_irl=ctx.erl_irl(r.item.ce))
+            if arr.role == "draw":
+                ctx.draws.append(arr)
+    return ctx
 
 
 def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=None, bars=None,
-                        filters_cfg=None) -> list:
+                        filters_cfg=None, tf: str = "") -> list:
     """GENERATE trade candidates from the manipulation, do NOT "find FVGs and filter".
 
     Every liquidity sweep is a possible trade idea (its direction is set by which side was raided).
@@ -472,6 +492,10 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
         if m.depends_on:
             mss_by_disp.setdefault(m.depends_on[0], []).append(m)        # depends_on[0] = displacement id
     active_erl = getattr(ms, "active_erl", [])
+    # Role-neutral PD arrays for THIS stage (Lessons 10-12): the unfilled FVGs are the internal-imbalance
+    # candidates the ERL/IRL-aware draw selection falls back to when no external pool remains to seek.
+    stage_arrays = [PD.from_fvg(r.item, tf) for r in getattr(ms, "ranked_fvgs", [])]
+    stage_unfilled = [a for a in stage_arrays if a.status != "mitigated"]
 
     def _partial(sw, disp, mss, direction, dr, objective):
         """Chain has NOT reached an entry object yet (swept / displaced / mss) — model-agnostic.
@@ -497,7 +521,7 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
                          session=sess, killzone=kz,
                          context_label=context_label(direction, _bias),
                          amd_phase=amd_phase(direction, _bias, getattr(mss, "state", "")),
-                         structure="forming", filters=[], recommendation=rec)
+                         structure="forming", filters=[], recommendation=rec, tf=tf)
 
     cands = []
     for r in ms.ranked_sweeps:                                           # anchor: the manipulation
@@ -507,7 +531,10 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
         disp = disps[0] if disps else None                               # best-ranked displacement off it
         mss = (mss_by_disp.get(disp.id, []) or [None])[0] if disp is not None else None
         dr = context.dealing_range if context else None
-        objective = align.liquidity_objective(context, direction) if context else None
+        # ERL/IRL-aware draw (Lesson 10): class first (ERL taken → seek IRL; IRL rebalanced → seek ERL),
+        # then the objective inside that class. The ERL branch returns the same opposing pool as before;
+        # the IRL branch lets an unfilled internal FVG become the objective when no external pool remains.
+        objective = align.next_draw(context, direction, internal_arrays=stage_unfilled) if context else None
 
         entries = []                                                     # ask every enabled model
         if disp is not None:
@@ -550,6 +577,15 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
             clabel = context_label(direction, _bias)
             phase = amd_phase(direction, _bias, getattr(mss, "state", ""))
             pb = pullback_pct(disp, E)
+            # CONTEXT ROLE of the entry PD array (Lessons 10-12): timeframe + dealing-range position
+            # (not lifecycle) decide whether this FVG is an ENTRY (LTF, retrace zone), a reaction
+            # (S/R confluence), or a draw. SURFACED only — enabling role=entry as a take/skip gate is a
+            # separate reviewed decision, so this never changes structure/recommendation here.
+            earr = (PD.role_of(PD.from_fvg(entry.source, tf), direction=direction, zone=pd,
+                               erl_irl=(context.erl_irl(E) if context else None))
+                    if getattr(entry, "source", None) is not None else None)
+            erole = earr.role if earr is not None else ""
+            erole_basis = earr.role_basis if earr is not None else {}
 
             # (3) COURSE FILTERS — course execution rules (≥3R, killzone, …); only for a valid structure
             filters = REC.evaluate_filters(rr=rr, killzone=kz, cfg=filters_cfg) if structure == "valid" else []
@@ -583,6 +619,7 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
                                    actionable=actionable, passed=passed, reasons=reasons, setup=setup_ns,
                                    session=sess, killzone=kz, context_label=clabel, amd_phase=phase,
                                    pullback=pb, fvg_tiebreak=getattr(entry, "tiebreak_n", 0),
+                                   entry_role=erole, entry_role_basis=erole_basis, tf=tf,
                                    structure=structure, filters=filters, recommendation=rec))
 
     # DE-DUPLICATE identical setups. Equal-high/low sweeps at the SAME bar/level (e.g. SWP17H@82 and
@@ -602,6 +639,63 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
     return out
 
 
+def execution_for_scenario(scenario, candidates, price=None) -> dict | None:
+    """Decide an active SCENARIO's execution state from the entry candidates generated on the execution
+    timeframe. This is the M15/M1 job: the higher timeframes already fixed the thesis (direction, zone,
+    draw); here we only watch for the entry inside the scenario's retracement zone.
+
+    Geometry per the agreed rule: entry = the entry-role PD array's CE (the candidate's entry); stop =
+    the candidate's manipulation-extreme stop; target = the SCENARIO's draw (not the candidate's own).
+    States: triggered (entry retraced into) → armed (entry PD array present, awaiting retrace) →
+    retracing (price in the zone, no entry array yet) → None (watching; price not in the zone)."""
+    zone = getattr(scenario, "entry_zone", None)
+    dirn = scenario.direction
+    draw_px = getattr(getattr(scenario, "draw", None), "price", None)
+
+    def in_zone(p):
+        return zone is not None and p is not None and zone[0] <= p <= zone[1]
+
+    def coherent(c):
+        # a tradeable entry must have SANE geometry for the direction: long → stop < entry < draw;
+        # short → draw < entry < stop. Rejects wrong-side stops and entries past the draw.
+        if c.entry is None or c.stop is None:
+            return False
+        if dirn == "long":
+            return c.stop < c.entry and (draw_px is None or c.entry < draw_px)
+        return c.entry < c.stop and (draw_px is None or draw_px < c.entry)
+
+    # only STRUCTURALLY-VALID, geometry-coherent entries inside the zone are actionable (a degenerate /
+    # invalid candidate is never surfaced as an order — the min_stop floor rejects tiny-stop setups upstream)
+    usable = [c for c in candidates if c.direction == dirn and c.entry is not None and in_zone(c.entry)
+              and getattr(c, "structure", "") == "valid" and coherent(c)]
+    entry_cands = [c for c in usable if c.entry_role == "entry"] or usable   # prefer true LTF entries
+    if entry_cands:
+        c = entry_cands[0]
+        live = getattr(getattr(c, "entry_obj", None), "state", "") == "valid"   # retraced/touched
+        risk = abs(c.stop - c.entry) if (c.stop is not None and c.entry is not None) else None
+        rr = (round(abs(c.entry - draw_px) / risk, 2) if (risk and draw_px is not None and risk > 0) else None)
+        gap = (round(c.entry - price, 2) if price is not None else None)         # entry vs current price
+        if live:
+            why = "entry retraced into — trigger now"
+        elif gap is not None:
+            # a resting entry: say WHICH WAY and HOW FAR price must move to fill it (a short entry sits
+            # ABOVE price → awaiting an up-retrace; a long entry sits BELOW → awaiting a down-retrace)
+            move = "rise" if gap > 0 else "fall"
+            why = (f"{dirn} entry rests at {round(c.entry, 2)} — awaiting price to {move} "
+                   f"{abs(gap):g} pts into it (now {round(price, 2)})")
+        else:
+            why = "entry PD array armed in the zone — awaiting retrace"
+        return {"state": "triggered" if live else "armed",
+                "entry": round(c.entry, 2), "stop": (round(c.stop, 2) if c.stop is not None else None),
+                "target": (round(draw_px, 2) if draw_px is not None else None), "rr": rr,
+                "price": (round(price, 2) if price is not None else None), "dist_to_entry": gap,
+                "entry_role": c.entry_role, "tf": getattr(c, "tf", ""), "why": why}
+    if in_zone(price):
+        return {"state": "retracing", "price": (round(price, 2) if price is not None else None),
+                "why": "price retracing into the entry zone — awaiting an entry PD array"}
+    return None   # watching: price not yet in the retracement zone
+
+
 def mtf_setup(bars, tf: str, context: HTFContext, *, refine_bars=None, min_stop=None,
               entry_models=None) -> MTFSetup:
     """Stage 2: GENERATE trade candidates on this timeframe (manipulation → full ICT idea), then GATE
@@ -616,7 +710,7 @@ def mtf_setup(bars, tf: str, context: HTFContext, *, refine_bars=None, min_stop=
     fast instrument a fresh, unmitigated entry gap. `min_stop` rejects degenerate stops. Both default
     off, so the standard v2 behaviour is unchanged."""
     ms = v1.analyze(bars, tf, refine_bars=refine_bars, min_stop=min_stop)
-    all_cands = generate_candidates(ms, context, entry_models=entry_models, min_stop=min_stop, bars=bars)
+    all_cands = generate_candidates(ms, context, entry_models=entry_models, min_stop=min_stop, bars=bars, tf=tf)
     gated, candidates, cand_info = [], [], []
     for c in all_cands:
         cand_info.append(c.to_dict())

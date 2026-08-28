@@ -172,6 +172,25 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
    background:var(--panel2);color:var(--mut);border:1px solid var(--line);white-space:nowrap}
  .v2dec.long{color:var(--long);background:var(--long-bg);border-color:transparent}
  .v2dec.short{color:var(--short);background:var(--short-bg);border-color:transparent}
+ /* the "what to do now" verdict pill: pass=ENTER · arm=SET ORDER · inc=GET READY · watch=MONITORING */
+ .v2dec.pass{color:#fff;background:var(--long);border-color:transparent}
+ .v2dec.arm{color:var(--accent,#c8a24a);border-color:var(--accent,#c8a24a);background:var(--panel2)}
+ .v2dec.inc{color:var(--warn);border-color:var(--warn);background:var(--panel2)}
+ .v2dec.watch{color:var(--mut)}
+ .v2tick{font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:10px;color:var(--mut);white-space:nowrap}
+ .v2tick i{font-style:normal;opacity:.75;margin-left:3px}
+ /* the "what to do now" ACTION BAR — full width under the header so the verdict never clips */
+ .v2action{margin:6px 0 2px;padding:4px 10px;border-radius:7px;font-size:11px;font-weight:800;
+   letter-spacing:.03em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+   background:var(--panel2);color:var(--mut);border:1px solid var(--line)}
+ /* color = direction (long green / short red); intensity = urgency (strong=ENTER, mid=SET, soft=GET READY) */
+ .v2action.long-strong{color:#fff;background:var(--long);border-color:transparent}
+ .v2action.short-strong{color:#fff;background:var(--short);border-color:transparent}
+ .v2action.long-mid{color:var(--long);border-color:var(--long);background:color-mix(in srgb,var(--long) 14%,transparent)}
+ .v2action.short-mid{color:var(--short);border-color:var(--short);background:color-mix(in srgb,var(--short) 14%,transparent)}
+ .v2action.long-soft{color:var(--long);border-color:color-mix(in srgb,var(--long) 40%,var(--line));background:color-mix(in srgb,var(--long) 7%,transparent)}
+ .v2action.short-soft{color:var(--short);border-color:color-mix(in srgb,var(--short) 40%,var(--line));background:color-mix(in srgb,var(--short) 7%,transparent)}
+ .v2action.watch{color:var(--mut)}
  .v2sess{border-radius:999px;padding:2px 9px;font-size:10px;font-weight:700;letter-spacing:.03em;
    background:var(--panel2);color:var(--mut);border:1px solid var(--line);white-space:nowrap}
  .v2sess.kz{color:var(--accent,#c8a24a);border-color:var(--accent,#c8a24a)}   /* active trading killzone */
@@ -277,6 +296,27 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .cfilter.off{color:var(--mut);border-style:dashed;opacity:.75}   /* filter disabled for validation */
  .restag{font-size:9px;font-weight:700;letter-spacing:.3px;padding:1px 6px;border-radius:5px;
    color:var(--warn);background:var(--warn-bg);border:1px dashed var(--warn)}   /* undecided [RES] choice */
+ /* PD-array ROLE (Lessons 10-12) — role ≠ lifecycle. entry = LTF execution; draw = objective; reaction = S/R */
+ .prole{font-weight:700}
+ .prole-entry{color:var(--accent)} .prole-draw{color:var(--long)}
+ .prole-reaction{color:var(--mut)} .prole-inactive{color:var(--mut);opacity:.6;text-decoration:line-through}
+ .dclass{font-size:9px;font-weight:700;letter-spacing:.3px;padding:0 4px;border-radius:4px;border:1px solid var(--line)}
+ .dclass-ERL{color:var(--long)} .dclass-IRL{color:var(--accent)}   /* Lesson 10: external vs internal draw */
+ /* SCENARIO LAYER — the 2-3 stable theses (the primary V2 view) */
+ .sc-wrap{margin-top:10px;border-top:1px solid var(--line);padding-top:8px}
+ .sc-title{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);margin-bottom:6px}
+ .sccard{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:6px;background:var(--card2,rgba(127,127,127,.05))}
+ .sccard.long{border-left:3px solid var(--long)} .sccard.short{border-left:3px solid var(--short)} .sccard.flat{border-left:3px solid var(--line)}
+ .sccard.actionable{box-shadow:0 0 0 1px var(--accent,#c8a24a),0 0 12px -2px var(--accent,#c8a24a);background:color-mix(in srgb,var(--accent,#c8a24a) 8%,transparent)}  /* armed/triggered — act here */
+ .sc-hd{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:12px}
+ .sc-rank{font-weight:800;color:var(--mut)} .sc-arrow{color:var(--mut)}
+ .sc-draw{font-weight:700;font-family:"SF Mono",ui-monospace,Menlo,monospace}
+ .scstate{margin-left:auto;font-size:9px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;padding:1px 8px;border-radius:6px;border:1px solid var(--line)}
+ .scstate.watch{color:var(--mut)} .scstate.inc{color:var(--warn)} .scstate.arm{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+ .scstate.pass{color:var(--long);border-color:color-mix(in srgb,var(--long) 45%,var(--line))} .scstate.rej{color:var(--short);opacity:.7}
+ .sc-body{display:flex;gap:12px;flex-wrap:wrap;margin-top:5px;font-size:11px}
+ .sc-exec{display:flex;gap:10px;flex-wrap:wrap;margin-top:5px}
+ .sc-why{margin-top:5px;font-size:10.5px;color:var(--mut);white-space:pre-wrap}
  /* the ICT chain: sweep → displacement → MSS → FVG → entry → gate; ✓ ok / ✗ fail / — pending */
  .cchain{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
  .cchain i{color:var(--mut);font-style:normal;font-size:11px}
@@ -308,7 +348,7 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .badge.long{color:var(--long);background:var(--long-bg)} .badge.short{color:var(--short);background:var(--short-bg)}
  .thead .sym{font-weight:700;font-size:16px} .thead .tf{color:var(--mut);font-size:12px}
  /* V2 card header: symbol · last price+arrow · (bias when NO-TRADE) · decision — one tidy row */
- .v2head{gap:9px;flex-wrap:nowrap;min-width:0}
+ .v2head{gap:8px;flex-wrap:wrap;min-width:0}
  .v2head .sym{font-size:14px;white-space:nowrap;flex:none}
  .v2head .lastpx{font-family:"SF Mono",ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;
    font-size:13px;font-weight:700;color:var(--mut);display:inline-flex;align-items:center;gap:2px;white-space:nowrap;flex:none}
@@ -611,75 +651,97 @@ setInterval(pollLive,4000);pollLive();
 // ---------------- V2 (experimental, advisory) ----------------
 function v2Tables(rep){
   const syms=rep.symbols||{};
-  // mirror the LIVE tab: show ONLY the symbols enabled/streaming there (fall back to all if the live
-  // tab hasn't reported its enabled set yet)
+  // Show the symbols whose v2 data is actually FRESH — keyed off v2's own last tick, NOT the LIVE tab's
+  // heartbeat (which flickers and would otherwise blank this tab). Fall back to the LIVE active set, then
+  // to all, so a feed blip never empties the view. (8-min window = display [NEC], not course.)
+  const FRESH_MS=8*60*1000, now=Date.now();
+  const isFresh=st=>{ const t=((st||{}).last||{}).time; if(!t) return false; const p=Date.parse(t); return !isNaN(p)&&(now-p)<FRESH_MS; };
   const act=window._liveActive;
-  let names=Object.keys(syms).sort();
-  if(Array.isArray(act)) names=names.filter(n=>act.includes(n));
-  const _tf0=((syms[names[0]]||{}).timeframes)||{}; const rtf=_tf0.refine, atf=_tf0.anchor;
-  const banner=`<div class=warn>&#9879; V2 (experimental) — ICT cascade 4H context → 1H setup → 15m confirmation → 1m execution${atf?` · <b>${atf}-anchor</b>`:''}${rtf?` · <b>entry-refine ${rtf}</b>`:''}, side-by-side with v1, ADVISORY ONLY, not validated.</div>`;
+  const all=Object.keys(syms).sort();
+  // a symbol shows if its v2 data is fresh OR the LIVE tab lists it active — the union keeps every
+  // watched symbol on screen even when TV round-robins charts or the heartbeat briefly blips.
+  let names=all.filter(n=>isFresh(syms[n])||(Array.isArray(act)&&act.includes(n)));
+  if(!names.length) names=all;
+  const banner=`<div class=warn>&#9879; V2 — H4 strategic context · H1 intraday context · 2–3 stable scenarios · M15/M1 execution. ADVISORY, not validated.</div>`;
   if(!names.length){
-    const why=(Array.isArray(act)&&act.length===0)
-      ? 'No symbols are streaming in the Live tab — enable one there and it appears here.'
-      : 'No v2 data yet — waiting for the shared feed to accumulate bars.';
-    return banner+`<div class="card mut">${why}</div>`;
+    return banner+`<div class="card mut">No v2 data yet — waiting for the shared feed to accumulate bars.</div>`;
   }
   const sideOf=d=>d==='long'?'long':(d==='short'?'short':'flat');
-  const cards=names.map(sym=>{
-    const s=syms[sym], c=s.context||{}, st=s.setup||{}, cf=s.confirmation||{}, e=s.execution||{}, u=s.updated||{}, tf=s.timeframes||{};
-    const dr=c.dealing_range; const drs=dr?`${num(dr.low)}–${num(dr.high)} CE ${num(dr.ce)} (${dr.direction})`:'—';
-    const obj=c.liquidity_objective; const objs=obj?`${obj.kind==='high'?'BSL':'SSL'} ${num(obj.price)}`:'—';
-    // §3 full pool set (Lesson 6), §6 fib ladder (Lesson 8), §5/§6 nested ranges — all CONTEXT
-    const pools=c.pools||[];   // §4 each pool tagged ERL (outside range) / IRL (inside) — Lesson 10
-    const nERL=pools.filter(p=>p.loc==='ERL').length, nIRL=pools.filter(p=>p.loc==='IRL').length;
+  const hhmm=iso=>{ if(!iso) return '—'; const d=new Date(iso); return isNaN(d)?'—':d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'}); };
+  const agoOf=iso=>{ if(!iso) return ''; const t=Date.parse(iso); if(isNaN(t)) return ''; const s=Math.max(0,Math.round((Date.now()-t)/1000)); return s<90?s+'s ago':Math.round(s/60)+'m ago'; };
+  const traceOf=b=>[`timeframe = ${b.tf_class||'—'}`,`position = ${b.dealing_range_position||'—'}`,
+     `liquidity = ${b.liquidity_class||'—'}`,`context = ${b.seeking_vs_reacting||'—'}`,
+     `→ role = ${b.role||'—'}`,``,`why: ${b.rule||'—'}`].join('\n');
+  // ONE context stage (4H strategic / 1H intraday) — context ONLY, never candidates / "waiting for FVG"
+  const ctxRead=(cx,label,updated)=>{
+    if(!cx) return '';
+    const dr=cx.dealing_range; const drs=dr?`${num(dr.low)}–${num(dr.high)} CE ${num(dr.ce)} (${dr.direction})`:'—';
+    const pools=cx.pools||[]; const nERL=pools.filter(p=>p.loc==='ERL').length, nIRL=pools.filter(p=>p.loc==='IRL').length;
     const poolsHtml=pools.length?`<span class=wc title="untaken S/R levels (Lesson 11) — ${pools.map(p=>p.kind+' '+num(p.price)+(p.loc?' ['+p.loc+']':'')).join(', ')}">pools <b>${pools.length}</b> <span class=mut>ERL ${nERL}/IRL ${nIRL}</span></span>`:'';
-    const fib=c.fib||[];
-    const fibHtml=fib.length?`<div class=fibrow><span class=fibl>fib</span>${fib.map(l=>`<span class="fibx ${l.zone}" title="${l.zone}">${l.level}<i>${num(l.price)}</i></span>`).join('')}</div>`:'';
-    const nested=s.dealing_ranges||[];
-    const nestedHtml=nested.length?`<div class=fibrow><span class=fibl>ranges</span>${nested.map(r=>`<span class=rangx title="${r.direction}">${r.tf} ${num(r.low)}–${num(r.high)}</span>`).join('')}</div>`:'';
-    const nwog=c.nwog||[];   // §18 New Week Opening Gaps (Lesson 13) — S/R + magnet; NOT liquidity
-    const nwogHtml=nwog.length?`<div class=fibrow><span class=fibl>NWOG</span>${nwog.map(g=>`<span class="rangx${g.closed?' closed':''}" title="${g.closed?'closed (rebalanced)':'open'} · 50% ${num(g.mid)}${g.age_weeks!=null?' · '+g.age_weeks+'w':''}">${num(g.bottom)}–${num(g.top)}${g.closed?' ✓':''}</span>`).join('')}</div>`:'';
-    const org=c.org;   // §19 Opening Range Gap (Lesson 14) — current day only, 50% line is the key level
-    const orgHtml=org?`<div class=fibrow><span class=fibl>ORG</span><span class="rangx${org.closed?' closed':''}" title="current-day opening gap · 50% ${num(org.mid)}${org.closed?' · closed':''}">${num(org.bottom)}–${num(org.top)} <i>50% ${num(org.mid)}</i>${org.closed?' ✓':''}</span></div>`:'';
-    // each stage colored by ITS OWN state; neutral grey otherwise so color never implies a phantom trade
-    const biasSide=sideOf(c.bias);
-    const setupSide=(st.gated>0)?sideOf(st.direction):'flat';
-    const confSide=(cf.gated>0)?sideOf(cf.direction):'flat';
-    const top=e.top; const execSide=top?sideOf(top.direction):'flat';
-    const dec=top?execSide.toUpperCase():'NO-TRADE';
-    // last traded price + its tick direction, shown next to the symbol
+    const fib=cx.fib||[]; const fibHtml=fib.length?`<div class=fibrow><span class=fibl>fib</span>${fib.map(l=>`<span class="fibx ${l.zone}" title="${l.zone}">${l.level}<i>${num(l.price)}</i></span>`).join('')}</div>`:'';
+    const draws=cx.draws||[];
+    const drawsHtml=draws.length?`<div class=fibrow><span class=fibl title="PD-array draws price is drawn toward (Lesson 11/16)">draws</span>${draws.map(d=>`<span class="rangx prole-draw" title="${_candEsc(d.polarity+' '+d.kind+' CE '+num(d.ce)+'\n'+traceOf(d.role_basis||{}))}">${num(d.bottom)}–${num(d.top)}</span>`).join('')}</div>`:'';
+    const gapRow=(list,lbl)=>{ list=(!list?[]:(Array.isArray(list)?list:[list]));
+      return list.length?`<div class=fibrow><span class=fibl>${lbl}</span>${list.map(g=>`<span class="rangx prole-${g.role||'reaction'}${g.closed?' closed':''}" title="${_candEsc(lbl+' 50% '+num(g.mid)+(g.closed?' · closed':' · open')+'\n'+traceOf(g.role_basis||{}))}">${num(g.bottom)}–${num(g.top)}${g.closed?' ✓':''}</span>`).join('')}</div>`:''; };
+    const side=sideOf(cx.bias);
+    return `<div class="read ${side}"><div class=rhd><span class=rsy>${cx.tf||label}</span><span class=rnn>${label}</span></div>
+      <div class=why><span class=wc>bias <b>${fmt(cx.bias)}</b></span><span class=wc title="trend (HH/HL) + change (Lesson 15)">trend <b>${fmt(cx.trend||'none')}</b>${cx.trend_change?` <b class=tc-${cx.trend_change}>${cx.trend_change}</b>`:''}</span>${cx.anchor_tf?`<span class=wc>${cx.anchor_tf}-anchor <b>${fmt(cx.anchor_bias||'neutral')}</b></span>`:''}<span class=wc>range <b>${drs}</b></span>${poolsHtml}</div>
+      ${fibHtml}${gapRow(cx.nwog,'NWOG')}${gapRow(cx.org,'ORG')}${drawsHtml}
+      <div class=rfoot>updated ${fmt(updated)}</div></div>`;
+  };
+  // ONE scenario — a market thesis: direction toward a draw, with its entry zone + execution state
+  const scenarioCard=(sc,i)=>{
+    const dir=sc.direction, side=sideOf(dir); const ex=sc.execution||null; const st=sc.state||'watching';
+    const stcls={watching:'watch',retracing:'inc',armed:'arm',triggered:'pass',invalidated:'rej',resolved:'rej'}[st]||'watch';
+    const d=sc.draw||{};
+    const drawTxt=`${d.label||d.kind} ${num(d.price)} <span class="dclass dclass-${d.liquidity_class||'ERL'}" title="Lesson 10 draw class">${d.liquidity_class||'—'}·${d.tf||''}</span>`;
+    const zone=sc.entry_zone; const zoneTxt=zone?`${num(zone[0])}–${num(zone[1])}`:'—';
+    const rf=sc.rank_factors||{};
+    const rfTxt=`alignment ${rf.alignment} · class-fit ${rf.class_fit} · strength ${rf.strength} · proximity ${rf.proximity}`;
+    const exHtml=ex?`<div class=sc-exec>${ex.price!=null?`<span class=cfact><i>now</i>${num(ex.price)}</span>`:''}<span class=cfact><i>entry</i>${num(ex.entry)}</span><span class=cfact><i>stop</i>${num(ex.stop)}</span><span class=cfact><i>target</i>${num(ex.target)}</span>${ex.rr!=null?`<span class=cfact><i>R:R</i>${num(ex.rr)}</span>`:''}${ex.entry_role?`<span class=cfact><i>entry role</i>${ex.entry_role}</span>`:''}</div>`:'';
+    const why=(ex&&ex.why)?ex.why:(sc.why||'');
+    const actionable=(st==='armed'||st==='triggered');
+    return `<div class="sccard ${side}${actionable?' actionable':''}">
+      <div class=sc-hd><span class=sc-rank>#${i+1}</span><span class="cdir ${side}">${dir.toUpperCase()}</span>
+        <span class=sc-arrow>→</span><span class=sc-draw>${drawTxt}</span>
+        <span class="scstate ${stcls}" title="ranking: ${_candEsc(rfTxt)}">${st}</span></div>
+      <div class=sc-body><span class=wc title="the ${dir==='long'?'discount':'premium'} half of the H4 dealing range — the AREA a valid entry may form in (Lesson 9/12). The exact ENTRY below is the FVG that formed inside it.">retrace zone <b>${zoneTxt}</b> <span class=mut>${dir==='long'?'discount':'premium'}</span></span><span class=wc title="transparent ranking factors">rank <b>${rfTxt}</b></span></div>
+      ${exHtml}<div class=sc-why>${_candEsc(why)}</div></div>`;
+  };
+  const cards=names.map(sym=>{
+    const s=syms[sym], u=s.updated||{}, tf=s.timeframes||{};
+    const scn=s.scenarios||[], sum=s.scenario_summary||{};
     const lst=s.last; const larr=lst?(lst.dir==='up'?'▲':lst.dir==='down'?'▼':'·'):'';
     const lastHtml=lst?`<span class="lastpx ${lst.dir||''}">${num(lst.price)}<i>${larr}</i></span>`:'';
-    // direction: when there IS a trade the decision pill already shows it; otherwise show the 4H bias
-    const biasHtml=(execSide==='flat'&&c.bias)?`<span class="dirtag ${biasSide}">${c.bias.toUpperCase()}</span>`:'';
-    // current session / killzone (§11, lesson 5) — CONTEXT only, never a gate
-    const sessHtml=s.session?`<span class="v2sess${s.killzone?' kz':''}" title="current session (ET)${s.killzone?' · trading killzone — lesson 5':''}">${_sessName(s.session)}${s.killzone?' ⏱':''}</span>`:'';
-    const execLine=top?`${top.direction.toUpperCase()} entry ${num(top.entry)} · stop ${num(top.stop)} · target ${num(top.target)}${top.ltf_confirmed?' · ✓':''}`:fmt(e.decision);
-    const gline=(layer,x)=>`<button type=button class=candbtn onclick="openCandidates('${sym}','${layer}')"><b class=g-pass>${fmt(x.take)}</b> take<i></i><b class=g-inc>${fmt(x.watch)}</b> watch<i></i><b class=g-rej>${fmt(x.skip)}</b> skip</button>`;
-    return `<div class="ticket ${execSide}">
-      <div class="thead v2head"><span class=sym title="${sym}">${sym.includes(':')?sym.split(':')[1]:sym}</span>${lastHtml}
-        <span class=thead-right>${sessHtml}${biasHtml}<span class="v2dec ${execSide}">${dec}</span></span></div>
-      <div class=reads>
-        <div class="read ${biasSide}"><div class=rhd><span class=rsy>4H</span><span class=rnn>context</span></div>
-          <div class=why><span class=wc>bias <b>${fmt(c.bias)}</b></span><span class=wc title="structural trend (HH/HL rule) + trend change (Lesson 15)">trend <b>${fmt(c.trend||'none')}</b>${c.trend_change?` <b class=tc-${c.trend_change}>${c.trend_change}</b>`:''}</span>${c.anchor_tf?`<span class=wc>${c.anchor_tf}-anchor <b>${fmt(c.anchor_bias||'neutral')}</b></span>`:''}<span class=wc>range <b>${drs}</b></span><span class=wc>draw <b>${objs}</b></span>${poolsHtml}</div>
-          ${fibHtml}${nestedHtml}${nwogHtml}${orgHtml}
-          <div class=rfoot>updated ${fmt(u[tf.context])}</div></div>
-        <div class="read ${setupSide}"><div class=rhd><span class=rsy>1H</span><span class=rnn>setup</span></div>
-          <div class=rln>${gline('setup',st)}</div>
-          <div class=rfoot>updated ${fmt(u[tf.setup])}</div></div>
-        <div class="read ${confSide}"><div class=rhd><span class=rsy>15m</span><span class=rnn>confirmation</span></div>
-          <div class=rln>${gline('confirmation',cf)}</div>
-          <div class=rfoot>updated ${fmt(u[tf.confirm])}</div></div>
-        <div class="read ${execSide}"><div class=rhd><span class=rsy>1m</span><span class=rnn>execution</span></div>
-          <div class=rln>${execLine}</div>
-          ${e.total!=null?`<div class=rln>${gline('execution',e)}</div>`:''}
-          <div class=rfoot>updated ${fmt(u[tf.trigger])}</div></div>
-      </div></div>`;}).join('');
+    const sessHtml=s.session?`<span class="v2sess${s.killzone?' kz':''}">${_sessName(s.session)}${s.killzone?' ⏱':''}</span>`:'';
+    // WHAT TO DO NOW — the single verdict per symbol, from the most actionable scenario state.
+    // Kept SHORT (a label + side, entry price only); full entry/stop/target live in the scenario card.
+    const pick=stt=>scn.find(x=>x.state===stt);
+    const trig=pick('triggered'), armed=pick('armed'), retr=pick('retracing');
+    // color = DIRECTION (green long / red short); intensity = urgency (ENTER solid > SET > GET READY);
+    // grey only when there is nothing directional to do.
+    let verdict='MONITORING', actCls='watch', decSide='flat';
+    if(trig){const e=trig.execution||{}; decSide=sideOf(trig.direction); actCls=decSide+'-strong'; verdict=`ENTER ${trig.direction.toUpperCase()} @ ${num(e.entry)}`;}
+    else if(armed){const e=armed.execution||{}; decSide=sideOf(armed.direction); actCls=decSide+'-mid'; verdict=`SET ${armed.direction.toUpperCase()} @ ${num(e.entry)}`;}
+    else if(retr){decSide=sideOf(retr.direction); actCls=decSide+'-soft'; verdict=`GET READY · ${retr.direction.toUpperCase()}`;}
+    else if(!scn.length){verdict='NO THESIS';}
+    const tickHtml=lst?`<span class=v2tick title="last 1m tick — ${hhmm(lst.time)} (browser clock)">◷ ${agoOf(lst.time)}</span>`:'';
+    const scHtml=scn.length?scn.map(scenarioCard).join(''):'<div class=cempty>no active scenario — H4/H1 context not yet directional</div>';
+    return `<div class="ticket ${decSide}">
+      <div class="thead v2head"><span class=sym title="${sym}">${sym.includes(':')?sym.split(':')[1]:sym}</span>${lastHtml}${tickHtml}<span class=thead-right>${sessHtml}</span></div>
+      <div class="v2action ${actCls}">${verdict}</div>
+      <div class=reads>${ctxRead(s.strategic,'strategic',u[tf.context])}${ctxRead(s.intraday,'intraday',u[tf.setup])}</div>
+      <div class=sc-wrap><div class=sc-title>scenarios <span class=mut>${sum.active||0} active · ${sum.armed||0} armed · ${sum.triggered||0} triggered · watched on ${tf.confirm}/${tf.trigger}</span></div>${scHtml}</div>
+    </div>`;
+  }).join('');
   return banner+'<div class=tickets>'+cards+'</div>';
 }
 async function pollV2(){
-  try{const d=await (await fetch('/v2/report')).json();window._v2last=d;$('#v2-body').innerHTML=v2Tables(d);}
-  catch(e){$('#v2-body').innerHTML='<div class="card mut">v2 (experimental) service not reachable — start it with <code>python -m ict_v2.serve</code>.</div>';}
+  let d;
+  try{ d=await (await fetch('/v2/report')).json(); window._v2last=d; }
+  catch(e){ $('#v2-body').innerHTML='<div class="card mut">v2 service not reachable — start it with <code>python -m ict_v2.serve</code> (or wait a few seconds after launch).</div>'; return; }
+  try{ $('#v2-body').innerHTML=v2Tables(d); }
+  catch(e){ $('#v2-body').innerHTML='<div class="card mut">v2 render error: '+_candEsc(String(e&&e.message||e))+'</div>'; console.error('v2Tables',e); }
 }
 function _candEsc(t){return (t||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
 function _sessName(x){return ({asia:'Asia',london_active:'London',ny_am:'NY-AM',ny_pm:'NY-PM'})[x]||'—';}
@@ -708,7 +770,15 @@ function _candCard(c){
   const amd=c.amd_phase||'—';
   const pb=c.pullback;   // Lesson 8: pullback retraces ≥50% (a quality read, not a gate)
   const pbtxt=pb==null?'—':(Math.round(pb*100)+'%'+(pb>=0.5?' <b class=rrq-good>≥50%</b>':' <b class=rrq-low>shallow</b>'));
-  const qual=[['RR',rrtxt],['alignment',clab],['P/D',c.pd_location||'—'],['AMD',amd],['pullback',pbtxt]]
+  // PD-array ROLE of the entry (Lessons 10-12): entry = LTF execution level, reaction = S/R confluence,
+  // draw = objective. Role ≠ lifecycle. FULL AUDITABLE TRACE in the tooltip (every dimension + the rule).
+  const erole=c.entry_role||'';
+  const erb=c.entry_role_basis||{};
+  const roleTrace=b=>[`timeframe = ${b.tf_class||'—'}`,`dealing-range position = ${b.dealing_range_position||'—'}`,
+     `liquidity class = ${b.liquidity_class||'—'}`,`context = ${b.seeking_vs_reacting||'—'}`,
+     `lifecycle = ${b.lifecycle||'—'}`,`→ role = ${b.role||'—'}`,``,`why: ${b.rule||'—'}`].join('\n');
+  const eroletxt=erole?`<b class="prole prole-${erole}" title="PD-array role decision (Lessons 10-12):\n${esc(roleTrace(erb))}">${erole} <span class=mut>ⓘ</span></b>`:'—';
+  const qual=[['RR',rrtxt],['alignment',clab],['P/D',c.pd_location||'—'],['AMD',amd],['pullback',pbtxt],['PD role',eroletxt]]
     .map(([k,v])=>`<span class=qmetric><i>${k}</i>${v}</span>`).join('');
   // (3) COURSE FILTERS — each ✓/✗ with its reason (only meaningful for a valid structure)
   const filters=(c.filters||[]);
@@ -724,11 +794,13 @@ function _candCard(c){
     : `<div class="creason ${recCls}"><div class=creason-hd>${rec==='WATCH'?'Developing':'Why SKIP'}</div><ul>`
       + reasons.map(r=>`<li>${esc(r)}</li>`).join('') + `</ul></div>`;
   // reference facts
-  const objtxt=c.objective?`${c.objective.kind==='high'?'BSL':'SSL'} ${num(c.objective.price)}`:'—';
+  // draw (objective) now carries its liquidity CLASS (ERL/IRL, Lesson 10) and the array providing it
+  const cobj=c.objective;
+  const objtxt=cobj?`${cobj.kind==='high'?'BSL':'SSL'} ${num(cobj.price)} <span class="dclass dclass-${(cobj.klass||'ERL')}" title="Lesson 10: draw class = ${(cobj.klass||'ERL')} (${cobj.array_kind||'swing'})">${cobj.klass||'ERL'}${cobj.array_kind&&cobj.array_kind!=='swing'?'·'+cobj.array_kind:''}</span>`:'—';
   const sesstxt=c.session?(_sessName(c.session)+(c.killzone?' ⏱':'')):'—';
   const lg=c.leg;   // WHICH displacement leg this candidate tracks (distinguishes look-alike candidates)
   const legtxt=lg?`${lg.dir==='bullish'?'▲':'▼'} ${num(lg.from)}→${num(lg.to)} <span class=mut>b${lg.bars[0]}–${lg.bars[1]}</span>`:'—';
-  const facts=[['entry',num(c.entry)],['stop',num(c.stop)],['target',num(c.target)],['draw',objtxt],
+  const facts=[['TF',c.tf||'—'],['entry',num(c.entry)],['stop',num(c.stop)],['target',num(c.target)],['draw',objtxt],
                ['inval',eo?num(eo.invalidation):'—'],['leg',legtxt],['session',sesstxt]]
     .map(([k,v])=>`<span class=cfact><i>${k}</i>${v}</span>`).join('');
   const emodel=eo?`<span class=emodel title="execution model · lifecycle (common state: ${_candEsc(eo.state)})">${_candEsc(eo.model+(eo.lifecycle?' · '+eo.lifecycle:''))}</span>`:'';

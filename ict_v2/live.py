@@ -142,6 +142,11 @@ class V2Live:
             **({"nwog": nwog, "org": org} if gaps else {}),
         }
 
+    def _bars(self, tf, n):
+        """Recent OHLC for the per-scenario candlestick chart (last n bars of a timeframe)."""
+        return [{"t": _et_iso(b.close_time), "o": _px(b.open), "h": _px(b.high),
+                 "l": _px(b.low), "c": _px(b.close)} for b in (self.buf.get(tf) or [])[-n:]]
+
     def snapshot(self) -> dict:
         eng = self.engine
         strategic, intraday = eng.strategic, eng.intraday
@@ -181,6 +186,10 @@ class V2Live:
             "scenario_stats": eng.book.stats(),
             "trades": list(eng.book.trades),
             "objectives": [o.to_dict() for o in getattr(eng, "objectives", [])],   # full liquidity inventory
+            # recent OHLC per execution TF for the per-scenario candlestick chart (15m default; 1H/1m toggle)
+            "bars": {self.confirm_tf: self._bars(self.confirm_tf, 90),
+                     self.setup_tf: self._bars(self.setup_tf, 54),
+                     self.trigger_tf: self._bars(self.trigger_tf, 120)},
         }
 
     def save(self, path) -> None:

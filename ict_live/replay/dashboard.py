@@ -334,6 +334,9 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .scchart .cwick.dn{stroke:var(--short)} .scchart .cbody.dn{stroke:var(--short);fill:color-mix(in srgb,var(--short) 55%,var(--panel2))}
  .scchart .cwick{stroke-width:1} .scchart .cbody{stroke-width:1}
  .scchart .chgrid{stroke:var(--line);stroke-width:.5;opacity:.45}
+ .scchart .chlvl.plan{stroke-dasharray:5 4;opacity:.85}
+ .scchart .chgap{fill:color-mix(in srgb,var(--warn) 8%,transparent);stroke:color-mix(in srgb,var(--warn) 32%,var(--line));stroke-width:1;stroke-dasharray:3 2}
+ .scchart .chgap-t{fill:var(--warn);font-size:9px;text-anchor:end;opacity:.85}
  .scchart .chprice{fill:var(--mut);font-size:9px;text-anchor:end;opacity:.8}
  .scchart .chtime{fill:var(--mut);font-size:9px;text-anchor:middle;opacity:.8}
  .scchart .chbox.long{fill:color-mix(in srgb,var(--long) 14%,transparent);stroke:color-mix(in srgb,var(--long) 40%,var(--line))}
@@ -805,7 +808,7 @@ function _scRender(){
   const strat=s.strategic||{}, dir=sc.direction, isLong=dir==='long';
   const ex=sc.position||sc.execution||{};
   const zone=sc.entry_zone, dr=strat.dealing_range;
-  const fib=(strat.fib||[]).filter(f=>[0.5,0.62,0.79].indexOf(f.level)>=0);
+  const fib=(strat.fib||[]).filter(f=>[0,0.5,0.62,0.79,1].indexOf(f.level)>=0);   // 0/1 = range anchors, 0.5/0.62/0.79 = OTE
   const tfs=s.timeframes||{}, tfList=[tfs.confirm,tfs.setup,tfs.trigger].filter(Boolean);
   let tf=ctx.tf; if(!tf||!((s.bars||{})[tf])) tf=tfs.confirm||tfList[0]; ctx.tf=tf;
   const bars=((s.bars||{})[tf])||[];
@@ -814,7 +817,14 @@ function _scRender(){
   // decision is visible even after price has moved away). Far draw / out-of-range pools → off-chart markers.
   let lo=Infinity, hi=-Infinity; bars.forEach(b=>{ lo=Math.min(lo,b.l); hi=Math.max(hi,b.h); });
   const ext=v=>{ if(v!=null&&isFinite(+v)){ lo=Math.min(lo,+v); hi=Math.max(hi,+v); } };
-  [ex.entry,ex.stop,ex.target,ex.fvg_top,ex.fvg_bottom].forEach(ext); if(zone){ext(zone[0]);ext(zone[1]);}
+  const drawP=(sc.draw&&sc.draw.price!=null)?sc.draw.price:null;
+  // TRADE geometry — live values once the scenario ARMS, else the thesis PLAN: target = the draw, stop =
+  // the far (invalidation) edge of the entry zone you sell/buy into, entry = the zone. Planned = dashed.
+  const zHi=zone?Math.max(zone[0],zone[1]):null, zLo=zone?Math.min(zone[0],zone[1]):null;
+  const tgt=(ex.target!=null)?ex.target:drawP, tgtLive=(ex.target!=null);
+  const stp=(ex.stop!=null)?ex.stop:(zone?(isLong?zLo:zHi):null), stpLive=(ex.stop!=null);
+  const ent=(ex.entry!=null)?ex.entry:null;
+  [ent,stp,tgt,ex.fvg_top,ex.fvg_bottom].forEach(ext); if(zone){ext(zHi);ext(zLo);}
   if(!isFinite(lo)){ [now].forEach(ext); fib.forEach(f=>ext(f.price)); }   // no bars + no trade → fall back to levels
   if(!isFinite(lo)){ lo=0; hi=1; } if(hi===lo){ hi+=1; lo-=1; }
   const pad=(hi-lo)*0.06||1; lo-=pad; hi+=pad;
@@ -829,6 +839,11 @@ function _scRender(){
     if(yb>yt){ g+=`<rect x="${pl}" y="${yt.toFixed(1)}" width="${plotW}" height="${(yb-yt).toFixed(1)}" class="chbox ${isLong?'long':'short'}"/><text x="${pl+4}" y="${(yt+11).toFixed(1)}" class="chlbl-in">FVG</text>`; }
   } else if(zone){ let yt=Math.max(pt,y(zone[1])), yb=Math.min(pt+plotH,y(zone[0]));
     if(yb>yt){ g+=`<rect x="${pl}" y="${yt.toFixed(1)}" width="${plotW}" height="${(yb-yt).toFixed(1)}" class="chzone"/><text x="${pl+4}" y="${(yt+11).toFixed(1)}" class="chlbl-in">retrace zone</text>`; } }
+  // gap PD-arrays present in the context (NWOG Lesson 13 / ORG Lesson 14) — drawn only where they fall in view
+  const gaps=[]; (strat.nwog||[]).forEach(gp=>gaps.push([gp,'NWOG'])); if(strat.org) gaps.push([strat.org,'ORG']);
+  gaps.forEach(a=>{ const gp=a[0], t=gp.top, b=gp.bottom; if(t==null||b==null) return;
+    let yt=Math.max(pt,y(Math.max(t,b))), yb=Math.min(pt+plotH,y(Math.min(t,b)));
+    if(yb>yt+0.5){ g+=`<rect x="${pl}" y="${yt.toFixed(1)}" width="${plotW}" height="${(yb-yt).toFixed(1)}" class="chgap"/><text x="${x2-4}" y="${(yt+10).toFixed(1)}" class="chgap-t">${a[1]}</text>`; } });
   // candles
   bars.forEach((b,i)=>{ const x=xc(i), cls=(b.c>=b.o)?'up':'dn';
     g+=`<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${y(b.h).toFixed(1)}" y2="${y(b.l).toFixed(1)}" class="cwick ${cls}"/>`;
@@ -842,13 +857,18 @@ function _scRender(){
   if(dr){ [['range high',dr.high],['EQ (CE)',dr.ce],['range low',dr.low]].forEach(a=>{ if(within(a[1])){ hline(a[1],'chdr'); lab(a[1],a[0]+' '+N(a[1]),''); } }); }
   fib.forEach(f=>{ if(within(f.price)){ hline(f.price,'chfib'); lab(f.price,'fib '+f.level+' '+N(f.price),'fib'); } });
   (strat.pools||[]).forEach(p=>{ if(within(p.price)){ hline(p.price,'chpool'); lab(p.price,(p.kind||'')+(p.loc?'·'+p.loc:'')+' '+N(p.price),''); } });
-  const drawP=sc.draw&&sc.draw.price;
   (sc.draw_ladder||[]).forEach(o=>{ if(within(o.price)) hline(o.price,'chladder'); });
-  const lvl=(p,cls,lb)=>{ if(p==null)return; hline(p,'chlvl '+cls); lab(p,lb+' '+N(p),cls); };
-  lvl(ex.target,'tp','TP'); lvl(ex.entry,'entry','ENTRY'); lvl(ex.stop,'sl','SL');
+  const drawLbl=(sc.draw&&sc.draw.label)||'draw';
+  // TP / ENTRY / SL — solid when LIVE (armed), dashed "(plan)" when derived from the thesis (watching)
+  const lvl=(p,cls,lb,plan)=>{ if(p==null)return; hline(p,'chlvl '+cls+(plan?' plan':'')); lab(p,lb+' '+N(p),cls); };
+  lvl(tgt, 'tp', tgtLive?'TP':('TP·'+drawLbl+' plan'), !tgtLive);
+  lvl(ent, 'entry', 'ENTRY', false);
+  lvl(stp, 'sl', stpLive?'SL':'SL plan', !stpLive);
   const edge=[];
-  if(drawP!=null){ if(within(drawP)){ hline(drawP,'chdraw'); lab(drawP,(sc.draw.label||'draw')+' '+N(drawP),''); }
-    else edge.push({above:drawP>hi, t:(drawP>hi?'▲':'▼')+' '+(sc.draw.label||'draw')+' '+N(drawP), c:''}); }
+  // the draw (context objective) as its own grey line — unless it is already serving as the planned TP
+  const drawAsTP=(!tgtLive && drawP!=null && tgt===drawP);
+  if(drawP!=null && !drawAsTP){ if(within(drawP)){ hline(drawP,'chdraw'); lab(drawP,drawLbl+' '+N(drawP),''); }
+    else edge.push({above:drawP>hi, t:(drawP>hi?'▲':'▼')+' '+drawLbl+' '+N(drawP), c:''}); }
   if(now!=null){ if(within(now)){ hline(now,'chnow'); lab(now,'NOW '+N(now),'now'); }
     else edge.push({above:now>hi, t:(now>hi?'▲':'▼')+' NOW '+N(now), c:'now'}); }
   labels.sort((a,b)=>a.y-b.y); for(let i=1;i<labels.length;i++){ if(labels[i].y-labels[i-1].y<11) labels[i].y=labels[i-1].y+11; }
@@ -858,7 +878,7 @@ function _scRender(){
   const rr=ex.rr!=null?(' · '+N(ex.rr)+'R'):'', ordTxt=ex.order?(' · '+ex.order+' @ '+N(ex.entry)):'';
   const head=`${sym.split(':').pop()} · <b class="${isLong?'prole-long':'prole-short'}">${dir.toUpperCase()}</b> → ${(sc.draw&&sc.draw.label)||''} ${N(drawP)}${rr}${ordTxt}`;
   const tabs=tfList.map(t=>`<button class="sctf${t===tf?' on':''}" onclick="scenarioChartTF('${t}')">${t}</button>`).join('');
-  const note=`<div class=scchart-note>${n} ${tf} candles · fib (0.5/0.62/0.79 = OTE) · dealing range · pools (BSL/SSL) · draw+ladder · entry/SL/TP. EQH/EQL not marked (tolerance undefined).${(ex.entry==null)?' No live entry yet — context + zone only.':''}</div>`;
+  const note=`<div class=scchart-note>${n} ${tf} candles · fib 0/1 (range anchors) + 0.5/0.62/0.79 (OTE) · dealing range · pools (BSL/SSL) · NWOG/ORG gaps · draw+ladder. ${(ent!=null)?'Solid ENTRY/SL/TP = live (armed).':'Dashed = PLANNED thesis: TP = the draw, SL = far edge of the zone, entry = the zone band; firm ENTRY/SL/TP are set when price ARMS the scenario.'} EQH/EQL not marked (tolerance undefined).</div>`;
   $('#candmodal-title').innerHTML=head;
   $('#candmodal-body').innerHTML=`<div class=sctabs>${tabs}</div><svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" preserveAspectRatio="xMidYMid meet" class=scchart>${g}</svg>`+note;
   $('#candmodal').classList.add('on');

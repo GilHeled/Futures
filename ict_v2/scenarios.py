@@ -180,6 +180,7 @@ class ScenarioBook:
                "opened_at": (bar.close_time.isoformat() if bar is not None else None),
                "opened_price": (round(bar.close, 2) if bar is not None else None),
                "order": ex.get("order"), "sl_order": ex.get("sl_order"), "tp_order": ex.get("tp_order"),
+               "fvg_top": ex.get("fvg_top"), "fvg_bottom": ex.get("fvg_bottom"),
                "now": (round(bar.close, 2) if bar is not None else e),
                "pnl_usd": (self._pnl(e, bar.close, s.direction) if bar is not None else 0.0),  # CURRENT $ (live/realized)
                "plan_usd": self._pnl(e, tgt, s.direction),        # ORIGINAL $ — planned profit if the target is hit

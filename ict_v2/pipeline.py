@@ -715,10 +715,14 @@ def execution_for_scenario(scenario, candidates, price=None, objectives=None,
                 order = "BUY STOP" if (price is not None and price < c.entry) else "BUY LIMIT"
             else:
                 order = "SELL STOP" if (price is not None and price > c.entry) else "SELL LIMIT"
+            _fvg = getattr(getattr(c, "entry_obj", None), "source", None)   # the v1 FVG (box bounds, for the chart)
+            fvg_top = round(float(_fvg.top), 2) if getattr(_fvg, "top", None) is not None else None
+            fvg_bottom = round(float(_fvg.bottom), 2) if getattr(_fvg, "bottom", None) is not None else None
             return {"state": "triggered" if live else "armed",
                     "entry": round(c.entry, 2), "stop": round(c.stop, 2), "target": tgt, "rr": rr,
                     "order": order, "sl_order": ("sell stop" if dirn == "long" else "buy stop"),
                     "tp_order": ("sell limit" if dirn == "long" else "buy limit"),
+                    "fvg_top": fvg_top, "fvg_bottom": fvg_bottom,
                     "price": (round(price, 2) if price is not None else None), "dist_to_entry": gap,
                     "entry_role": c.entry_role, "tf": getattr(c, "tf", ""), "why": why}
         if in_zone(price):

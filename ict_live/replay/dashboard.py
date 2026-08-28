@@ -322,6 +322,26 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .sc-order{margin-top:5px;font-size:11px;padding:3px 8px;border-radius:6px;background:var(--panel2);border:1px solid var(--line);font-family:"SF Mono",ui-monospace,Menlo,monospace}
  .sc-order b.prole-long{color:var(--long)} .sc-order b.prole-short{color:var(--short)}
  .sc-ladder{margin-top:4px;font-size:10px;color:var(--mut);font-family:"SF Mono",ui-monospace,Menlo,monospace}
+ .sc-chartbtn{margin-left:6px;font-size:9px;font-weight:700;padding:1px 7px;border-radius:6px;border:1px solid var(--line);background:var(--panel2);color:var(--accent,#c8a24a);cursor:pointer;white-space:nowrap}
+ .sc-chartbtn:hover{border-color:var(--accent,#c8a24a)}
+ /* per-scenario level map (FVG · fib · pools · draws + entry/SL/TP) */
+ #candmodal .modal-box.sm{max-width:660px;width:92vw}
+ .scchart{width:100%;height:auto;background:var(--panel2);border-radius:8px;border:1px solid var(--line);font-family:"SF Mono",ui-monospace,Menlo,monospace}
+ .scchart .chbox.long{fill:color-mix(in srgb,var(--long) 14%,transparent);stroke:color-mix(in srgb,var(--long) 40%,var(--line))}
+ .scchart .chbox.short{fill:color-mix(in srgb,var(--short) 14%,transparent);stroke:color-mix(in srgb,var(--short) 40%,var(--line))}
+ .scchart .chzone{fill:color-mix(in srgb,var(--mut) 12%,transparent);stroke:var(--line)}
+ .scchart .chdr{stroke:var(--line);stroke-width:1}
+ .scchart .chfib{stroke:var(--warn);stroke-width:1;stroke-dasharray:4 3;opacity:.7}
+ .scchart .chpool,.scchart .chdraw{stroke:var(--mut);stroke-width:2}
+ .scchart .chladder{stroke:var(--mut);stroke-width:1;stroke-dasharray:2 3;opacity:.6}
+ .scchart .chlvl{stroke-width:2.6}
+ .scchart .chlvl.tp{stroke:var(--long)} .scchart .chlvl.entry{stroke:var(--accent,#c8a24a)} .scchart .chlvl.sl{stroke:var(--short)}
+ .scchart .chnow{stroke:var(--fg);stroke-width:1.4;stroke-dasharray:5 3}
+ .scchart .chdr,.scchart .chfib{stroke-width:1.3}
+ .scchart text{font-size:10.5px;fill:var(--mut)}
+ .scchart .chax.tp{fill:var(--long);font-weight:700} .scchart .chax.entry{fill:var(--accent,#c8a24a);font-weight:700} .scchart .chax.sl{fill:var(--short);font-weight:700}
+ .scchart .chax.now{fill:var(--fg);font-weight:700} .scchart .chax.fib{fill:var(--warn)}
+ .scchart-note{margin-top:8px;font-size:10px;color:var(--mut);line-height:1.55}
  .sc-why{margin-top:5px;font-size:10.5px;color:var(--mut);white-space:pre-wrap}
  /* the ICT chain: sweep → displacement → MSS → FVG → entry → gate; ✓ ok / ✗ fail / — pending */
  .cchain{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
@@ -696,7 +716,7 @@ function v2Tables(rep){
       <div class=rfoot>updated ${fmt(updated)}</div></div>`;
   };
   // ONE scenario — a market thesis: direction toward a draw, with its entry zone + execution state
-  const scenarioCard=(sc,i)=>{
+  const scenarioCard=(sc,i,sym)=>{
     const dir=sc.direction, side=sideOf(dir); const ex=sc.execution||null; const pos=sc.position||null; const st=sc.state||'watching';
     const stcls={watching:'watch',retracing:'inc',armed:'arm',triggered:'pass',target:'pass',stop:'rej',eod:'watch',invalidated:'rej'}[st]||'watch';
     const d=sc.draw||{};
@@ -722,7 +742,7 @@ function v2Tables(rep){
     return `<div class="sccard ${side}${actionable?' actionable':''}">
       <div class=sc-hd><span class=sc-rank>#${i+1}</span><span class="cdir ${side}">${dir.toUpperCase()}</span>
         <span class=sc-arrow>→</span><span class=sc-draw>${drawTxt}</span>
-        <span class="scstate ${stcls}" title="ranking: ${_candEsc(rfTxt)}">${st}</span></div>
+        <span class="scstate ${stcls}" title="ranking: ${_candEsc(rfTxt)}">${st}</span><button type=button class=sc-chartbtn onclick="scenarioChart('${sym}',${i})" title="show this scenario's levels — FVG, fib, pools, draws + entry/SL/TP">📈 chart</button></div>
       <div class=sc-body><span class=wc title="the ${dir==='long'?'discount':'premium'} half of the H4 dealing range — the AREA a valid entry may form in (Lesson 9/12). The exact ENTRY below is the FVG that formed inside it.">retrace zone <b>${zoneTxt}</b> <span class=mut>${dir==='long'?'discount':'premium'}</span></span><span class=wc title="transparent ranking factors">rank <b>${rfTxt}</b></span></div>
       ${(src.entry!=null&&(st==='armed'||st==='triggered'))?`<div class=sc-order title="Entry order type depends on price vs the entry: a resting order on the wrong side fills instantly. Bracket: stop-loss = stop-market the other way; take-profit = limit.">Topstep: <b class="prole-${side}">${src.order||(dir==='long'?'BUY LIMIT':'SELL LIMIT')} @ ${num(src.entry)}</b> · SL ${src.sl_order||(dir==='long'?'sell-stop':'buy-stop')} ${num(src.stop)} · TP ${src.tp_order||(dir==='long'?'sell-limit':'buy-limit')} ${num(src.target)}${st==='triggered'?' · filled — in trade':''}</div>`:''}${exHtml}${(sc.draw_ladder&&sc.draw_ladder.length)?`<div class=sc-ladder title="farther same-direction liquidity — extension targets after the first">ladder → ${sc.draw_ladder.map(o=>num(o.price)).join(' · ')}</div>`:''}<div class=sc-why>${_candEsc(why)}</div></div>`;
   };
@@ -749,7 +769,7 @@ function v2Tables(rep){
     const usd=(stx.total_usd!=null)?` · ${stx.total_usd>=0?'+$':'−$'}${num(Math.abs(stx.total_usd))}`:'';
     const openUsd=(stx.open&&stx.open_usd!=null)?` (${stx.open} open ${stx.open_usd>=0?'+$':'−$'}${num(Math.abs(stx.open_usd))})`:(stx.open?' · '+stx.open+' open':'');
     const statsHtml=`<span class=sc-stats title="triggers and their outcomes (target=win, stop=loss, eod=closed at session end — no overnight holds). $ = realized P&L, 1 contract.">stats · ${stx.triggered||0} triggered · ${stx.resolved||0} closed (${stx.target||0}T/${stx.stop||0}S/${stx.eod||0}E) · win ${wp} · ${(stx.total_r>=0?'+':'')}${num(stx.total_r||0)}R${usd}${openUsd}</span>`;
-    const scHtml=scn.length?scn.map(scenarioCard).join(''):'<div class=cempty>no active scenario — H4/H1 context not yet directional</div>';
+    const scHtml=scn.length?scn.map((x,i)=>scenarioCard(x,i,sym)).join(''):'<div class=cempty>no active scenario — H4/H1 context not yet directional</div>';
     // context is reference detail — collapse it by default so the ACTION + SCENARIOS stay above the fold
     // for every symbol; the toggle state persists across the 5s poll (window._v2ctxOpen).
     const ctxOpen=!!(window._v2ctxOpen&&window._v2ctxOpen.has(sym));
@@ -765,6 +785,48 @@ function v2Tables(rep){
 }
 function _toggleCtx(k){ const s=window._v2ctxOpen||(window._v2ctxOpen=new Set()); s.has(k)?s.delete(k):s.add(k);
   if(window._v2last){ try{ $('#v2-body').innerHTML=v2Tables(window._v2last); }catch(e){} } }
+// A per-scenario LEVEL MAP: every decision level positioned by price (FVG · fib · dealing range · pools
+// · draw+ladder) with entry / SL / TP / now marked. Drawn from the report data (no server render).
+function scenarioChart(sym, idx){
+  const s=((window._v2last||{}).symbols||{})[sym]; if(!s) return;
+  const sc=(s.scenarios||[])[idx]; if(!sc) return;
+  const strat=s.strategic||{}, dir=sc.direction, isLong=dir==='long';
+  const ex=sc.position||sc.execution||{};
+  const now=(s.last&&s.last.price!=null)?s.last.price:(ex.price!=null?ex.price:null);
+  const zone=sc.entry_zone, dr=strat.dealing_range;
+  const fib=(strat.fib||[]).filter(f=>[0.5,0.62,0.79].indexOf(f.level)>=0);
+  // y-range = the TRADE levels (entry/SL/TP/now/FVG/zone). The FAR draw / dealing range are excluded
+  // (they'd squash the trade into a sliver) — context is drawn only where it falls in this window.
+  const core=[]; const add=v=>{ if(v!=null&&isFinite(+v)) core.push(+v); };
+  [ex.entry,ex.stop,ex.target,ex.fvg_top,ex.fvg_bottom].forEach(add);   // trade STRUCTURE only (not `now`)
+  if(!core.length){ if(zone){add(zone[0]);add(zone[1]);} fib.forEach(f=>add(f.price)); }  // watching: no trade yet → zone + fib
+  if(!core.length) return;
+  let lo=Math.min.apply(null,core), hi=Math.max.apply(null,core); if(hi===lo){hi+=1;lo-=1;}
+  const pad=(hi-lo)*0.25; lo-=pad; hi+=pad;
+  const within=p=>p!=null&&isFinite(+p)&&p>=lo&&p<=hi;
+  const pools=(strat.pools||[]).filter(p=>within(p.price));
+  const W=580,H=440,pt=14,pb=14,pl=14,pr=134,plotH=H-pt-pb,plotW=W-pl-pr,x2=pl+plotW;
+  const y=p=>pt+(hi-p)/(hi-lo)*plotH, N=v=>(v==null?'—':(+v).toFixed(2));
+  let g='';
+  if(ex.fvg_top!=null&&ex.fvg_bottom!=null){ const yt=y(Math.max(ex.fvg_top,ex.fvg_bottom)),yb=y(Math.min(ex.fvg_top,ex.fvg_bottom));
+    g+=`<rect x=${pl} y=${yt} width=${plotW} height=${Math.max(2,yb-yt)} class="chbox ${isLong?'long':'short'}"/><text x=${pl+4} y=${yt+11} class=chlbl-in>FVG (entry PD array)</text>`;
+  } else if(zone){ const yt=y(zone[1]),yb=y(zone[0]); g+=`<rect x=${pl} y=${yt} width=${plotW} height=${Math.max(2,yb-yt)} class=chzone/><text x=${pl+4} y=${yt+11} class=chlbl-in>retrace zone</text>`; }
+  if(dr){ [['range high',dr.high],['EQ (CE)',dr.ce],['range low',dr.low]].forEach(a=>{ if(within(a[1])){ g+=`<line x1=${pl} x2=${x2} y1=${y(a[1])} y2=${y(a[1])} class=chdr/><text x=${x2+4} y=${y(a[1])+3} class=chax>${a[0]} ${N(a[1])}</text>`; } }); }
+  fib.forEach(f=>{ if(!within(f.price))return; g+=`<line x1=${pl} x2=${x2} y1=${y(f.price)} y2=${y(f.price)} class=chfib/><text x=${x2+4} y=${y(f.price)+3} class="chax fib">fib ${f.level} ${N(f.price)}</text>`; });
+  pools.forEach(p=>{ const yy=y(p.price); g+=`<line x1=${pl} x2=${pl+16} y1=${yy} y2=${yy} class=chpool/><text x=${pl+20} y=${yy+3} class=chpool-t>${(p.kind||'')}${p.loc?'·'+p.loc:''} ${N(p.price)}</text>`; });
+  const drawP=sc.draw&&sc.draw.price;
+  (sc.draw_ladder||[]).forEach(o=>{ if(within(o.price)) g+=`<line x1=${x2-22} x2=${x2} y1=${y(o.price)} y2=${y(o.price)} class=chladder/>`; });
+  if(drawP!=null){ if(within(drawP)){ g+=`<line x1=${x2-44} x2=${x2} y1=${y(drawP)} y2=${y(drawP)} class=chdraw/><text x=${x2+4} y=${y(drawP)+3} class=chax>${(sc.draw.label||'draw')} ${N(drawP)}</text>`; }
+    else { const above=drawP>hi; g+=`<text x=${x2+4} y=${above?pt+9:pt+plotH-3} class=chax>${above?'▲':'▼'} ${(sc.draw.label||'draw')} ${N(drawP)}</text>`; } }
+  const lvl=(p,cls,lb)=>{ if(p==null)return; const yy=y(p); g+=`<line x1=${pl} x2=${x2} y1=${yy} y2=${yy} class="chlvl ${cls}"/><text x=${x2+4} y=${yy+3} class="chax ${cls}">${lb} ${N(p)}</text>`; };
+  lvl(ex.target,'tp','TP'); lvl(ex.entry,'entry','ENTRY'); lvl(ex.stop,'sl','SL');
+  if(now!=null){ if(within(now)){ const yy=y(now); g+=`<line x1=${pl} x2=${x2} y1=${yy} y2=${yy} class=chnow/><text x=${x2+4} y=${yy+3} class="chax now">NOW ${N(now)}</text>`; }
+    else { const above=now>hi; g+=`<text x=${x2+4} y=${above?pt+20:pt+plotH-14} class="chax now">${above?'▲':'▼'} NOW ${N(now)}</text>`; } }
+  const rr=ex.rr!=null?(' · '+N(ex.rr)+'R'):'', ordTxt=ex.order?(' · '+ex.order+' @ '+N(ex.entry)):'';
+  const head=`${sym.split(':').pop()} · <b class="${isLong?'prole-long':'prole-short'}">${dir.toUpperCase()}</b> → ${(sc.draw&&sc.draw.label)||''} ${N(drawP)}${rr}${ordTxt}`;
+  const note=`<div class=scchart-note>FVG · fib (0.5/0.62/0.79 = OTE) · dealing range · pools (BSL/SSL) · draw+ladder · entry/SL/TP. EQH/EQL not marked (tolerance undefined).${(ex.entry==null)?' No live entry yet — context + zone only.':''}</div>`;
+  $('#candmodal-title').innerHTML=head; $('#candmodal-body').innerHTML=`<svg viewBox="0 0 ${W} ${H}" class=scchart>${g}</svg>`+note; $('#candmodal').classList.add('on');
+}
 async function pollV2(){
   let d;
   try{ d=await (await fetch('/v2/report')).json(); window._v2last=d; }

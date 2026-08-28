@@ -326,7 +326,7 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .sc-chartbtn:hover{border-color:var(--accent,#c8a24a)}
  /* per-scenario level map (FVG · fib · pools · draws + entry/SL/TP) */
  #candmodal .modal-box.sm{max-width:660px;width:92vw}
- .scchart{width:100%;height:auto;background:var(--panel2);border-radius:8px;border:1px solid var(--line);font-family:"SF Mono",ui-monospace,Menlo,monospace}
+ .scchart{display:block;width:100%;height:auto;aspect-ratio:580/440;background:var(--panel2);border-radius:8px;border:1px solid var(--line);font-family:"SF Mono",ui-monospace,Menlo,monospace}
  .scchart .chbox.long{fill:color-mix(in srgb,var(--long) 14%,transparent);stroke:color-mix(in srgb,var(--long) 40%,var(--line))}
  .scchart .chbox.short{fill:color-mix(in srgb,var(--short) 14%,transparent);stroke:color-mix(in srgb,var(--short) 40%,var(--line))}
  .scchart .chzone{fill:color-mix(in srgb,var(--mut) 12%,transparent);stroke:var(--line)}
@@ -810,22 +810,22 @@ function scenarioChart(sym, idx){
   let g='';
   if(ex.fvg_top!=null&&ex.fvg_bottom!=null){ const yt=y(Math.max(ex.fvg_top,ex.fvg_bottom)),yb=y(Math.min(ex.fvg_top,ex.fvg_bottom));
     g+=`<rect x=${pl} y=${yt} width=${plotW} height=${Math.max(2,yb-yt)} class="chbox ${isLong?'long':'short'}"/><text x=${pl+4} y=${yt+11} class=chlbl-in>FVG (entry PD array)</text>`;
-  } else if(zone){ const yt=y(zone[1]),yb=y(zone[0]); g+=`<rect x=${pl} y=${yt} width=${plotW} height=${Math.max(2,yb-yt)} class=chzone/><text x=${pl+4} y=${yt+11} class=chlbl-in>retrace zone</text>`; }
-  if(dr){ [['range high',dr.high],['EQ (CE)',dr.ce],['range low',dr.low]].forEach(a=>{ if(within(a[1])){ g+=`<line x1=${pl} x2=${x2} y1=${y(a[1])} y2=${y(a[1])} class=chdr/><text x=${x2+4} y=${y(a[1])+3} class=chax>${a[0]} ${N(a[1])}</text>`; } }); }
-  fib.forEach(f=>{ if(!within(f.price))return; g+=`<line x1=${pl} x2=${x2} y1=${y(f.price)} y2=${y(f.price)} class=chfib/><text x=${x2+4} y=${y(f.price)+3} class="chax fib">fib ${f.level} ${N(f.price)}</text>`; });
-  pools.forEach(p=>{ const yy=y(p.price); g+=`<line x1=${pl} x2=${pl+16} y1=${yy} y2=${yy} class=chpool/><text x=${pl+20} y=${yy+3} class=chpool-t>${(p.kind||'')}${p.loc?'·'+p.loc:''} ${N(p.price)}</text>`; });
+  } else if(zone){ const yt=y(zone[1]),yb=y(zone[0]); g+=`<rect x=${pl} y=${yt} width=${plotW} height=${Math.max(2,yb-yt)} class="chzone"/><text x=${pl+4} y=${yt+11} class=chlbl-in>retrace zone</text>`; }
+  if(dr){ [['range high',dr.high],['EQ (CE)',dr.ce],['range low',dr.low]].forEach(a=>{ if(within(a[1])){ g+=`<line x1=${pl} x2=${x2} y1=${y(a[1])} y2=${y(a[1])} class="chdr"/><text x=${x2+4} y=${y(a[1])+3} class=chax>${a[0]} ${N(a[1])}</text>`; } }); }
+  fib.forEach(f=>{ if(!within(f.price))return; g+=`<line x1=${pl} x2=${x2} y1=${y(f.price)} y2=${y(f.price)} class="chfib"/><text x=${x2+4} y=${y(f.price)+3} class="chax fib">fib ${f.level} ${N(f.price)}</text>`; });
+  pools.forEach(p=>{ const yy=y(p.price); g+=`<line x1=${pl} x2=${pl+16} y1=${yy} y2=${yy} class="chpool"/><text x=${pl+20} y=${yy+3} class=chpool-t>${(p.kind||'')}${p.loc?'·'+p.loc:''} ${N(p.price)}</text>`; });
   const drawP=sc.draw&&sc.draw.price;
-  (sc.draw_ladder||[]).forEach(o=>{ if(within(o.price)) g+=`<line x1=${x2-22} x2=${x2} y1=${y(o.price)} y2=${y(o.price)} class=chladder/>`; });
-  if(drawP!=null){ if(within(drawP)){ g+=`<line x1=${x2-44} x2=${x2} y1=${y(drawP)} y2=${y(drawP)} class=chdraw/><text x=${x2+4} y=${y(drawP)+3} class=chax>${(sc.draw.label||'draw')} ${N(drawP)}</text>`; }
+  (sc.draw_ladder||[]).forEach(o=>{ if(within(o.price)) g+=`<line x1=${x2-22} x2=${x2} y1=${y(o.price)} y2=${y(o.price)} class="chladder"/>`; });
+  if(drawP!=null){ if(within(drawP)){ g+=`<line x1=${x2-44} x2=${x2} y1=${y(drawP)} y2=${y(drawP)} class="chdraw"/><text x=${x2+4} y=${y(drawP)+3} class=chax>${(sc.draw.label||'draw')} ${N(drawP)}</text>`; }
     else { const above=drawP>hi; g+=`<text x=${x2+4} y=${above?pt+9:pt+plotH-3} class=chax>${above?'▲':'▼'} ${(sc.draw.label||'draw')} ${N(drawP)}</text>`; } }
   const lvl=(p,cls,lb)=>{ if(p==null)return; const yy=y(p); g+=`<line x1=${pl} x2=${x2} y1=${yy} y2=${yy} class="chlvl ${cls}"/><text x=${x2+4} y=${yy+3} class="chax ${cls}">${lb} ${N(p)}</text>`; };
   lvl(ex.target,'tp','TP'); lvl(ex.entry,'entry','ENTRY'); lvl(ex.stop,'sl','SL');
-  if(now!=null){ if(within(now)){ const yy=y(now); g+=`<line x1=${pl} x2=${x2} y1=${yy} y2=${yy} class=chnow/><text x=${x2+4} y=${yy+3} class="chax now">NOW ${N(now)}</text>`; }
+  if(now!=null){ if(within(now)){ const yy=y(now); g+=`<line x1=${pl} x2=${x2} y1=${yy} y2=${yy} class="chnow"/><text x=${x2+4} y=${yy+3} class="chax now">NOW ${N(now)}</text>`; }
     else { const above=now>hi; g+=`<text x=${x2+4} y=${above?pt+20:pt+plotH-14} class="chax now">${above?'▲':'▼'} NOW ${N(now)}</text>`; } }
   const rr=ex.rr!=null?(' · '+N(ex.rr)+'R'):'', ordTxt=ex.order?(' · '+ex.order+' @ '+N(ex.entry)):'';
   const head=`${sym.split(':').pop()} · <b class="${isLong?'prole-long':'prole-short'}">${dir.toUpperCase()}</b> → ${(sc.draw&&sc.draw.label)||''} ${N(drawP)}${rr}${ordTxt}`;
   const note=`<div class=scchart-note>FVG · fib (0.5/0.62/0.79 = OTE) · dealing range · pools (BSL/SSL) · draw+ladder · entry/SL/TP. EQH/EQL not marked (tolerance undefined).${(ex.entry==null)?' No live entry yet — context + zone only.':''}</div>`;
-  $('#candmodal-title').innerHTML=head; $('#candmodal-body').innerHTML=`<svg viewBox="0 0 ${W} ${H}" class=scchart>${g}</svg>`+note; $('#candmodal').classList.add('on');
+  $('#candmodal-title').innerHTML=head; $('#candmodal-body').innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" preserveAspectRatio="xMidYMid meet" class=scchart>${g}</svg>`+note; $('#candmodal').classList.add('on');
 }
 async function pollV2(){
   let d;

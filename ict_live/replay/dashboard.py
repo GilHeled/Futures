@@ -303,7 +303,9 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .dclass{font-size:9px;font-weight:700;letter-spacing:.3px;padding:0 4px;border-radius:4px;border:1px solid var(--line)}
  .dclass-ERL{color:var(--long)} .dclass-IRL{color:var(--accent)}   /* Lesson 10: external vs internal draw */
  /* SCENARIO LAYER — the 2-3 stable theses (the primary V2 view) */
- .sc-wrap{margin-top:10px;border-top:1px solid var(--line);padding-top:8px}
+ .sc-wrap{margin-top:6px}
+ .v2ctx-hd{margin-top:8px;padding-top:6px;border-top:1px solid var(--line);font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);cursor:pointer;user-select:none}
+ .v2ctx-hd:hover{color:var(--fg)}
  .sc-title{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);margin-bottom:6px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
  .sc-stats{font-size:10px;text-transform:none;letter-spacing:0;color:var(--mut);font-family:"SF Mono",ui-monospace,Menlo,monospace}
  .sccard{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:6px;background:var(--card2,rgba(127,127,127,.05))}
@@ -748,15 +750,21 @@ function v2Tables(rep){
     const openUsd=(stx.open&&stx.open_usd!=null)?` (${stx.open} open ${stx.open_usd>=0?'+$':'−$'}${num(Math.abs(stx.open_usd))})`:(stx.open?' · '+stx.open+' open':'');
     const statsHtml=`<span class=sc-stats title="triggers and their outcomes (target=win, stop=loss, eod=closed at session end — no overnight holds). $ = realized P&L, 1 contract.">stats · ${stx.triggered||0} triggered · ${stx.resolved||0} closed (${stx.target||0}T/${stx.stop||0}S/${stx.eod||0}E) · win ${wp} · ${(stx.total_r>=0?'+':'')}${num(stx.total_r||0)}R${usd}${openUsd}</span>`;
     const scHtml=scn.length?scn.map(scenarioCard).join(''):'<div class=cempty>no active scenario — H4/H1 context not yet directional</div>';
+    // context is reference detail — collapse it by default so the ACTION + SCENARIOS stay above the fold
+    // for every symbol; the toggle state persists across the 5s poll (window._v2ctxOpen).
+    const ctxOpen=!!(window._v2ctxOpen&&window._v2ctxOpen.has(sym));
+    const ctxHtml=ctxOpen?`<div class=reads>${ctxRead(s.strategic,'strategic',u[tf.context])}${ctxRead(s.intraday,'intraday',u[tf.setup])}</div>`:'';
     return `<div class="ticket ${decSide}">
       <div class="thead v2head"><span class=sym title="${sym}">${sym.includes(':')?sym.split(':')[1]:sym}</span>${lastHtml}${tickHtml}<span class=thead-right>${sessHtml}</span></div>
       <div class="v2action ${actCls}">${verdict}</div>
-      <div class=reads>${ctxRead(s.strategic,'strategic',u[tf.context])}${ctxRead(s.intraday,'intraday',u[tf.setup])}</div>
-      <div class=sc-wrap><div class=sc-title>scenarios <span class=mut>${sum.active||0} active · watched on ${tf.confirm}/${tf.trigger}</span>${statsHtml}</div>${scHtml}</div>
+      <div class=sc-wrap><div class=sc-title>scenarios <span class=mut>${sum.active||0} active · ${tf.confirm}/${tf.trigger}</span>${statsHtml}</div>${scHtml}</div>
+      <div class="v2ctx-hd" onclick="_toggleCtx('${sym}')">${ctxOpen?'▾':'▸'} 4H / 1H context</div>${ctxHtml}
     </div>`;
   }).join('');
   return banner+'<div class=tickets>'+cards+'</div>';
 }
+function _toggleCtx(k){ const s=window._v2ctxOpen||(window._v2ctxOpen=new Set()); s.has(k)?s.delete(k):s.add(k);
+  if(window._v2last){ try{ $('#v2-body').innerHTML=v2Tables(window._v2last); }catch(e){} } }
 async function pollV2(){
   let d;
   try{ d=await (await fetch('/v2/report')).json(); window._v2last=d; }

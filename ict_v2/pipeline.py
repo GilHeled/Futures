@@ -639,7 +639,35 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
     return out
 
 
-def execution_for_scenario(scenario, candidates, price=None) -> dict | None:
+MIN_TARGET_RR = 2.0   # the trade's target must give at least this reward:risk (user rule ~2R)
+
+
+def _pick_target(direction, entry, risk, objectives, draw_px, min_rr):
+    """Pick the trade's TARGET = the FIRST (nearest) opposing liquidity that clears >= `min_rr`
+    reward:risk. Scans ALL liquidity objectives (4H/1H + nearer 15m) and takes the CLOSEST one beyond
+    min_rr*risk — not the far thesis draw. The scenario's own draw is only a fallback when the objective
+    set is empty. Returns (target, rr), or (None, None) if nothing clears the floor (setup skipped)."""
+    if not risk or risk <= 0:
+        return None, None
+    need = min_rr * risk
+
+    def on_side(px):
+        return px is not None and (px > entry if direction == "long" else px < entry)
+
+    opp = [o.price for o in (objectives or [])
+           if on_side(getattr(o, "price", None))
+           and getattr(o, "status", "") not in ("swept", "mitigated")
+           and abs(o.price - entry) >= need]
+    if opp:
+        tgt = min(opp, key=lambda p: abs(p - entry))           # the FIRST liquidity past >=2R
+        return round(tgt, 2), round(abs(tgt - entry) / risk, 2)
+    if on_side(draw_px) and abs(draw_px - entry) >= need:      # fallback: the thesis draw (no objectives)
+        return draw_px, round(abs(draw_px - entry) / risk, 2)
+    return None, None
+
+
+def execution_for_scenario(scenario, candidates, price=None, objectives=None,
+                           min_rr: float = MIN_TARGET_RR) -> dict | None:
     """Decide an active SCENARIO's execution state from the entry candidates generated on the execution
     timeframe. This is the M15/M1 job: the higher timeframes already fixed the thesis (direction, zone,
     draw); here we only watch for the entry inside the scenario's retracement zone.
@@ -650,49 +678,44 @@ def execution_for_scenario(scenario, candidates, price=None) -> dict | None:
     retracing (price in the zone, no entry array yet) → None (watching; price not in the zone)."""
     zone = getattr(scenario, "entry_zone", None)
     dirn = scenario.direction
-    draw_px = getattr(getattr(scenario, "draw", None), "price", None)
 
     def in_zone(p):
         return zone is not None and p is not None and zone[0] <= p <= zone[1]
 
-    def coherent(c):
-        # a tradeable entry must have SANE geometry for the direction: long → stop < entry < draw;
-        # short → draw < entry < stop. Rejects wrong-side stops and entries past the draw.
+    def stop_ok(c):     # sane stop side for the direction (long: stop below entry; short: above)
         if c.entry is None or c.stop is None:
             return False
-        if dirn == "long":
-            return c.stop < c.entry and (draw_px is None or c.entry < draw_px)
-        return c.entry < c.stop and (draw_px is None or draw_px < c.entry)
+        return (c.stop < c.entry) if dirn == "long" else (c.entry < c.stop)
 
-    # only STRUCTURALLY-VALID, geometry-coherent entries inside the zone are actionable (a degenerate /
-    # invalid candidate is never surfaced as an order — the min_stop floor rejects tiny-stop setups upstream)
     usable = [c for c in candidates if c.direction == dirn and c.entry is not None and in_zone(c.entry)
-              and getattr(c, "structure", "") == "valid" and coherent(c)]
+              and getattr(c, "structure", "") == "valid" and stop_ok(c)]
     entry_cands = [c for c in usable if c.entry_role == "entry"] or usable   # prefer true LTF entries
     if entry_cands:
         c = entry_cands[0]
-        live = getattr(getattr(c, "entry_obj", None), "state", "") == "valid"   # retraced/touched
-        risk = abs(c.stop - c.entry) if (c.stop is not None and c.entry is not None) else None
-        rr = (round(abs(c.entry - draw_px) / risk, 2) if (risk and draw_px is not None and risk > 0) else None)
-        gap = (round(c.entry - price, 2) if price is not None else None)         # entry vs current price
-        if live:
-            why = "entry retraced into — trigger now"
-        elif gap is not None:
-            # a resting entry: say WHICH WAY and HOW FAR price must move to fill it (a short entry sits
-            # ABOVE price → awaiting an up-retrace; a long entry sits BELOW → awaiting a down-retrace)
-            move = "rise" if gap > 0 else "fall"
-            why = (f"{dirn} entry rests at {round(c.entry, 2)} — awaiting price to {move} "
-                   f"{abs(gap):g} pts into it (now {round(price, 2)})")
-        else:
-            why = "entry PD array armed in the zone — awaiting retrace"
-        return {"state": "triggered" if live else "armed",
-                "entry": round(c.entry, 2), "stop": (round(c.stop, 2) if c.stop is not None else None),
-                "target": (round(draw_px, 2) if draw_px is not None else None), "rr": rr,
-                "price": (round(price, 2) if price is not None else None), "dist_to_entry": gap,
-                "entry_role": c.entry_role, "tf": getattr(c, "tf", ""), "why": why}
+        risk = abs(c.stop - c.entry)
+        draw_px = getattr(getattr(scenario, "draw", None), "price", None)
+        tgt, rr = _pick_target(dirn, c.entry, risk, objectives, draw_px, min_rr)   # nearest draw >= min_rr
+        if tgt is not None:                                     # a target clearing >=2R exists -> tradeable
+            live = getattr(getattr(c, "entry_obj", None), "state", "") == "valid"
+            gap = (round(c.entry - price, 2) if price is not None else None)
+            if live:
+                why = f"entry retraced into - trigger now (target {tgt}, {rr}R)"
+            elif gap is not None:
+                move = "rise" if gap > 0 else "fall"
+                why = (f"{dirn} entry rests at {round(c.entry, 2)} - awaiting price to {move} "
+                       f"{abs(gap):g} pts into it (now {round(price, 2)}); target {tgt} ({rr}R)")
+            else:
+                why = f"entry PD array armed - target {tgt} ({rr}R)"
+            return {"state": "triggered" if live else "armed",
+                    "entry": round(c.entry, 2), "stop": round(c.stop, 2), "target": tgt, "rr": rr,
+                    "price": (round(price, 2) if price is not None else None), "dist_to_entry": gap,
+                    "entry_role": c.entry_role, "tf": getattr(c, "tf", ""), "why": why}
+        if in_zone(price):
+            return {"state": "retracing",
+                    "why": f"entry present but no opposing draw clears {min_rr:g}R - skipped"}
     if in_zone(price):
-        return {"state": "retracing", "price": (round(price, 2) if price is not None else None),
-                "why": "price retracing into the entry zone — awaiting an entry PD array"}
+        return {"state": "retracing",
+                "why": "price retracing into the entry zone - awaiting an entry PD array"}
     return None   # watching: price not yet in the retracement zone
 
 

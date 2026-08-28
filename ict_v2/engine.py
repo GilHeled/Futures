@@ -16,7 +16,10 @@ stage helpers in `pipeline` (which reuse the frozen v1 engine read-only). v1 is 
 """
 from __future__ import annotations
 
+from datetime import timezone
+
 from ict_live.engine import pipeline as v1
+from ict_live.market.calendar import Calendar        # frozen CME session-day (18:00→17:00 ET trade date)
 from ict_v2 import liquidity as LQ
 from ict_v2 import pdarrays as PDA
 from ict_v2 import pipeline as P
@@ -29,7 +32,7 @@ _SCENARIO_MAX = 3          # … at most 3
 class MTFEngine:
     def __init__(self, context_tf: str = "4H", setup_tf: str = "1H", confirm_tf: str = "15m",
                  trigger_tf: str = "1m", refine_tf: str | None = None, min_stop: float | None = None,
-                 anchor_tf: str | None = None, entry_models=None):
+                 anchor_tf: str | None = None, entry_models=None, point_value: float | None = None):
         # ≥15-minute liquidity floor (Lesson 6/8): the CONTEXT/execution-setup TFs must be ≥15m; the 1m
         # trigger (and refine) may be finer — they only trigger, they do not mark liquidity.
         P.assert_liquidity_floor(context_tf, setup_tf, confirm_tf)
@@ -40,7 +43,8 @@ class MTFEngine:
         # --- responsibility-based state ---
         self.strategic = None          # 4H StrategicContext (HTFContext) — fixed until next 4H close
         self.intraday = None           # 1H IntradayContext  (HTFContext) — fixed until next 1H close
-        self.book = SC.ScenarioBook(target=_SCENARIO_TARGET, maxn=_SCENARIO_MAX)
+        self.book = SC.ScenarioBook(target=_SCENARIO_TARGET, maxn=_SCENARIO_MAX, point_value=point_value)
+        self._cal = Calendar()                     # CME session-day for the no-overnight-holds rule
         self.objectives: list = []     # latest full liquidity-objective inventory (for the dashboard)
         self.exec_tf = None            # the TF the current execution states were monitored on
         self.last_price = None
@@ -106,6 +110,15 @@ class MTFEngine:
                                      gaps=self._gaps())
         if self.intraday is not None:
             objs += LQ.collect_objectives(self.intraday, direction=(self.intraday.bias or None))
+        # NEARER liquidity: also collect the execution-TF (15m) intraday pools/FVGs so the scenario can
+        # target a CLOSER draw than the coarse 4H/1H pools (Lesson 10: price seeks the NEXT draw). The
+        # 15m is ≥ the liquidity floor, so its pools are valid draws for an intraday target.
+        if self._confirm_bars:
+            try:
+                ctx15 = P.htf_context(self._confirm_bars, self.confirm_tf)
+                objs += LQ.collect_objectives(ctx15, direction=(self.strategic.bias or None))
+            except Exception:
+                pass
         self.objectives = objs
         proposals = SC.build_scenarios(self.strategic, self.intraday or self.strategic, objs,
                                        price=self.last_price)
@@ -116,17 +129,31 @@ class MTFEngine:
                       self.trigger_tf if self._trigger_bars else self.confirm_tf)
 
     def _monitor(self, bars, tf):
-        """Update each active scenario's execution state from entry candidates on the execution TF —
-        membership is untouched (pure state refresh, no churn)."""
+        """Update each active scenario's execution state from entry candidates on the execution TF. An
+        OPEN trade resolves only on stop/target and is checked against the finest (trigger-TF) bar, so a
+        trigger never falls back to watching. Membership is untouched."""
         if not self.book.active:
             return
         if not bars or self.strategic is None:
-            self.book.monitor(lambda s: None)
+            self.book.monitor(lambda s: None, bar=None)
             return
         ms = v1.analyze(bars, tf, min_stop=self.min_stop)
         cands = P.generate_candidates(ms, self.strategic, tf=tf, min_stop=self.min_stop, bars=bars)
         price = bars[-1].close
-        self.book.monitor(lambda s: P.execution_for_scenario(s, cands, price))
+        # the position lifecycle (open + stop/target/EOD resolution) runs ONLY on the trigger TF (1m,
+        # finest, no look-ahead); the coarser 15m pass only advances watching/retracing/armed for display.
+        bar = bars[-1] if tf == self.trigger_tf else None
+        day = None
+        if bar is not None:
+            ct = bar.close_time
+            if getattr(ct, "tzinfo", None) is None:
+                ct = ct.replace(tzinfo=timezone.utc)
+            try:
+                day = self._cal.session_day(ct)          # CME trade date (None during the maintenance halt)
+            except Exception:
+                day = None
+        self.book.monitor(lambda s: P.execution_for_scenario(s, cands, price, objectives=self.objectives),
+                          bar=bar, day=day)
         self.exec_tf = tf
 
     # ---- accessors ----------------------------------------------------------------------------

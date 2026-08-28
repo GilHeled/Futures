@@ -304,7 +304,8 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .dclass-ERL{color:var(--long)} .dclass-IRL{color:var(--accent)}   /* Lesson 10: external vs internal draw */
  /* SCENARIO LAYER — the 2-3 stable theses (the primary V2 view) */
  .sc-wrap{margin-top:10px;border-top:1px solid var(--line);padding-top:8px}
- .sc-title{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);margin-bottom:6px}
+ .sc-title{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);margin-bottom:6px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+ .sc-stats{font-size:10px;text-transform:none;letter-spacing:0;color:var(--mut);font-family:"SF Mono",ui-monospace,Menlo,monospace}
  .sccard{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:6px;background:var(--card2,rgba(127,127,127,.05))}
  .sccard.long{border-left:3px solid var(--long)} .sccard.short{border-left:3px solid var(--short)} .sccard.flat{border-left:3px solid var(--line)}
  .sccard.actionable{box-shadow:0 0 0 1px var(--accent,#c8a24a),0 0 12px -2px var(--accent,#c8a24a);background:color-mix(in srgb,var(--accent,#c8a24a) 8%,transparent)}  /* armed/triggered — act here */
@@ -316,6 +317,7 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .scstate.pass{color:var(--long);border-color:color-mix(in srgb,var(--long) 45%,var(--line))} .scstate.rej{color:var(--short);opacity:.7}
  .sc-body{display:flex;gap:12px;flex-wrap:wrap;margin-top:5px;font-size:11px}
  .sc-exec{display:flex;gap:10px;flex-wrap:wrap;margin-top:5px}
+ .sc-ladder{margin-top:4px;font-size:10px;color:var(--mut);font-family:"SF Mono",ui-monospace,Menlo,monospace}
  .sc-why{margin-top:5px;font-size:10.5px;color:var(--mut);white-space:pre-wrap}
  /* the ICT chain: sweep → displacement → MSS → FVG → entry → gate; ✓ ok / ✗ fail / — pending */
  .cchain{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
@@ -691,22 +693,34 @@ function v2Tables(rep){
   };
   // ONE scenario — a market thesis: direction toward a draw, with its entry zone + execution state
   const scenarioCard=(sc,i)=>{
-    const dir=sc.direction, side=sideOf(dir); const ex=sc.execution||null; const st=sc.state||'watching';
-    const stcls={watching:'watch',retracing:'inc',armed:'arm',triggered:'pass',invalidated:'rej',resolved:'rej'}[st]||'watch';
+    const dir=sc.direction, side=sideOf(dir); const ex=sc.execution||null; const pos=sc.position||null; const st=sc.state||'watching';
+    const stcls={watching:'watch',retracing:'inc',armed:'arm',triggered:'pass',target:'pass',stop:'rej',eod:'watch',invalidated:'rej'}[st]||'watch';
     const d=sc.draw||{};
     const drawTxt=`${d.label||d.kind} ${num(d.price)} <span class="dclass dclass-${d.liquidity_class||'ERL'}" title="Lesson 10 draw class">${d.liquidity_class||'—'}·${d.tf||''}</span>`;
     const zone=sc.entry_zone; const zoneTxt=zone?`${num(zone[0])}–${num(zone[1])}`:'—';
     const rf=sc.rank_factors||{};
     const rfTxt=`alignment ${rf.alignment} · class-fit ${rf.class_fit} · strength ${rf.strength} · proximity ${rf.proximity}`;
-    const exHtml=ex?`<div class=sc-exec>${ex.price!=null?`<span class=cfact><i>now</i>${num(ex.price)}</span>`:''}<span class=cfact><i>entry</i>${num(ex.entry)}</span><span class=cfact><i>stop</i>${num(ex.stop)}</span><span class=cfact><i>target</i>${num(ex.target)}</span>${ex.rr!=null?`<span class=cfact><i>R:R</i>${num(ex.rr)}</span>`:''}${ex.entry_role?`<span class=cfact><i>entry role</i>${ex.entry_role}</span>`:''}</div>`:'';
-    const why=(ex&&ex.why)?ex.why:(sc.why||'');
+    // trade facts: once TRIGGERED the fixed POSITION is authoritative (a trigger is sticky); else the live execution
+    const src=pos||ex||{};
+    const nowPx=(ex&&ex.price!=null)?ex.price:(pos&&pos.opened_price!=null?pos.opened_price:null);
+    const rr=(pos&&pos.rmult!=null)?pos.rmult:((ex&&ex.rr!=null)?ex.rr:null);
+    const resHtml=(pos&&pos.outcome)?`<span class=cfact><i>result</i><b class="${pos.result_r>0?'rrq-good':'rrq-low'}">${pos.result_r>0?'+':''}${num(pos.result_r)}R</b></span>`:'';
+    // $ since the trade started — running while open, realized once closed (1 contract)
+    const money=v=>(v>=0?'+$':'−$')+num(Math.abs(v));
+    const pnl=(pos&&pos.pnl_usd!=null)?pos.pnl_usd:null;
+    const pnlHtml=(pnl!=null)?`<span class=cfact title="CURRENT dollar P&L (live while open, realized once closed; 1 contract)"><i>${pos.open?'P&L now':'P&L'}</i><b class="${pnl>=0?'rrq-good':'rrq-low'}">${money(pnl)}</b></span>`:'';
+    const plan=(pos&&pos.plan_usd!=null)?pos.plan_usd:null;   // ORIGINAL planned $ (entry → target)
+    const planHtml=(plan!=null)?`<span class=cfact title="ORIGINAL P&L — the planned profit if this trigger reaches its target draw (1 contract)"><i>orig P&L</i><b class="${plan>=0?'rrq-good':'rrq-low'}">${money(plan)}</b></span>`:'';
+    const exHtml=(src.entry!=null)?`<div class=sc-exec>${nowPx!=null?`<span class=cfact><i>now</i>${num(nowPx)}</span>`:''}<span class=cfact><i>entry</i>${num(src.entry)}</span><span class=cfact><i>stop</i>${num(src.stop)}</span><span class=cfact><i>target</i>${num(src.target)}</span>${rr!=null?`<span class=cfact><i>R:R</i>${num(rr)}</span>`:''}${resHtml}${pnlHtml}${planHtml}</div>`:'';
+    const _oc={target:'TARGET hit',stop:'STOPPED',eod:'closed end-of-day (no overnight holds)'}[pos&&pos.outcome]||'';
+    const why=(pos&&pos.outcome)?`${_oc} — closed ${pos.result_r>0?'+':''}${num(pos.result_r)}R`:(pos?'IN TRADE — open until stop or target (closes at session end)':((ex&&ex.why)?ex.why:(sc.why||'')));
     const actionable=(st==='armed'||st==='triggered');
     return `<div class="sccard ${side}${actionable?' actionable':''}">
       <div class=sc-hd><span class=sc-rank>#${i+1}</span><span class="cdir ${side}">${dir.toUpperCase()}</span>
         <span class=sc-arrow>→</span><span class=sc-draw>${drawTxt}</span>
         <span class="scstate ${stcls}" title="ranking: ${_candEsc(rfTxt)}">${st}</span></div>
       <div class=sc-body><span class=wc title="the ${dir==='long'?'discount':'premium'} half of the H4 dealing range — the AREA a valid entry may form in (Lesson 9/12). The exact ENTRY below is the FVG that formed inside it.">retrace zone <b>${zoneTxt}</b> <span class=mut>${dir==='long'?'discount':'premium'}</span></span><span class=wc title="transparent ranking factors">rank <b>${rfTxt}</b></span></div>
-      ${exHtml}<div class=sc-why>${_candEsc(why)}</div></div>`;
+      ${exHtml}${(sc.draw_ladder&&sc.draw_ladder.length)?`<div class=sc-ladder title="farther same-direction liquidity — extension targets after the first">ladder → ${sc.draw_ladder.map(o=>num(o.price)).join(' · ')}</div>`:''}<div class=sc-why>${_candEsc(why)}</div></div>`;
   };
   const cards=names.map(sym=>{
     const s=syms[sym], u=s.updated||{}, tf=s.timeframes||{};
@@ -721,17 +735,22 @@ function v2Tables(rep){
     // color = DIRECTION (green long / red short); intensity = urgency (ENTER solid > SET > GET READY);
     // grey only when there is nothing directional to do.
     let verdict='MONITORING', actCls='watch', decSide='flat';
-    if(trig){const e=trig.execution||{}; decSide=sideOf(trig.direction); actCls=decSide+'-strong'; verdict=`ENTER ${trig.direction.toUpperCase()} @ ${num(e.entry)}`;}
+    if(trig){const e=trig.position||trig.execution||{}; decSide=sideOf(trig.direction); actCls=decSide+'-strong'; verdict=`IN ${trig.direction.toUpperCase()} @ ${num(e.entry)}`;}
     else if(armed){const e=armed.execution||{}; decSide=sideOf(armed.direction); actCls=decSide+'-mid'; verdict=`SET ${armed.direction.toUpperCase()} @ ${num(e.entry)}`;}
     else if(retr){decSide=sideOf(retr.direction); actCls=decSide+'-soft'; verdict=`GET READY · ${retr.direction.toUpperCase()}`;}
     else if(!scn.length){verdict='NO THESIS';}
     const tickHtml=lst?`<span class=v2tick title="last 1m tick — ${hhmm(lst.time)} (browser clock)">◷ ${agoOf(lst.time)}</span>`:'';
+    // session trigger→outcome stats (recommendations + actual results)
+    const stx=s.scenario_stats||{}; const wp=(stx.win_pct==null?'—':stx.win_pct+'%');
+    const usd=(stx.total_usd!=null)?` · ${stx.total_usd>=0?'+$':'−$'}${num(Math.abs(stx.total_usd))}`:'';
+    const openUsd=(stx.open&&stx.open_usd!=null)?` (${stx.open} open ${stx.open_usd>=0?'+$':'−$'}${num(Math.abs(stx.open_usd))})`:(stx.open?' · '+stx.open+' open':'');
+    const statsHtml=`<span class=sc-stats title="triggers and their outcomes (target=win, stop=loss, eod=closed at session end — no overnight holds). $ = realized P&L, 1 contract.">stats · ${stx.triggered||0} triggered · ${stx.resolved||0} closed (${stx.target||0}T/${stx.stop||0}S/${stx.eod||0}E) · win ${wp} · ${(stx.total_r>=0?'+':'')}${num(stx.total_r||0)}R${usd}${openUsd}</span>`;
     const scHtml=scn.length?scn.map(scenarioCard).join(''):'<div class=cempty>no active scenario — H4/H1 context not yet directional</div>';
     return `<div class="ticket ${decSide}">
       <div class="thead v2head"><span class=sym title="${sym}">${sym.includes(':')?sym.split(':')[1]:sym}</span>${lastHtml}${tickHtml}<span class=thead-right>${sessHtml}</span></div>
       <div class="v2action ${actCls}">${verdict}</div>
       <div class=reads>${ctxRead(s.strategic,'strategic',u[tf.context])}${ctxRead(s.intraday,'intraday',u[tf.setup])}</div>
-      <div class=sc-wrap><div class=sc-title>scenarios <span class=mut>${sum.active||0} active · ${sum.armed||0} armed · ${sum.triggered||0} triggered · watched on ${tf.confirm}/${tf.trigger}</span></div>${scHtml}</div>
+      <div class=sc-wrap><div class=sc-title>scenarios <span class=mut>${sum.active||0} active · watched on ${tf.confirm}/${tf.trigger}</span>${statsHtml}</div>${scHtml}</div>
     </div>`;
   }).join('');
   return banner+'<div class=tickets>'+cards+'</div>';

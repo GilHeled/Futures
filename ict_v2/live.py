@@ -46,7 +46,7 @@ class V2Live:
     def __init__(self, context_tf: str = "4H", setup_tf: str = "1H", confirm_tf: str = "15m",
                  trigger_tf: str = "1m", window: int = _WINDOW, exec_window: int = _EXEC_WINDOW,
                  refine_tf: str | None = None, min_stop: float | None = None,
-                 anchor_tf: str | None = None, entry_models=None):
+                 anchor_tf: str | None = None, entry_models=None, point_value: float | None = None):
         self.context_tf, self.setup_tf = context_tf, setup_tf
         self.confirm_tf, self.trigger_tf = confirm_tf, trigger_tf
         self.window, self.exec_window = window, exec_window
@@ -60,7 +60,7 @@ class V2Live:
         self.builder = BarBuilder(timeframes=built)
         self.engine = MTFEngine(context_tf, setup_tf, confirm_tf, trigger_tf,
                                 refine_tf=refine_tf, min_stop=min_stop, anchor_tf=anchor_tf,
-                                entry_models=entry_models)
+                                entry_models=entry_models, point_value=point_value)
         tfs = tuple(dict.fromkeys(tf for tf in (context_tf, setup_tf, confirm_tf, trigger_tf,
                                                 refine_tf, anchor_tf) if tf))
         self.buf = {tf: [] for tf in tfs}
@@ -177,6 +177,9 @@ class V2Live:
                                  "armed": sum(1 for s in scenarios if s.get("state") == "armed"),
                                  "retracing": sum(1 for s in scenarios if s.get("state") == "retracing"),
                                  "watching": sum(1 for s in scenarios if s.get("state") == "watching")},
+            # trigger→outcome record (the "recommendations + actual results") + session stats
+            "scenario_stats": eng.book.stats(),
+            "trades": list(eng.book.trades),
             "objectives": [o.to_dict() for o in getattr(eng, "objectives", [])],   # full liquidity inventory
         }
 

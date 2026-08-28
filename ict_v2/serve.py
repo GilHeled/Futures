@@ -25,6 +25,14 @@ from ict_v2.live import V2Live
 class V2Service:
     def __init__(self, data_dir: str):
         self.store_path = Path(data_dir) / "raw_1m.jsonl"
+        # writable output dir for the trade log (the /data store is read-only for v2). None = disabled.
+        _out = os.environ.get("ICT_V2_OUT_DIR", "").strip()
+        self.out_dir = None
+        if _out:
+            try:
+                self.out_dir = Path(_out); self.out_dir.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                self.out_dir = None
         self.lives: dict[str, V2Live] = {}
         self.last_ms: dict[str, int] = {}
         self.state: dict[str, dict] = {}
@@ -74,15 +82,18 @@ class V2Service:
                 if live is None:
                     # degenerate-stop floor per instrument: rejects tiny-stop setups so the execution
                     # monitor never surfaces an absurd-RR order (e.g. a 0.25-pt stop with a 290-pt target).
+                    mstop = pv = None
                     try:
                         from ict_live import config as _C
                         mstop = _C.min_stop_for(sym)
+                        inst = _C.INSTRUMENTS.get(sym)          # $ per point (1 contract) for dollar P&L
+                        pv = getattr(inst, "point_value", None) if inst is not None else None
                     except Exception:
-                        mstop = None
+                        pass
                     live = self.lives.setdefault(sym, V2Live(
                         self.context_tf, self.setup_tf, self.confirm_tf, self.trigger_tf,
                         refine_tf=self.refine_tf, min_stop=mstop, anchor_tf=self.anchor_tf,
-                        entry_models=self.entry_models))
+                        entry_models=self.entry_models, point_value=pv))
                 last = self.last_ms.get(sym, -1)
                 for b in store.bars(sym):                    # chronological
                     ms = int(b.open_time.timestamp() * 1000)
@@ -93,6 +104,16 @@ class V2Service:
                     n += 1
                 self.last_ms[sym] = last
                 self.state[sym] = live.snapshot()
+                # PERSIST the trigger→outcome log per symbol to the WRITABLE out dir (the /data store is
+                # mounted read-only for v2). Overwrite = idempotent; the book's trade list is a
+                # deterministic function of the replayed bars, so restarts don't duplicate.
+                if self.out_dir is not None:
+                    try:
+                        safe = sym.replace(":", "_").replace("!", "")
+                        (self.out_dir / f"v2_trades_{safe}.json").write_text(
+                            json.dumps(live.engine.book.trades, default=str))
+                    except Exception:
+                        pass
             self.updated_ms = int(time.time() * 1000)
             return n
 

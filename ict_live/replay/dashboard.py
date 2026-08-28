@@ -317,6 +317,8 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .scstate.pass{color:var(--long);border-color:color-mix(in srgb,var(--long) 45%,var(--line))} .scstate.rej{color:var(--short);opacity:.7}
  .sc-body{display:flex;gap:12px;flex-wrap:wrap;margin-top:5px;font-size:11px}
  .sc-exec{display:flex;gap:10px;flex-wrap:wrap;margin-top:5px}
+ .sc-order{margin-top:5px;font-size:11px;padding:3px 8px;border-radius:6px;background:var(--panel2);border:1px solid var(--line);font-family:"SF Mono",ui-monospace,Menlo,monospace}
+ .sc-order b.prole-long{color:var(--long)} .sc-order b.prole-short{color:var(--short)}
  .sc-ladder{margin-top:4px;font-size:10px;color:var(--mut);font-family:"SF Mono",ui-monospace,Menlo,monospace}
  .sc-why{margin-top:5px;font-size:10.5px;color:var(--mut);white-space:pre-wrap}
  /* the ICT chain: sweep → displacement → MSS → FVG → entry → gate; ✓ ok / ✗ fail / — pending */
@@ -720,7 +722,7 @@ function v2Tables(rep){
         <span class=sc-arrow>→</span><span class=sc-draw>${drawTxt}</span>
         <span class="scstate ${stcls}" title="ranking: ${_candEsc(rfTxt)}">${st}</span></div>
       <div class=sc-body><span class=wc title="the ${dir==='long'?'discount':'premium'} half of the H4 dealing range — the AREA a valid entry may form in (Lesson 9/12). The exact ENTRY below is the FVG that formed inside it.">retrace zone <b>${zoneTxt}</b> <span class=mut>${dir==='long'?'discount':'premium'}</span></span><span class=wc title="transparent ranking factors">rank <b>${rfTxt}</b></span></div>
-      ${exHtml}${(sc.draw_ladder&&sc.draw_ladder.length)?`<div class=sc-ladder title="farther same-direction liquidity — extension targets after the first">ladder → ${sc.draw_ladder.map(o=>num(o.price)).join(' · ')}</div>`:''}<div class=sc-why>${_candEsc(why)}</div></div>`;
+      ${(src.entry!=null&&(st==='armed'||st==='triggered'))?`<div class=sc-order title="Entry order type depends on price vs the entry: a resting order on the wrong side fills instantly. Bracket: stop-loss = stop-market the other way; take-profit = limit.">Topstep: <b class="prole-${side}">${src.order||(dir==='long'?'BUY LIMIT':'SELL LIMIT')} @ ${num(src.entry)}</b> · SL ${src.sl_order||(dir==='long'?'sell-stop':'buy-stop')} ${num(src.stop)} · TP ${src.tp_order||(dir==='long'?'sell-limit':'buy-limit')} ${num(src.target)}${st==='triggered'?' · filled — in trade':''}</div>`:''}${exHtml}${(sc.draw_ladder&&sc.draw_ladder.length)?`<div class=sc-ladder title="farther same-direction liquidity — extension targets after the first">ladder → ${sc.draw_ladder.map(o=>num(o.price)).join(' · ')}</div>`:''}<div class=sc-why>${_candEsc(why)}</div></div>`;
   };
   const cards=names.map(sym=>{
     const s=syms[sym], u=s.updated||{}, tf=s.timeframes||{};
@@ -735,8 +737,8 @@ function v2Tables(rep){
     // color = DIRECTION (green long / red short); intensity = urgency (ENTER solid > SET > GET READY);
     // grey only when there is nothing directional to do.
     let verdict='MONITORING', actCls='watch', decSide='flat';
-    if(trig){const e=trig.position||trig.execution||{}; decSide=sideOf(trig.direction); actCls=decSide+'-strong'; verdict=`IN ${trig.direction.toUpperCase()} @ ${num(e.entry)}`;}
-    else if(armed){const e=armed.execution||{}; decSide=sideOf(armed.direction); actCls=decSide+'-mid'; verdict=`SET ${armed.direction.toUpperCase()} @ ${num(e.entry)}`;}
+    if(trig){const e=trig.position||trig.execution||{}; decSide=sideOf(trig.direction); actCls=decSide+'-strong'; verdict=`IN ${trig.direction.toUpperCase()} @ ${num(e.entry)} (filled)`;}
+    else if(armed){const e=armed.execution||{}; decSide=sideOf(armed.direction); actCls=decSide+'-mid'; verdict=`SET ${e.order||(armed.direction==='long'?'BUY LIMIT':'SELL LIMIT')} @ ${num(e.entry)}`;}
     else if(retr){decSide=sideOf(retr.direction); actCls=decSide+'-soft'; verdict=`GET READY · ${retr.direction.toUpperCase()}`;}
     else if(!scn.length){verdict='NO THESIS';}
     const tickHtml=lst?`<span class=v2tick title="last 1m tick — ${hhmm(lst.time)} (browser clock)">◷ ${agoOf(lst.time)}</span>`:'';

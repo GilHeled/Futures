@@ -706,8 +706,19 @@ def execution_for_scenario(scenario, candidates, price=None, objectives=None,
                        f"{abs(gap):g} pts into it (now {round(price, 2)}); target {tgt} ({rr}R)")
             else:
                 why = f"entry PD array armed - target {tgt} ({rr}R)"
+            # Topstep entry order TYPE depends on where price is vs the entry (a resting order must not
+            # be on the wrong side or it fills instantly at market):
+            #   long  — entry below price -> BUY LIMIT ; entry above price -> BUY STOP
+            #   short — entry above price -> SELL LIMIT; entry below price -> SELL STOP
+            # Bracket legs are fixed: SL = stop-market the other way, TP = limit.
+            if dirn == "long":
+                order = "BUY STOP" if (price is not None and price < c.entry) else "BUY LIMIT"
+            else:
+                order = "SELL STOP" if (price is not None and price > c.entry) else "SELL LIMIT"
             return {"state": "triggered" if live else "armed",
                     "entry": round(c.entry, 2), "stop": round(c.stop, 2), "target": tgt, "rr": rr,
+                    "order": order, "sl_order": ("sell stop" if dirn == "long" else "buy stop"),
+                    "tp_order": ("sell limit" if dirn == "long" else "buy limit"),
                     "price": (round(price, 2) if price is not None else None), "dist_to_entry": gap,
                     "entry_role": c.entry_role, "tf": getattr(c, "tf", ""), "why": why}
         if in_zone(price):

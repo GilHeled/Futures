@@ -254,3 +254,19 @@ def test_same_direction_theses_collapse_to_one_with_a_ladder():
     assert len(longs) == 1                                   # not three identical trades
     assert longs[0].draw.price == 240                        # kept the nearest draw (closest to 190)
     assert sorted(o.price for o in longs[0].draw_ladder) == [260, 280]   # farther draws = extensions
+
+
+def test_topstep_order_type_depends_on_price_vs_entry():
+    from types import SimpleNamespace as N
+    from ict_v2 import pipeline as P
+    objs = [N(price=210, status="unswept"), N(price=40, status="unswept")]
+    def cand(entry, stop, dirn):
+        return N(direction=dirn, entry=entry, stop=stop, structure="valid", entry_role="entry",
+                 tf="1m", entry_obj=N(state="waiting"))
+    o = lambda sc, c, pr: P.execution_for_scenario(sc, [c], price=pr, objectives=objs)["order"]
+    scL = N(direction="long", entry_zone=(100, 150), draw=N(price=210))
+    scS = N(direction="short", entry_zone=(100, 150), draw=N(price=40))
+    assert o(scL, cand(120, 110, "long"), 140) == "BUY LIMIT"    # entry below price → limit
+    assert o(scL, cand(140, 130, "long"), 120) == "BUY STOP"     # entry above price → stop
+    assert o(scS, cand(130, 140, "short"), 120) == "SELL LIMIT"  # entry above price → limit
+    assert o(scS, cand(120, 130, "short"), 140) == "SELL STOP"   # entry below price → stop (price higher)

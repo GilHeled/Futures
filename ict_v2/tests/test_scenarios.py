@@ -256,6 +256,86 @@ def test_same_direction_theses_collapse_to_one_with_a_ladder():
     assert sorted(o.price for o in longs[0].draw_ladder) == [260, 280]   # farther draws = extensions
 
 
+# ---- TRADE-LIFECYCLE / duplicate prevention: the tracker must log exactly one record per real trade --
+def test_setup_opens_one_trade_only_even_if_execution_keeps_firing():
+    """A triggered setup must open exactly ONE trade no matter how many monitor passes see it fire."""
+    book, rk = _booked()
+    trig = {"state": "triggered", "entry": 120, "stop": 110, "target": 210}
+    for _ in range(5):                                           # same setup fires 5×, never resolves
+        book.monitor(lambda s: trig, bar=_bar(121, 119, 120))
+    assert len(book.trades) == 1                                 # opened once, then sticky-updates only
+    assert book.active[0].position["open"]
+
+
+def test_non_trigger_pass_never_logs_a_trade():
+    """bar=None = a context/confirmation pass (not the trigger TF). It must NOT open or log a trade."""
+    book, rk = _booked()
+    book.monitor(lambda s: {"state": "triggered", "entry": 120, "stop": 110, "target": 210}, bar=None)
+    assert book.trades == [] and not book.active[0].position
+
+
+def _reopen_book_after_stop():
+    """Open a trade, stop it out, then re-run the SAME context close so the (now resolved) scenario is
+    re-admitted as a fresh proposal — the exact path that used to double-log a trade."""
+    strat = _ctx(bias="long")
+    book = SC.ScenarioBook()
+    rk = SC._range_key(strat.dealing_range)
+    props = lambda p=150: SC.build_scenarios(strat, strat, [_draw("high", 260)], price=p)
+    book.observe(props(), context_key="t0", cur_range_key=rk)
+    book.monitor(lambda s: {"state": "triggered", "entry": 120, "stop": 110, "target": 210},
+                 bar=_bar(121, 119, 120))
+    book.monitor(lambda s: None, bar=_bar(122, 108, 109))       # stop-out (draw 260 still unswept)
+    assert book.active[0].state == "stop" and len(book.trades) == 1
+    book.observe(props(), context_key="t1", cur_range_key=rk)   # SAME context → scenario re-admitted fresh
+    assert book.active[0].state == "watching" and book.active[0].position is None
+    return book, rk
+
+
+def test_resolved_setup_is_not_reopened_on_readmission():
+    """The core bug: after a trade closes and its scenario is re-admitted, the SAME setup re-firing must
+    NOT open a second trade."""
+    book, rk = _reopen_book_after_stop()
+    for _ in range(4):
+        book.monitor(lambda s: {"state": "triggered", "entry": 120, "stop": 110, "target": 210},
+                     bar=_bar(121, 119, 120))
+    assert len(book.trades) == 1                                 # still exactly one — no re-log
+    assert book.active[0].state == "armed"                       # shown as armed, but NOT a new position
+
+
+def test_target_update_is_not_a_new_trade():
+    """A re-picked/nearer target (same entry+stop) is the same setup — never a new trade."""
+    book, rk = _reopen_book_after_stop()
+    for tgt in (200, 190, 180):                                  # same entry/stop, target moves each pass
+        book.monitor(lambda s: {"state": "triggered", "entry": 120, "stop": 110, "target": tgt},
+                     bar=_bar(121, 119, 120))
+    assert len(book.trades) == 1
+
+
+def test_genuinely_new_setup_opens_a_second_trade():
+    """After the previous trade closed, a DIFFERENT entry PD-array (new entry/stop → new signature) is a
+    genuinely new setup and MAY open a second trade."""
+    book, rk = _reopen_book_after_stop()
+    book.monitor(lambda s: {"state": "triggered", "entry": 132, "stop": 124, "target": 210},
+                 bar=_bar(133, 131, 132))
+    assert len(book.trades) == 2                                 # a new setup → a second logical trade
+    assert book.trades[1]["entry"] == 132 and book.active[0].position["open"]
+
+
+def test_fvg_bounds_distinguish_setups_at_the_same_entry():
+    """Same entry/stop but a DIFFERENT FVG (fvg bounds) is a different setup; the same FVG is not."""
+    book, rk = _reopen_book_after_stop()
+    # NOTE: the closed trade had no fvg bounds (sig fvg=None). A trigger carrying explicit FVG bounds is a
+    # different signature → opens; repeating the identical FVG does not open again.
+    ex = {"state": "triggered", "entry": 120, "stop": 110, "target": 210, "fvg_top": 121, "fvg_bottom": 118}
+    book.monitor(lambda s: ex, bar=_bar(121, 119, 120))
+    assert len(book.trades) == 2                                 # new FVG signature → a new trade
+    book.monitor(lambda s: None, bar=_bar(122, 108, 109))       # stop it out again
+    book.observe(SC.build_scenarios(_ctx(bias="long"), _ctx(bias="long"), [_draw("high", 260)], price=150),
+                 context_key="t2", cur_range_key=rk)
+    book.monitor(lambda s: ex, bar=_bar(121, 119, 120))         # identical FVG again → NOT a new trade
+    assert len(book.trades) == 2
+
+
 def test_topstep_order_type_depends_on_price_vs_entry():
     from types import SimpleNamespace as N
     from ict_v2 import pipeline as P

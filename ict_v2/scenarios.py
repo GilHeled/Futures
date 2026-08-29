@@ -38,9 +38,9 @@ class Scenario:
     position: dict | None = None           # OPEN TRADE snapshot once triggered — fixed entry/stop/target;
     #                                        resolves ONLY on stop/target (a trigger is sticky, not re-derived)
 
-    def to_dict(self) -> dict:
+    def to_dict(self, price_dp: int = 2) -> dict:
         def px(x):
-            return None if x is None else round(float(x), 2)
+            return None if x is None else round(float(x), price_dp)
         return {"id": self.scenario_id, "direction": self.direction, "rank": self.rank,
                 "state": self.state, "why": self.why, "created": self.created_ctx,
                 "entry_zone": [px(self.entry_zone[0]), px(self.entry_zone[1])] if self.entry_zone else None,
@@ -50,8 +50,13 @@ class Scenario:
                 "basis": dict(self.basis), "execution": self.execution, "position": self.position}
 
 
-def _range_key(dr) -> str:
-    return "" if dr is None else f"{round(dr.low, 1)}-{round(dr.high, 1)}"
+def _key_dp(price_dp: int) -> int:
+    return max(1, price_dp - 1)                     # range/zone identity tolerance, one coarser than price
+
+
+def _range_key(dr, price_dp: int = 2) -> str:
+    kd = _key_dp(price_dp)
+    return "" if dr is None else f"{round(dr.low, kd)}-{round(dr.high, kd)}"
 
 
 def _entry_zone(dr, direction: str):
@@ -70,7 +75,7 @@ def _next_seek_class(price, dr) -> str:
     return "IRL" if (price > dr.high or price < dr.low) else "ERL"
 
 
-def build_scenarios(strategic, intraday, objectives, *, price=None) -> list[Scenario]:
+def build_scenarios(strategic, intraday, objectives, *, price=None, price_dp: int = 2) -> list[Scenario]:
     """Turn the current draw-role liquidity objectives into ranked scenario proposals. Direction is set
     by the draw's side (a buy-side/high draw → long; sell-side/low → short). Ranked lexicographically by
     transparent factors: context alignment → Lesson-10 class fit → objective strength → proximity."""
@@ -79,7 +84,7 @@ def build_scenarios(strategic, intraday, objectives, *, price=None) -> list[Scen
     strat_bias = getattr(strategic, "bias", "") or ""
     next_class = _next_seek_class(price, dr)
     span = (dr.high - dr.low) if dr is not None else 0.0
-    rkey = _range_key(dr)
+    rkey = _range_key(dr, price_dp)
 
     proposals: list[Scenario] = []
     for d in LQ.viable_targets(objectives):
@@ -95,7 +100,7 @@ def build_scenarios(strategic, intraday, objectives, *, price=None) -> list[Scen
         why = (f"{direction} toward {d.label} {round(d.price, 2)} ({d.liquidity_class or '—'}, {d.tf}); "
                f"{'aligned with intraday' if align == 2 else 'aligned with HTF bias' if align == 1 else 'counter-context'}"
                f"{' · Lesson-10 next-seek class' if class_fit else ''}")
-        sid = f"{direction}:{d.kind}:{round(d.price, 2)}:{rkey}"
+        sid = f"{direction}:{d.kind}:{round(d.price, price_dp)}:{rkey}"
         proposals.append(Scenario(
             scenario_id=sid, direction=direction, draw=d, entry_zone=_entry_zone(dr, direction),
             basis={"bias": strat_bias, "intraday_direction": intraday_dir, "range_key": rkey, "why": why},
@@ -120,7 +125,7 @@ def build_scenarios(strategic, intraday, objectives, *, price=None) -> list[Scen
     # same-direction draws become that scenario's draw_ladder (extension targets above/below).
     merged: dict[tuple, Scenario] = {}
     for s in proposals:
-        z = (round(s.entry_zone[0], 1), round(s.entry_zone[1], 1)) if s.entry_zone else None
+        z = (round(s.entry_zone[0], _key_dp(price_dp)), round(s.entry_zone[1], _key_dp(price_dp))) if s.entry_zone else None
         key = (s.direction, z)
         keep = merged.get(key)
         if keep is None:
@@ -139,16 +144,23 @@ class ScenarioBook:
     prevents churn. Between context closes the engine calls `monitor`, which updates each active
     scenario's execution STATE (watching→retracing→armed→triggered) WITHOUT touching membership."""
 
-    def __init__(self, target: int = 2, maxn: int = 3, on_event=None, point_value=None):
+    def __init__(self, target: int = 2, maxn: int = 3, on_event=None, point_value=None, price_dp: int = 2):
         self.target = target
         self.maxn = maxn
         self.point_value = point_value           # $ per point (1 contract) — for dollar P&L; None = R only
+        self.price_dp = price_dp                  # price decimals (2 = index scale; 5 = FX) — display/keys
         self.active: list[Scenario] = []
         self.retired: list[Scenario] = []        # invalidated/closed (audit; capped)
         self.trades: list[dict] = []             # ONE record per triggered position (open + its outcome)
         self.on_event = on_event                 # optional callback(record) on OPEN and on CLOSE
         self._last_bar = None                    # last execution bar seen (EOD exit price)
         self._last_day = None                    # last CME session day seen (roll-over detection)
+        # TRADE-LIFECYCLE GUARD: every execution setup that has already opened a position, keyed by
+        # (scenario_id, setup-signature). A trigger whose (id, sig) is here is the SAME setup re-firing —
+        # it must NOT open a second trade, even after the first resolved and the scenario is re-admitted as
+        # a fresh proposal. A genuinely NEW setup (different entry PD-array → different sig) is not in the
+        # set, so it may open. This is what makes `trades` exact — one record per real logical trade.
+        self._traded_setups: set[tuple] = set()
 
     def _retire(self, s: Scenario, state: str):
         s.state = state
@@ -159,6 +171,15 @@ class ScenarioBook:
     @staticmethod
     def _is_open(s: Scenario) -> bool:
         return bool(s.position and s.position.get("open"))
+
+    def _setup_sig(self, ex: dict) -> tuple:
+        """Identity of an execution SETUP = its entry PD-array (entry + stop + FVG bounds), NOT its
+        target. Two triggers with the same signature are the SAME setup re-firing (must not re-open); a
+        different entry/stop/FVG is a genuinely NEW setup (may open once the previous trade has closed).
+        Excluding the target means a re-picked/nearer target never counts as a new trade."""
+        def r(x):
+            return None if x is None else round(float(x), self.price_dp)
+        return (r(ex.get("entry")), r(ex.get("stop")), r(ex.get("fvg_top")), r(ex.get("fvg_bottom")))
 
     @staticmethod
     def _rmult(entry, stop, target):
@@ -172,22 +193,23 @@ class ScenarioBook:
         move = (exit_px - entry) if direction == "long" else (entry - exit_px)
         return round(move * self.point_value, 2)
 
-    def _open_position(self, s: Scenario, ex: dict, bar) -> None:
+    def _open_position(self, s: Scenario, ex: dict, bar, sig: tuple | None = None) -> None:
         e, stp, tgt = ex.get("entry"), ex.get("stop"), ex.get("target")
         rec = {"scenario_id": s.scenario_id, "direction": s.direction, "draw": s.draw.label,
-               "draw_price": round(s.draw.price, 2), "entry": e, "stop": stp, "target": tgt,
+               "draw_price": round(s.draw.price, self.price_dp), "entry": e, "stop": stp, "target": tgt,
                "rmult": self._rmult(e, stp, tgt), "open": True,
                "opened_at": (bar.close_time.isoformat() if bar is not None else None),
-               "opened_price": (round(bar.close, 2) if bar is not None else None),
+               "opened_price": (round(bar.close, self.price_dp) if bar is not None else None),
                "order": ex.get("order"), "sl_order": ex.get("sl_order"), "tp_order": ex.get("tp_order"),
                "fvg_top": ex.get("fvg_top"), "fvg_bottom": ex.get("fvg_bottom"),
-               "now": (round(bar.close, 2) if bar is not None else e),
+               "now": (round(bar.close, self.price_dp) if bar is not None else e),
                "pnl_usd": (self._pnl(e, bar.close, s.direction) if bar is not None else 0.0),  # CURRENT $ (live/realized)
                "plan_usd": self._pnl(e, tgt, s.direction),        # ORIGINAL $ — planned profit if the target is hit
                "risk_usd": self._pnl(e, stp, s.direction),        # $ at the stop (the amount risked)
                "outcome": None, "result_r": None, "closed_at": None}
         s.position = rec                         # scenario shares the trade record
         s.state = "triggered"
+        self._traded_setups.add((s.scenario_id, sig if sig is not None else self._setup_sig(ex)))
         self.trades.append(rec)
         if self.on_event:
             try: self.on_event(dict(rec))
@@ -217,7 +239,7 @@ class ScenarioBook:
         p["open"] = False
         p["outcome"] = "eod"
         p["result_r"] = round(move / risk, 2) if risk > 0 else 0.0
-        p["exit_price"] = round(exit_px, 2)
+        p["exit_price"] = round(exit_px, self.price_dp)
         p["pnl_usd"] = self._pnl(p["entry"], exit_px, p["direction"])   # realized $ at session-end exit
         p["closed_at"] = (exit_bar.close_time.isoformat() if exit_bar is not None else None)
         s.state = "eod"
@@ -244,7 +266,7 @@ class ScenarioBook:
             elif tgt is not None and lo <= tgt:
                 self._resolve_position(s, "target", bar)
         if p.get("open"):                                # still running → update the live $ since start
-            p["now"] = round(float(bar.close), 2)
+            p["now"] = round(float(bar.close), self.price_dp)
             p["pnl_usd"] = self._pnl(p["entry"], float(bar.close), d)
 
     def _still_valid(self, s: Scenario, fresh, cur_range_key: str) -> bool:
@@ -309,7 +331,16 @@ class ScenarioBook:
             ex = execute_fn(s)
             s.execution = ex
             if ex and ex.get("state") == "triggered":
-                self._open_position(s, ex, bar)               # sticky from here on
+                # OPEN a trade only on the TRIGGER TF (bar present — a non-trigger/context pass has
+                # bar=None and must never log a trade) and only if THIS setup has not already traded
+                # (its (id, sig) is not in the book's memory). Same setup re-firing → do nothing.
+                if bar is not None:
+                    sig = self._setup_sig(ex)
+                    if (s.scenario_id, sig) not in self._traded_setups:
+                        self._open_position(s, ex, bar, sig)  # sticky from here on
+                    else:
+                        s.state = "armed"                     # a re-fire of an already-traded setup: show
+                        #                                       it as armed, but do NOT open a new trade
             elif ex is None:
                 if s.state not in ("watching", "retracing"):
                     s.state = "watching"
@@ -340,4 +371,4 @@ class ScenarioBook:
                 "open_usd": (round(sum((t.get("pnl_usd") or 0.0) for t in open_t), 2) if has_usd else None)}
 
     def to_list(self) -> list[dict]:
-        return [s.to_dict() for s in self.active]
+        return [s.to_dict(self.price_dp) for s in self.active]

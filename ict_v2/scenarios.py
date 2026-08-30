@@ -181,6 +181,14 @@ class ScenarioBook:
             return None if x is None else round(float(x), self.price_dp)
         return (r(ex.get("entry")), r(ex.get("stop")), r(ex.get("fvg_top")), r(ex.get("fvg_bottom")))
 
+    def _setup_key(self, s: Scenario, sig: tuple) -> tuple:
+        """The de-dup key for the traded-setup memory: the setup GEOMETRY within its dealing range and
+        direction — deliberately NOT the scenario_id, because the id carries the DRAW price and the
+        nearest-liquidity target drifts context-to-context. Keying on (range, direction, entry/stop/FVG)
+        means a drifting target/draw cannot mint a 'new' setup at the same entry — a target update is
+        never a new trade — while a genuinely new range or a different entry PD-array still can."""
+        return (s.basis.get("range_key", ""), s.direction, sig)
+
     @staticmethod
     def _rmult(entry, stop, target):
         risk = abs(entry - stop) if (entry is not None and stop is not None) else 0
@@ -209,7 +217,7 @@ class ScenarioBook:
                "outcome": None, "result_r": None, "closed_at": None}
         s.position = rec                         # scenario shares the trade record
         s.state = "triggered"
-        self._traded_setups.add((s.scenario_id, sig if sig is not None else self._setup_sig(ex)))
+        self._traded_setups.add(self._setup_key(s, sig if sig is not None else self._setup_sig(ex)))
         self.trades.append(rec)
         if self.on_event:
             try: self.on_event(dict(rec))
@@ -336,7 +344,7 @@ class ScenarioBook:
                 # (its (id, sig) is not in the book's memory). Same setup re-firing → do nothing.
                 if bar is not None:
                     sig = self._setup_sig(ex)
-                    if (s.scenario_id, sig) not in self._traded_setups:
+                    if self._setup_key(s, sig) not in self._traded_setups:
                         self._open_position(s, ex, bar, sig)  # sticky from here on
                     else:
                         s.state = "armed"                     # a re-fire of an already-traded setup: show

@@ -336,6 +336,27 @@ def test_fvg_bounds_distinguish_setups_at_the_same_entry():
     assert len(book.trades) == 2
 
 
+def test_draw_drift_does_not_create_a_duplicate_trade():
+    """Same entry/stop within the same dealing range, but a DRIFTING draw/target (a new scenario_id since
+    the id carries the draw price) must NOT open a second trade — a target/draw update is not a new setup.
+    Regression from the 1m backtest, where the nearest-2R target drifted hourly and re-logged the trade."""
+    strat = _ctx(bias="long")
+    book = SC.ScenarioBook()
+    rk = SC._range_key(strat.dealing_range)
+    book.observe(SC.build_scenarios(strat, strat, [_draw("high", 260)], price=150),
+                 context_key="t0", cur_range_key=rk)
+    book.monitor(lambda s: {"state": "triggered", "entry": 120, "stop": 110, "target": 210},
+                 bar=_bar(121, 119, 120))                          # open (draw 260)
+    book.monitor(lambda s: None, bar=_bar(122, 108, 109))          # stop-out (draw 260 still unswept)
+    assert len(book.trades) == 1
+    # the draw drifts 260 -> 255 → a NEW scenario_id, SAME range/direction/entry/stop
+    book.observe(SC.build_scenarios(strat, strat, [_draw("high", 255)], price=150),
+                 context_key="t1", cur_range_key=rk)
+    book.monitor(lambda s: {"state": "triggered", "entry": 120, "stop": 110, "target": 205},
+                 bar=_bar(121, 119, 120))
+    assert len(book.trades) == 1                                   # drifting target ≠ a new trade
+
+
 def test_topstep_order_type_depends_on_price_vs_entry():
     from types import SimpleNamespace as N
     from ict_v2 import pipeline as P

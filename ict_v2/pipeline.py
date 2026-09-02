@@ -640,9 +640,13 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
 
 
 MIN_TARGET_RR = 2.0   # the trade's target must give at least this reward:risk (user rule ~2R)
+# TIMELINESS: an entry is only ARMED while price is still AHEAD of the move. Once price has covered this
+# fraction of the entry→target distance (the draw is nearly reached), a retrace-entry is STALE — the move
+# already ran, so it is surfaced as 'stale', never armed/actionable (fixes the "armed too late" case).
+STALE_PROGRESS = 0.5
 
 
-def _pick_target(direction, entry, risk, objectives, draw_px, min_rr):
+def _pick_target(direction, entry, risk, objectives, draw_px, min_rr, price_dp=2):
     """Pick the trade's TARGET = the FIRST (nearest) opposing liquidity that clears >= `min_rr`
     reward:risk. Scans ALL liquidity objectives (4H/1H + nearer 15m) and takes the CLOSEST one beyond
     min_rr*risk — not the far thesis draw. The scenario's own draw is only a fallback when the objective
@@ -660,14 +664,14 @@ def _pick_target(direction, entry, risk, objectives, draw_px, min_rr):
            and abs(o.price - entry) >= need]
     if opp:
         tgt = min(opp, key=lambda p: abs(p - entry))           # the FIRST liquidity past >=2R
-        return round(tgt, 2), round(abs(tgt - entry) / risk, 2)
+        return round(tgt, price_dp), round(abs(tgt - entry) / risk, 2)
     if on_side(draw_px) and abs(draw_px - entry) >= need:      # fallback: the thesis draw (no objectives)
         return draw_px, round(abs(draw_px - entry) / risk, 2)
     return None, None
 
 
 def execution_for_scenario(scenario, candidates, price=None, objectives=None,
-                           min_rr: float = MIN_TARGET_RR) -> dict | None:
+                           min_rr: float = MIN_TARGET_RR, price_dp: int = 2) -> dict | None:
     """Decide an active SCENARIO's execution state from the entry candidates generated on the execution
     timeframe. This is the M15/M1 job: the higher timeframes already fixed the thesis (direction, zone,
     draw); here we only watch for the entry inside the scenario's retracement zone.
@@ -694,16 +698,25 @@ def execution_for_scenario(scenario, candidates, price=None, objectives=None,
         c = entry_cands[0]
         risk = abs(c.stop - c.entry)
         draw_px = getattr(getattr(scenario, "draw", None), "price", None)
-        tgt, rr = _pick_target(dirn, c.entry, risk, objectives, draw_px, min_rr)   # nearest draw >= min_rr
+        tgt, rr = _pick_target(dirn, c.entry, risk, objectives, draw_px, min_rr, price_dp)  # nearest draw >= min_rr
         if tgt is not None:                                     # a target clearing >=2R exists -> tradeable
             live = getattr(getattr(c, "entry_obj", None), "state", "") == "valid"
-            gap = (round(c.entry - price, 2) if price is not None else None)
+            gap = (round(c.entry - price, price_dp) if price is not None else None)
+            # how far price has already travelled from the entry toward the target (0 at entry, 1 at target)
+            span = (tgt - c.entry)
+            progress = ((price - c.entry) / span) if (span and price is not None) else 0.0
+            stale = (not live) and (progress >= STALE_PROGRESS)   # the move already ran → entry is late
             if live:
                 why = f"entry retraced into - trigger now (target {tgt}, {rr}R)"
+            elif stale:
+                rem = round(abs(tgt - price), price_dp) if price is not None else None
+                why = (f"missed - price already ran {round(progress * 100)}% from entry "
+                       f"{round(c.entry, price_dp)} to target {tgt} (now {round(price, price_dp)}); "
+                       f"only {rem} pts left - not arming")
             elif gap is not None:
                 move = "rise" if gap > 0 else "fall"
-                why = (f"{dirn} entry rests at {round(c.entry, 2)} - awaiting price to {move} "
-                       f"{abs(gap):g} pts into it (now {round(price, 2)}); target {tgt} ({rr}R)")
+                why = (f"{dirn} entry rests at {round(c.entry, price_dp)} - awaiting price to {move} "
+                       f"{abs(gap):g} pts into it (now {round(price, price_dp)}); target {tgt} ({rr}R)")
             else:
                 why = f"entry PD array armed - target {tgt} ({rr}R)"
             # Topstep entry order TYPE depends on where price is vs the entry (a resting order must not
@@ -716,14 +729,14 @@ def execution_for_scenario(scenario, candidates, price=None, objectives=None,
             else:
                 order = "SELL STOP" if (price is not None and price > c.entry) else "SELL LIMIT"
             _fvg = getattr(getattr(c, "entry_obj", None), "source", None)   # the v1 FVG (box bounds, for the chart)
-            fvg_top = round(float(_fvg.top), 2) if getattr(_fvg, "top", None) is not None else None
-            fvg_bottom = round(float(_fvg.bottom), 2) if getattr(_fvg, "bottom", None) is not None else None
-            return {"state": "triggered" if live else "armed",
-                    "entry": round(c.entry, 2), "stop": round(c.stop, 2), "target": tgt, "rr": rr,
+            fvg_top = round(float(_fvg.top), price_dp) if getattr(_fvg, "top", None) is not None else None
+            fvg_bottom = round(float(_fvg.bottom), price_dp) if getattr(_fvg, "bottom", None) is not None else None
+            return {"state": ("triggered" if live else "stale" if stale else "armed"),
+                    "entry": round(c.entry, price_dp), "stop": round(c.stop, price_dp), "target": tgt, "rr": rr,
                     "order": order, "sl_order": ("sell stop" if dirn == "long" else "buy stop"),
                     "tp_order": ("sell limit" if dirn == "long" else "buy limit"),
                     "fvg_top": fvg_top, "fvg_bottom": fvg_bottom,
-                    "price": (round(price, 2) if price is not None else None), "dist_to_entry": gap,
+                    "price": (round(price, price_dp) if price is not None else None), "dist_to_entry": gap,
                     "entry_role": c.entry_role, "tf": getattr(c, "tf", ""), "why": why}
         if in_zone(price):
             return {"state": "retracing",

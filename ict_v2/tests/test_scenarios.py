@@ -139,6 +139,25 @@ def test_execution_for_scenario_only_surfaces_valid_coherent_entries():
     assert ex["target"] == 210 and ex["stop"] == 110 and ex["entry"] == 120
 
 
+def test_execution_marks_a_late_entry_stale_not_armed():
+    """TIMELINESS: once price has run past the midpoint of the entry→target move (the draw is nearly
+    reached), a resting retrace-entry is STALE — surfaced as 'stale', never 'armed' (fixes armed-too-late)."""
+    from types import SimpleNamespace as N
+    from ict_v2 import pipeline as P
+    sc = N(direction="long", entry_zone=(100, 150), draw=N(price=210))
+    def cand(entry, stop, live=False):
+        return N(direction="long", entry=entry, stop=stop, structure="valid", entry_role="entry",
+                 tf="1m", entry_obj=N(state=("valid" if live else "waiting")))
+    objs = [N(price=210, status="unswept")]
+    # price 180 = 67% of the way from entry 120 to target 210 → move already ran → STALE, not armed
+    r = P.execution_for_scenario(sc, [cand(120, 110)], price=180, objectives=objs)
+    assert r["state"] == "stale" and "missed" in r["why"]
+    # price 130 = ~11% of the way → still ahead of the move → ARMED
+    assert P.execution_for_scenario(sc, [cand(120, 110)], price=130, objectives=objs)["state"] == "armed"
+    # a LIVE entry (price retraced into it) is never stale even if computed progress is high → triggered
+    assert P.execution_for_scenario(sc, [cand(120, 110, live=True)], price=180, objectives=objs)["state"] == "triggered"
+
+
 # ---- sticky trigger + outcome tracking: once triggered it stays open until stop/target -----------
 from datetime import datetime, timezone as _tz
 

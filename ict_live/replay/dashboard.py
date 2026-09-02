@@ -317,6 +317,7 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .scstate{margin-left:auto;font-size:9px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;padding:1px 8px;border-radius:6px;border:1px solid var(--line)}
  .scstate.watch{color:var(--mut)} .scstate.inc{color:var(--warn)} .scstate.arm{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
  .scstate.pass{color:var(--long);border-color:color-mix(in srgb,var(--long) 45%,var(--line))} .scstate.rej{color:var(--short);opacity:.7}
+ .scstate.stale{color:var(--mut);border-color:color-mix(in srgb,var(--short) 30%,var(--line));opacity:.75;text-decoration:line-through}
  .sc-body{display:flex;gap:12px;flex-wrap:wrap;margin-top:5px;font-size:11px}
  .sc-exec{display:flex;gap:10px;flex-wrap:wrap;margin-top:5px}
  .sc-order{margin-top:5px;font-size:11px;padding:3px 8px;border-radius:6px;background:var(--panel2);border:1px solid var(--line);font-family:"SF Mono",ui-monospace,Menlo,monospace}
@@ -730,7 +731,7 @@ function v2Tables(rep){
   // ONE scenario — a market thesis: direction toward a draw, with its entry zone + execution state
   const scenarioCard=(sc,i,sym)=>{
     const dir=sc.direction, side=sideOf(dir); const ex=sc.execution||null; const pos=sc.position||null; const st=sc.state||'watching';
-    const stcls={watching:'watch',retracing:'inc',armed:'arm',triggered:'pass',target:'pass',stop:'rej',eod:'watch',invalidated:'rej'}[st]||'watch';
+    const stcls={watching:'watch',retracing:'inc',armed:'arm',triggered:'pass',target:'pass',stop:'rej',eod:'watch',invalidated:'rej',stale:'stale'}[st]||'watch';
     const d=sc.draw||{};
     const drawTxt=`${d.label||d.kind} ${num(d.price)} <span class="dclass dclass-${d.liquidity_class||'ERL'}" title="Lesson 10 draw class">${d.liquidity_class||'—'}·${d.tf||''}</span>`;
     const zone=sc.entry_zone; const zoneTxt=zone?`${num(zone[0])}–${num(zone[1])}`:'—';

@@ -37,6 +37,8 @@ class Scenario:
     execution: dict | None = None          # filled by M15/M1 monitoring (entry/stop/target/candidate/reason)
     position: dict | None = None           # OPEN TRADE snapshot once triggered — fixed entry/stop/target;
     #                                        resolves ONLY on stop/target (a trigger is sticky, not re-derived)
+    events: dict = field(default_factory=dict)   # first-seen ET timestamp per state (created/retracing/armed/
+    #                                              stale/triggered/target/stop/eod) — the scenario's timeline
 
     def to_dict(self, price_dp: int = 2) -> dict:
         def px(x):
@@ -47,7 +49,8 @@ class Scenario:
                 "draw": self.draw.to_dict(), "rank_factors": dict(self.rank_factors),
                 "draw_ladder": [{"label": o.label, "price": px(o.price), "tf": o.tf,
                                  "liquidity_class": o.liquidity_class} for o in self.draw_ladder],
-                "basis": dict(self.basis), "execution": self.execution, "position": self.position}
+                "basis": dict(self.basis), "execution": self.execution, "position": self.position,
+                "events": dict(self.events)}
 
 
 def _key_dp(price_dp: int) -> int:
@@ -167,6 +170,12 @@ class ScenarioBook:
         self.retired.append(s)
         self.retired = self.retired[-40:]
 
+    @staticmethod
+    def _stamp(s: Scenario, ts) -> None:
+        """Record the FIRST time the scenario reached its current state (its timeline for the dashboard)."""
+        if ts and s.state:
+            s.events.setdefault(s.state, ts)
+
     # ---- open-trade lifecycle: a TRIGGER is sticky and resolves ONLY on stop/target -------------
     @staticmethod
     def _is_open(s: Scenario) -> bool:
@@ -217,6 +226,7 @@ class ScenarioBook:
                "outcome": None, "result_r": None, "closed_at": None}
         s.position = rec                         # scenario shares the trade record
         s.state = "triggered"
+        s.events.setdefault("triggered", rec["opened_at"])
         self._traded_setups.add(self._setup_key(s, sig if sig is not None else self._setup_sig(ex)))
         self.trades.append(rec)
         if self.on_event:
@@ -233,6 +243,7 @@ class ScenarioBook:
         p["pnl_usd"] = self._pnl(p["entry"], exit_px, p["direction"])   # realized $ at target/stop
         p["closed_at"] = (bar.close_time.isoformat() if bar is not None else None)
         s.state = outcome
+        s.events.setdefault(outcome, p["closed_at"])
         if self.on_event:
             try: self.on_event(dict(p))
             except Exception: pass
@@ -251,6 +262,7 @@ class ScenarioBook:
         p["pnl_usd"] = self._pnl(p["entry"], exit_px, p["direction"])   # realized $ at session-end exit
         p["closed_at"] = (exit_bar.close_time.isoformat() if exit_bar is not None else None)
         s.state = "eod"
+        s.events.setdefault("eod", p["closed_at"])
         if self.on_event:
             try: self.on_event(dict(p))
             except Exception: pass
@@ -314,17 +326,21 @@ class ScenarioBook:
                      and p.draw.status not in ("swept", "mitigated")]   # never admit a spent draw
         for p in newcomers:
             p.created_ctx = context_key
+            p.events.setdefault("created", context_key)
         combined = survivors + newcomers
         combined.sort(key=lambda s: s.rank)                   # by fresh plausibility rank
         self.active = open_trades + combined[: self.maxn]     # open trades kept + ≤ maxn theses
         return self.active
 
-    def monitor(self, execute_fn, bar=None, day=None) -> list[Scenario]:
+    def monitor(self, execute_fn, bar=None, day=None, ts=None) -> list[Scenario]:
         """Called on each execution close. An OPEN trade is updated against `bar` (resolves only on
         stop/target) — it is NEVER re-derived, so a trigger cannot fall back to 'watching'. A thesis that
         is not yet open has its state derived from `execute_fn`; the moment it reads 'triggered' it is
         OPENED into a sticky position. `day` = the CME session day of `bar`; when it rolls over, any trade
-        still open is closed at the prior session's last price (NO overnight holds). Membership untouched."""
+        still open is closed at the prior session's last price (NO overnight holds). `ts` = the cursor's ET
+        timestamp, recorded as the first-seen time of each state (the scenario timeline). Membership untouched."""
+        if ts is None and bar is not None:
+            ts = bar.close_time.isoformat()
         if (day is not None and self._last_day is not None and day != self._last_day
                 and self._last_bar is not None):
             for s in self.active:                             # session rolled over → close all open trades
@@ -333,6 +349,7 @@ class ScenarioBook:
         for s in list(self.active):
             if self._is_open(s):
                 self._update_open(s, bar)                     # may resolve → state target/stop
+                self._stamp(s, ts)
                 continue
             if s.state in ("target", "stop", "eod"):          # already resolved — leave it until observe
                 continue
@@ -354,6 +371,7 @@ class ScenarioBook:
                     s.state = "watching"
             else:
                 s.state = ex.get("state", s.state)
+            self._stamp(s, ts)
         if bar is not None:
             self._last_bar = bar
         if day is not None:

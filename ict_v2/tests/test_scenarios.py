@@ -190,6 +190,19 @@ def test_trigger_is_sticky_until_stop_or_target():
     assert s.state == "target" and not s.position["open"] and s.position["result_r"] == 9.0   # (210-120)/(120-110)
 
 
+def test_scenario_events_record_the_state_timeline():
+    """Each state's FIRST-seen ET timestamp is recorded on the scenario (created/armed/triggered/target…)."""
+    book, rk = _booked()
+    s = book.active[0]
+    assert "created" in s.events                                     # stamped on admission (observe)
+    book.monitor(lambda s: {"state": "armed", "entry": 120, "stop": 110, "target": 210}, bar=_bar(121, 119, 120))
+    assert "armed" in s.events and s.events["armed"].startswith("2026-08-28")
+    book.monitor(lambda s: {"state": "triggered", "entry": 120, "stop": 110, "target": 210}, bar=_bar(121, 119, 120))
+    assert "triggered" in s.events
+    book.monitor(lambda s: None, bar=_bar(212, 205, 210))            # target hit
+    assert s.state == "target" and "target" in s.events
+
+
 def test_stop_resolves_as_loss():
     book, rk = _booked()
     book.monitor(lambda s: {"state": "triggered", "entry": 120, "stop": 110, "target": 210}, bar=_bar(121, 119, 120))

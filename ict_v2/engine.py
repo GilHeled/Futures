@@ -32,7 +32,8 @@ _SCENARIO_MAX = 3          # … at most 3
 class MTFEngine:
     def __init__(self, context_tf: str = "4H", setup_tf: str = "1H", confirm_tf: str = "15m",
                  trigger_tf: str = "1m", refine_tf: str | None = None, min_stop: float | None = None,
-                 anchor_tf: str | None = None, entry_models=None, point_value: float | None = None):
+                 anchor_tf: str | None = None, entry_models=None, point_value: float | None = None,
+                 price_dp: int = 2):
         # ≥15-minute liquidity floor (Lesson 6/8): the CONTEXT/execution-setup TFs must be ≥15m; the 1m
         # trigger (and refine) may be finer — they only trigger, they do not mark liquidity.
         P.assert_liquidity_floor(context_tf, setup_tf, confirm_tf)
@@ -43,7 +44,9 @@ class MTFEngine:
         # --- responsibility-based state ---
         self.strategic = None          # 4H StrategicContext (HTFContext) — fixed until next 4H close
         self.intraday = None           # 1H IntradayContext  (HTFContext) — fixed until next 1H close
-        self.book = SC.ScenarioBook(target=_SCENARIO_TARGET, maxn=_SCENARIO_MAX, point_value=point_value)
+        self.price_dp = price_dp                 # price decimals (2 index scale, 5 FX) for keys/display
+        self.book = SC.ScenarioBook(target=_SCENARIO_TARGET, maxn=_SCENARIO_MAX, point_value=point_value,
+                                    price_dp=price_dp)
         self._cal = Calendar()                     # CME session-day for the no-overnight-holds rule
         self.objectives: list = []     # latest full liquidity-objective inventory (for the dashboard)
         self.exec_tf = None            # the TF the current execution states were monitored on
@@ -121,8 +124,8 @@ class MTFEngine:
                 pass
         self.objectives = objs
         proposals = SC.build_scenarios(self.strategic, self.intraday or self.strategic, objs,
-                                       price=self.last_price)
-        rk = SC._range_key(self.strategic.dealing_range)
+                                       price=self.last_price, price_dp=self.price_dp)
+        rk = SC._range_key(self.strategic.dealing_range, self.price_dp)
         self.book.observe(proposals, context_key=context_key, cur_range_key=rk)
         # refresh execution state on the finest bars we have, so a rebuild doesn't blank the states
         self._monitor(self._trigger_bars or self._confirm_bars,
@@ -152,8 +155,10 @@ class MTFEngine:
                 day = self._cal.session_day(ct)          # CME trade date (None during the maintenance halt)
             except Exception:
                 day = None
-        self.book.monitor(lambda s: P.execution_for_scenario(s, cands, price, objectives=self.objectives),
-                          bar=bar, day=day)
+        ts = bars[-1].close_time.isoformat() if bars else None   # cursor time → scenario-timeline stamps
+        self.book.monitor(lambda s: P.execution_for_scenario(s, cands, price, objectives=self.objectives,
+                                                             price_dp=self.price_dp),
+                          bar=bar, day=day, ts=ts)
         self.exec_tf = tf
 
     # ---- accessors ----------------------------------------------------------------------------

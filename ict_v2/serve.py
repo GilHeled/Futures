@@ -28,11 +28,12 @@ from ict_v2.live import V2Live
 class V2Service:
     def __init__(self, data_dir: str):
         self.store_path = Path(data_dir) / "raw_1m.jsonl"
-        # Telegram alert on each NEW armed scenario (operational only; disabled if the env vars are unset).
-        # Guards below prevent spam: rising-edge (one alert per arming) + recency (skip the historical
-        # warmup replay and frozen-feed symbols whose 'armed' timestamp is old).
+        # Telegram alert on each NEW actionable scenario — ARMED (place the resting order) and TRIGGERED
+        # (entry live: a confirmed structure reversal or a filled FVG). Operational only; disabled if the
+        # env vars are unset. Guards prevent spam: rising-edge per (scenario, state) + recency (skip the
+        # historical warmup replay and frozen-feed symbols whose event timestamp is old).
         self.notifier = TelegramNotifier()
-        self._armed_prev: dict[str, set] = {}
+        self._alert_prev: dict[str, set] = {}      # per symbol: set of (scenario_id, state) already alerted
         self.notify_max_age = float(os.environ.get("ICT_V2_NOTIFY_MAX_AGE_SEC", "600"))   # 10 min
         # writable output dir for the trade log (the /data store is read-only for v2). None = disabled.
         _out = os.environ.get("ICT_V2_OUT_DIR", "").strip()
@@ -117,10 +118,10 @@ class V2Service:
                     n += 1
                 self.last_ms[sym] = last
                 self.state[sym] = live.snapshot()
-                if self.notifier.enabled:                    # collect newly-armed alerts (send after unlock)
-                    to_send, armed_now = self._armed_to_send(sym, self.state[sym].get("scenarios") or [], now)
-                    self._armed_prev[sym] = armed_now
-                    pending.extend((sym, sc) for sc in to_send)
+                if self.notifier.enabled:                    # collect newly-actionable alerts (send after unlock)
+                    to_send, seen_now = self._alerts_to_send(sym, self.state[sym].get("scenarios") or [], now)
+                    self._alert_prev[sym] = seen_now
+                    pending.extend((sym, sc, st) for sc, st in to_send)
                 # PERSIST the trigger→outcome log per symbol to the WRITABLE out dir (the /data store is
                 # mounted read-only for v2). Overwrite = idempotent; the book's trade list is a
                 # deterministic function of the replayed bars, so restarts don't duplicate.
@@ -132,9 +133,9 @@ class V2Service:
                     except Exception:
                         pass
             self.updated_ms = int(time.time() * 1000)
-        for sym, sc in pending:                              # OUTSIDE the lock: a Telegram send never blocks ingest
+        for sym, sc, st in pending:                          # OUTSIDE the lock: a Telegram send never blocks ingest
             try:
-                self.notifier.send(self._format_armed(sym, sc))
+                self.notifier.send(self._format_alert(sym, sc, st))
             except Exception:
                 pass
         return n
@@ -152,24 +153,29 @@ class V2Service:
         except Exception:
             return False
 
-    def _armed_to_send(self, sym, scenarios, now):
-        """RISING EDGE + RECENCY: scenarios that just ENTERED 'armed' (not armed last cycle) whose arm
-        time is recent. Returns (list to notify, the current armed-id set to remember)."""
-        armed_now, out = set(), []
-        prev = self._armed_prev.get(sym, set())
-        for sc in scenarios:
-            if sc.get("state") != "armed":
-                continue
-            sid = sc.get("id")
-            armed_now.add(sid)
-            if sid in prev:                                  # already alerted this arming episode
-                continue
-            if self._is_recent((sc.get("events") or {}).get("armed"), now):
-                out.append(sc)
-        return out, armed_now
+    ALERT_STATES = ("armed", "triggered")     # actionable: place the order / entry is live
 
-    def _format_armed(self, sym, sc) -> str:
-        """Telegram text for a newly-armed scenario (operational alert; no trading instruction)."""
+    def _alerts_to_send(self, sym, scenarios, now):
+        """RISING EDGE + RECENCY, per (scenario, state): a scenario that just ENTERED an actionable state
+        — 'armed' (place the resting order) or 'triggered' (entry live: a confirmed structure reversal or
+        a filled FVG) — whose event time is recent. Keyed by (id, state) so an arm and its later trigger
+        each alert once. Returns (list of (sc, state) to notify, the current (id,state) set to remember)."""
+        seen_now, out = set(), []
+        prev = self._alert_prev.get(sym, set())
+        for sc in scenarios:
+            st = sc.get("state")
+            if st not in self.ALERT_STATES:
+                continue
+            key = (sc.get("id"), st)
+            seen_now.add(key)
+            if key in prev:                                  # already alerted this (scenario, state)
+                continue
+            if self._is_recent((sc.get("events") or {}).get(st), now):
+                out.append((sc, st))
+        return out, seen_now
+
+    def _format_alert(self, sym, sc, state) -> str:
+        """Telegram text for a newly-actionable scenario (operational alert; no trading instruction)."""
         try:
             from ict_live import config as C
             name = (C.instrument_names().get(sym, "") if hasattr(C, "instrument_names") else "")
@@ -180,8 +186,9 @@ class V2Service:
         e, s, t, rr = ex.get("entry"), ex.get("stop"), ex.get("target"), ex.get("rr")
         order = ex.get("order") or ("BUY LIMIT" if d == "long" else "SELL LIMIT")
         draw = sc.get("draw") or {}
-        at = str((sc.get("events") or {}).get("armed", ""))
-        head = f"{'🟢' if d == 'long' else '🔴'} ARMED — {d.upper()} {sym.split(':')[-1]}" + (f" ({name})" if name else "")
+        at = str((sc.get("events") or {}).get(state, ""))
+        tag = "🔫 TRIGGERED" if state == "triggered" else "⏳ ARMED"
+        head = f"{'🟢' if d == 'long' else '🔴'} {tag} — {d.upper()} {sym.split(':')[-1]}" + (f" ({name})" if name else "")
         lines = [head,
                  f"Entry {e} · Stop {s} · Target {t}" + (f" · {rr}R" if rr is not None else ""),
                  f"Topstep: {order} @ {e} · SL {ex.get('sl_order', '')} {s} · TP {ex.get('tp_order', '')} {t}",

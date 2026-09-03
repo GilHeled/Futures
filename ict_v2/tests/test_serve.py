@@ -37,33 +37,38 @@ def test_reads_shared_store_and_snapshots(tmp_path):
     assert "v2" in svc.report() and svc.report()["experimental"] is True
 
 
-def test_armed_alert_rising_edge_and_recency(tmp_path):
-    """Alerts fire once per NEW arming (rising edge) and only for RECENT arms (skip warmup/frozen feed)."""
+def test_alert_rising_edge_and_recency_armed_and_triggered(tmp_path):
+    """Alerts fire once per NEW (scenario, actionable state) and only for RECENT events. 'armed' AND
+    'triggered' both alert (a structure entry triggers directly, skipping armed)."""
     from datetime import timezone
     svc = V2Service(str(tmp_path)); svc.notify_max_age = 600
     now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
-    def sc(sid, state, armed_min_ago=None):
-        ev = {"armed": (now - timedelta(minutes=armed_min_ago)).isoformat()} if armed_min_ago is not None else {}
+    def sc(sid, state, min_ago=None):
+        ev = {state: (now - timedelta(minutes=min_ago)).isoformat()} if min_ago is not None else {}
         return {"id": sid, "state": state, "direction": "long", "events": ev,
                 "execution": {"entry": 1, "stop": 0.5, "target": 3, "rr": 4}, "draw": {"label": "BSL", "price": 3}}
-    # fresh armed (2 min ago) → alert; old armed (30 min ago) → skipped by recency; watching → ignored
-    to_send, armed_now = svc._armed_to_send(SYM, [sc("a", "armed", 2), sc("b", "armed", 30), sc("c", "watching")], now)
-    assert [x["id"] for x in to_send] == ["a"] and armed_now == {"a", "b"}
-    # next cycle: 'a' still armed → NOT re-sent (rising edge); a NEW recent armed 'd' → sent
-    svc._armed_prev[SYM] = armed_now
-    to_send2, _ = svc._armed_to_send(SYM, [sc("a", "armed", 5), sc("d", "armed", 1)], now)
-    assert [x["id"] for x in to_send2] == ["d"]
+    # fresh armed (2m) → alert; a fresh TRIGGERED (1m) → alert; old armed (30m) → recency-skipped; watching → ignored
+    to_send, seen = svc._alerts_to_send(SYM, [sc("a", "armed", 2), sc("t", "triggered", 1),
+                                              sc("b", "armed", 30), sc("c", "watching")], now)
+    assert sorted((x[0]["id"], x[1]) for x in to_send) == [("a", "armed"), ("t", "triggered")]
+    assert seen == {("a", "armed"), ("t", "triggered"), ("b", "armed")}
+    svc._alert_prev[SYM] = seen
+    # next cycle: 'a' still armed → NOT re-sent; 'a' now TRIGGERED (new state) → alert; a new armed 'd' → alert
+    to_send2, _ = svc._alerts_to_send(SYM, [sc("a", "triggered", 1), sc("d", "armed", 1)], now)
+    assert sorted((x[0]["id"], x[1]) for x in to_send2) == [("a", "triggered"), ("d", "armed")]
 
 
-def test_format_armed_message(tmp_path):
+def test_format_alert_armed_and_triggered(tmp_path):
     svc = V2Service(str(tmp_path))
-    sc = {"id": "x", "state": "armed", "direction": "long",
-          "execution": {"entry": 4376.75, "stop": 4375.2, "target": 4420.05, "rr": 27.94, "order": "BUY LIMIT",
-                        "sl_order": "sell stop", "tp_order": "sell limit", "why": "awaiting price to fall 37 pts"},
-          "draw": {"label": "BSL", "price": 4423.4}, "events": {"armed": "2026-09-02T15:04:00-04:00"}}
-    msg = svc._format_armed("COMEX_MINI:MGC1!", sc)
-    assert "ARMED" in msg and "LONG" in msg and "MGC1!" in msg
-    assert "BUY LIMIT @ 4376.75" in msg and "27.94R" in msg and "15:04 ET" in msg
+    base = {"id": "x", "direction": "long",
+            "execution": {"entry": 4376.75, "stop": 4375.2, "target": 4420.05, "rr": 27.94, "order": "BUY LIMIT",
+                          "sl_order": "sell stop", "tp_order": "sell limit", "why": "awaiting price to fall 37 pts"},
+            "draw": {"label": "BSL", "price": 4423.4}}
+    a = dict(base, state="armed", events={"armed": "2026-09-02T15:04:00-04:00"})
+    m = svc._format_alert("COMEX_MINI:MGC1!", a, "armed")
+    assert "ARMED" in m and "LONG" in m and "MGC1!" in m and "BUY LIMIT @ 4376.75" in m and "27.94R" in m and "15:04 ET" in m
+    t = dict(base, state="triggered", events={"triggered": "2026-09-02T15:06:00-04:00"})
+    assert "TRIGGERED" in svc._format_alert("COMEX_MINI:MGC1!", t, "triggered")
 
 
 def test_incremental_only_new_bars(tmp_path):

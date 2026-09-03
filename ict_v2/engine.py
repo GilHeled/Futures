@@ -17,9 +17,22 @@ stage helpers in `pipeline` (which reuse the frozen v1 engine read-only). v1 is 
 from __future__ import annotations
 
 from datetime import timezone
+from zoneinfo import ZoneInfo
 
 from ict_live.engine import pipeline as v1
 from ict_live.market.calendar import Calendar        # frozen CME session-day (18:00→17:00 ET trade date)
+
+_ET = ZoneInfo("America/New_York")
+
+
+def _et_iso(dt) -> str:
+    """A bar's close_time as an ET-clock ISO string — so scenario-timeline stamps read in ET (the chart's
+    clock), not the raw UTC the bars carry. Matches live.py's _et_iso for the price/last-tick times."""
+    if dt is None:
+        return ""
+    if getattr(dt, "tzinfo", None) is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_ET).isoformat()
 from ict_v2 import liquidity as LQ
 from ict_v2 import pdarrays as PDA
 from ict_v2 import pipeline as P
@@ -92,7 +105,7 @@ class MTFEngine:
     # ---- scenario maintenance -----------------------------------------------------------------
     @staticmethod
     def _ctx_key(bars) -> str:
-        return bars[-1].close_time.isoformat() if bars else ""
+        return _et_iso(bars[-1].close_time) if bars else ""
 
     def _gaps(self):
         """NWOG (from the 4H buffer) + ORG (from the 15m buffer) as liquidity-objective source dicts."""
@@ -155,7 +168,7 @@ class MTFEngine:
                 day = self._cal.session_day(ct)          # CME trade date (None during the maintenance halt)
             except Exception:
                 day = None
-        ts = bars[-1].close_time.isoformat() if bars else None   # cursor time → scenario-timeline stamps
+        ts = _et_iso(bars[-1].close_time) if bars else None      # ET cursor time → scenario-timeline stamps
         self.book.monitor(lambda s: P.execution_for_scenario(s, cands, price, objectives=self.objectives,
                                                              price_dp=self.price_dp),
                           bar=bar, day=day, ts=ts)

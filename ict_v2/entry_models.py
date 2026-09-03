@@ -45,6 +45,13 @@ LIFECYCLE = {
                   "map": {"forming": "waiting", "confirmed": "valid"}},
 }
 
+# NOTE (faithful-model correction, 2026-09): the confirmed market-structure shift is the execution
+# TRIGGER (WHEN), not an ENTRY at the reversal extreme. Verified against the raw Lesson 15/16 slides:
+# reaching a level is only a POTENTIAL reversal — the new structure CONFIRMS it, and the entry is a
+# retracement into a PD array in the correct premium/discount half (Lessons 8-14). So the `structure`
+# entry model (entry = the confirmation close) is NO LONGER enabled by default; the structure shift is
+# consumed as condition C4 in pipeline.execution_for_scenario. The detector is retained for reference.
+
 
 def common_state(model: str, lifecycle: str) -> str:
     """Map a model's lifecycle sub-state to the ONE common state the engine uses."""
@@ -97,7 +104,8 @@ REGISTRY: dict[str, dict] = {
     },
 }
 
-DEFAULT_MODELS: tuple[str, ...] = ("structure", "fvg")   # confirmed reversal OR an FVG-retrace refinement
+DEFAULT_MODELS: tuple[str, ...] = ("fvg",)   # PD-array entry LOCATIONS; the structure shift is the TRIGGER
+# (C4 in pipeline.execution_for_scenario), not a standalone entry at the reversal extreme — see the NOTE above.
 
 # --- FVG detector: adapt v1's frozen FVG objects into the common Entry contract ------------------
 _FVG_STATUS = {"unfilled": "waiting", "touched": "valid", "mitigated": "mitigated"}

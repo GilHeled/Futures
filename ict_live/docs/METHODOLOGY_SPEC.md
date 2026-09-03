@@ -100,28 +100,42 @@ high of the manipulation sequence → entry below it, stop above it. LONG mirror
 extreme = running max/min updated across the sequence (already in `ict_faithful`).
 
 ## 13. Setup sequence `[COURSE]`
-ERL approached → sweep/manipulation → displacement → **confirmed market-structure reversal (MSS)**.
-The confirmed reversal is the setup's confirmation (Lessons 15/16). An FVG that forms on the same
-leg is a **contextual PD array** — a support/resistance level price may return to, a draw, or a
-lower-timeframe entry refinement — **not a mandatory step**.
+Higher-timeframe thesis (direction + dealing range + draw) → price **retraces into the correct
+premium/discount half** → a **course-taught PD array** sits in that zone (WHERE) → a **confirmed local
+market-structure shift at that array** (WHEN) → execute. The PD array answers *where* we want to trade;
+the structure shift answers *when*. **Neither alone is sufficient** (Lessons 8-16).
 
-> **CORRECTION (2026-09-03), verified against the RAW lesson slides (§12/§15/§16), superseding a prior
-> over-hardening.** The earlier text here ("valid same-leg FVG → later retrace → entry; **if no
-> post-MSS retrace → NO TRADE**") and §14 ("**not** auto-enter at MSS close `[COURSE]`") were WRONG:
-> the raw course does **not** mandate an FVG retrace and does **not** reject a no-retrace trade. Lesson
-> 15 defines the reversal as the STRUCTURE sequence itself (long: Low→High→Higher-Low→Higher-High;
-> short: High→Low→Lower-High→Lower-Low); Lesson 16 (Power of 3) says after the manipulation "we look for
-> the change of direction / the intraday trend change to trade in the correct direction"; Lesson 12
-> teaches the FVG as an S/R PD array that "can break and fail." See memory `project_v2_structure_entry_correction`.
+> **RECONSTRUCTION (2026-09-03), verified against the RAW lesson slides (Lessons 8-16), superseding two
+> prior over-hardenings.** (a) The mandatory-FVG-retrace rule was wrong (Lesson 12: the FVG is one PD
+> array that "can break and fail"). (b) The subsequent "structure IS the entry, enter at the MSS
+> confirmation close" was *also* wrong and inverted: Lesson 9 forbids entering at the reversal extreme
+> ("we will not enter a long in premium … because we would be chasing price"), and Lesson 15 states
+> that reaching a PD array is only a **potential** reversal — the new structure (rising highs+lows for a
+> long / falling highs+lows for a short) is what **confirms** it. So the confirmed structure shift is
+> the execution **trigger**, and the **entry is a retracement into a PD array in the correct half**.
+> Lessons 8/9 (premium/discount + the fib 0.5/0.62/0.79 S/R grid), 10 (IRL/ERL draw logic), 11 (S/R
+> catalog), 12 (FVG, the 5m/1m entry tool), 13 (NWOG), 14 (ORG). See memory
+> `project_v2_structure_entry_correction`.
 
-## 14. Entry — TWO valid execution models
-- **`structure`** (Lessons 15/16, the core): the confirmed intraday market-structure reversal IS the
-  entry. Enter on the direction change (implemented: entry = the MSS confirmation close, invalidation =
-  the manipulation extreme; `[RES:structure_entry_ref]` — a transparent, chart-reviewable fill choice,
-  never P&L-selected). Catches reversals that never retrace.
-- **`fvg`** (Lesson 12, optional refinement): retrace into a same-leg FVG; still respects premium/
-  discount. In-FVG location `[RES:fvg_entry_loc]` = CE midpoint. **No longer mandatory** — an otherwise-
-  confirmed structural entry does not require an FVG.
+## 14. Entry — the faithful WHERE + WHEN sequence
+Implemented in `ict_v2/pipeline.execution_for_scenario` as five conditions, each recorded in the
+returned `audit` (auditable, like `role_of`):
+- **C1 thesis** — the active scenario (direction + dealing range). `[HTF, given]`
+- **C2 retrace** — price has pulled back into the correct **premium/discount half** (Lessons 8/9). `[COURSE]`
+- **C3 PD array = WHERE** — a course-taught PD array sits inside that zone: **FVG / fib 0.5-0.62-0.79 /
+  EQH-EQL / NWOG / ORG** (Lessons 10-14). **UNRANKED** — the course ranks no PD-array *type* above
+  another; confluence (several overlapping) only strengthens the location, and TF reliability + confluence
+  are the only orderings the course gives. `[COURSE]`
+- **C4 structure shift = WHEN** — a **confirmed local MSS** in the trade direction (Higher-High for a
+  long / Lower-Low for a short) whose reversal originated from the retracement side (Lessons 15/16). This
+  is the trigger. Momentum ("energetic move", Lesson 15) is *surfaced* as evidence, never gated on an
+  invented threshold. `[COURSE]`
+- **C5 execute** — entry = the PD-array reference; stop = **beyond the manipulation extreme** (Lesson
+  10/16); target = the opposing draw (≥ `MIN_TARGET_RR`). `[COURSE]` + `[NEC buffer]`
+
+The `structure` **entry** model (entry at the MSS confirmation close) is retired from the default set —
+the structure shift is consumed as C4 above, not as an entry at the reversal extreme. **Order Blocks /
+Breakers / Mitigation Blocks / OTE-as-a-named-model are NOT in the course** and are intentionally absent.
 
 ## 15. Stop `[COURSE]` + `[NEC buffer]`
 Beyond structural invalidation = beyond max(true manipulation extreme, swept-zone outer

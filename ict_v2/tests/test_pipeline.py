@@ -23,19 +23,21 @@ def test_daily_weekly_anchor_vetoes_counter_trend_bias(monkeypatch):
 
 
 def test_entry_models_registry_is_course_scoped():
-    """v2 implements THIS course, whose execution models are the confirmed STRUCTURE reversal (Lessons
-    15/16, the core entry) and the FVG (Lesson 12, a contextual PD array / optional refinement). Broader-
-    ICT constructs the course does not teach (Order Block / Breaker / Mitigation Block / IFVG / IOFED)
-    are intentionally absent. The layer is pluggable — adding a model is a registry entry."""
+    """v2 implements THIS course. The PD-array ENTRY LOCATIONS come from the FVG detector (Lesson 12) and
+    the wider objective set (fib/EQH-EQL/NWOG/ORG, Lessons 8-14); the confirmed STRUCTURE reversal
+    (Lessons 15/16) is the execution TRIGGER (C4 in execution_for_scenario), consumed there rather than
+    as an entry at the reversal extreme — so `structure` stays REGISTERED (for reference) but is NOT in
+    the default set. Broader-ICT constructs the course does not teach (Order Block / Breaker / Mitigation
+    Block / IFVG / IOFED) are intentionally absent. The layer is pluggable — adding a model is a registry entry."""
     from ict_v2 import entry_models as EM
     cat = EM.catalog()
     assert set(cat) == {"structure", "fvg"} and cat["structure"]["implemented"] and cat["fvg"]["implemented"]
     for m in ("order_block", "breaker", "mitigation_block", "ifvg", "iofed"):
         assert m not in cat and m not in EM.LIFECYCLE           # not this course's methodology
-    assert EM.resolve(None) == ("structure", "fvg")
+    assert EM.resolve(None) == ("fvg",)                         # structure shift is a TRIGGER, not a default entry
     assert EM.resolve(["fvg"]) == ("fvg",)
-    assert EM.resolve(["order_block", "breaker"]) == ("structure", "fvg")   # unknown drop → defaults kept
-    # every candidate that HAS an entry is tagged with the model that produced it (structure|fvg);
+    assert EM.resolve(["order_block", "breaker"]) == ("fvg",)   # unknown drop → default (fvg) kept
+    # every candidate that HAS an entry is tagged with the model that produced it (fvg);
     # partial candidates (no entry object yet) carry no model
     st = v2.demo_state(seed=7)
     assert all(c["entry_model"] in ("structure", "fvg") for c in st.setup.cand_info if c["entry_obj"])

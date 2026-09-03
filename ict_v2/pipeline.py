@@ -670,101 +670,231 @@ def _pick_target(direction, entry, risk, objectives, draw_px, min_rr, price_dp=2
     return None, None
 
 
-def execution_for_scenario(scenario, candidates, price=None, objectives=None,
+# ---- FAITHFUL execution model (reconstructed from Lessons 8-16 against the raw course, 2026-09) -----
+# The course teaches ONE lower-timeframe execution sequence, and no single element of it is sufficient:
+#   C1 THESIS      — the active scenario (its direction + dealing range).                    [HTF, given]
+#   C2 RETRACE     — price has pulled back into the correct PREMIUM/DISCOUNT half            (Lesson 9;
+#                    entering at the reversal extreme is "chasing price" and is forbidden).   Lesson 8 ≥50%
+#   C3 PD ARRAY    — a course-taught PD array (FVG / fib 0.5-0.62-0.79 / EQH-EQL / NWOG /     (Lessons
+#                    ORG) sits inside that zone = WHERE we may execute. UNRANKED: confluence   10-14)
+#                    (several overlapping) only strengthens the location; it never selects a type.
+#   C4 STRUCTURE   — a LOCAL market-structure shift AT that array = WHEN. A confirmed MSS in   (Lessons
+#                    the trade direction (a Higher-High for a long / Lower-Low for a short).   15/16)
+#                    Lesson 15: reaching a PD array is only a POTENTIAL reversal; the new
+#                    structure is what CONFIRMS it. This is the trigger.
+#   C5 EXECUTE     — entry = the PD-array reference; stop = beyond the manipulation extreme;   (Lessons
+#                    target = the opposing draw (>= min_rr).                                   8/10/11)
+# The PD array answers WHERE, the structure shift answers WHEN; neither alone triggers an entry. Every
+# decision is recorded in the returned `audit` so a trade can be checked against the course (like role_of).
+_ENTRY_ARRAY_KINDS = ("fvg", "eqhl", "nwog", "org", "fib")   # course-taught EXECUTION arrays (Lessons 10-14)
+_ARRAY_ACTIVE = ("unswept", "unfilled", "open", "touched", "")   # not swept / mitigated / closed-spent
+
+
+def _exec_arrays_in_zone(direction, zone, candidates, objectives, price_dp):
+    """C3 — the UNRANKED set of course-taught PD arrays whose reference level sits inside the scenario's
+    premium/discount half: the candidate ENTRY LOCATIONS (Lessons 10-14). Sourced from the scenario's
+    liquidity objectives (FVG / EQH-EQL / NWOG / ORG / fib) PLUS the execution-TF entry FVGs carried on
+    the candidates. NO type is preferred — confluence is simply how many land in the zone."""
+    lo, hi = zone
+    arrays, seen = [], set()
+
+    def add(kind, ref, top, bottom, label, side, source):
+        if ref is None or not (lo <= ref <= hi):
+            return
+        key = (kind, round(float(ref), price_dp))
+        if key in seen:
+            return
+        seen.add(key)
+        arrays.append({"kind": kind, "ref": float(ref),
+                       "top": (float(top) if top is not None else float(ref)),
+                       "bottom": (float(bottom) if bottom is not None else float(ref)),
+                       "label": label or kind.upper(), "side": side or "", "source": source})
+
+    for o in (objectives or []):
+        kind = getattr(o, "kind", None)
+        if kind in _ENTRY_ARRAY_KINDS and getattr(o, "status", "") in _ARRAY_ACTIVE:
+            add(kind, getattr(o, "price", None), getattr(o, "top", None), getattr(o, "bottom", None),
+                getattr(o, "label", ""), getattr(o, "side", ""),
+                (o.to_dict() if hasattr(o, "to_dict") else {"price": getattr(o, "price", None)}))
+    for c in (candidates or []):                              # the execution-TF entry FVG on each candidate
+        src = getattr(getattr(c, "entry_obj", None), "source", None)
+        if src is not None and getattr(src, "status", "") != "mitigated":
+            add("fvg", getattr(src, "ce", None), getattr(src, "top", None), getattr(src, "bottom", None),
+                "FVG", ("high" if getattr(src, "direction", "") == "bullish" else "low"),
+                {"tf": getattr(c, "tf", ""), "id": getattr(src, "id", "")})
+    return arrays
+
+
+def _local_structure_shift(candidates, ms, direction, zone, price_dp):
+    """C4 — the LOCAL market-structure shift that CONFIRMS the reversal (Lessons 15/16): a CONFIRMED MSS
+    in the trade direction (bullish -> long / bearish -> short) whose reversal ORIGINATED from the
+    retracement side (the manipulation extreme it turned from sits in / below the discount for a long,
+    in / above the premium for a short). Reaching a PD array is only a POTENTIAL reversal (Lesson 15) —
+    THIS confirmed new structure is what makes it actionable. Returns an auditable dict or None. Uses the
+    execution-TF market structure `ms` when given, else the candidates' own MSS."""
+    lo, hi = zone
+    want = "bullish" if direction == "long" else "bearish"
+    pairs = []                                                # (mss, displacement, manip_extreme)
+    if ms is not None:
+        disp_by_id = {d.item.id: d.item for d in getattr(ms, "ranked_displacements", [])}
+        for r in getattr(ms, "ranked_mss", []):
+            m = r.item
+            if getattr(m, "state", "") == "confirmed" and getattr(m, "direction", "") == want:
+                d = disp_by_id.get(m.depends_on[0]) if getattr(m, "depends_on", None) else None
+                pairs.append((m, d, getattr(d, "start_price", None)))
+    else:
+        for c in (candidates or []):
+            m = getattr(c, "mss", None)
+            if (m is not None and getattr(m, "state", "") == "confirmed"
+                    and getattr(m, "direction", "") == want and getattr(c, "direction", "") == direction):
+                d = getattr(c, "displacement", None)
+                pairs.append((m, d, getattr(d, "start_price", None)))
+
+    best = None
+    for m, d, manip in pairs:
+        # the reversal must have TURNED from the retracement side (a discount low for a long)
+        on_retrace = manip is None or ((manip <= hi) if direction == "long" else (manip >= lo))
+        if not on_retrace:
+            continue
+        ci = getattr(m, "confirm_index", -1) or -1
+        if best is None or ci > (getattr(best[0], "confirm_index", -1) or -1):
+            best = (m, d, manip)
+    if best is None:
+        return None
+    m, d, manip = best
+    net = float(getattr(d, "net", 0.0)) if d is not None else None
+    span = getattr(d, "span", None) if d is not None else None
+    return {"mss_id": getattr(m, "id", ""), "direction": want,
+            "kind": ("HL->HH" if direction == "long" else "LH->LL"),
+            "broken_price": round(float(getattr(m, "broken_price", 0.0)), price_dp),
+            "confirm_index": getattr(m, "confirm_index", None),
+            "manip_extreme": (round(float(manip), price_dp) if manip is not None else None),
+            "acceptance": getattr(m, "acceptance", 0.0),
+            # MOMENTUM is SURFACED as course evidence (Lesson 15 "energetic move"), NOT gated on an
+            # invented threshold — the confirmed MSS (a body close beyond structure) IS the confirmation.
+            "momentum": {"net": (round(net, price_dp) if net is not None else None), "span": span}}
+
+
+def _stop_beyond_manipulation(shift, arr, direction, price_dp):
+    """C5 stop — beyond the MANIPULATION EXTREME the structure reversed from (Lesson 10/16). Falls back to
+    the entry array's far edge when there is no confirmed shift yet (for an armed-state RR estimate)."""
+    manip = shift.get("manip_extreme") if shift else None
+    far = arr["bottom"] if direction == "long" else arr["top"]     # the array's far side
+    stop = manip if manip is not None else far
+    # guarantee the stop is on the loss side of the entry (below for a long, above for a short)
+    if direction == "long" and stop >= arr["ref"]:
+        stop = far if far < arr["ref"] else arr["ref"] - (10 ** -price_dp)
+    if direction == "short" and stop <= arr["ref"]:
+        stop = far if far > arr["ref"] else arr["ref"] + (10 ** -price_dp)
+    return round(float(stop), price_dp)
+
+
+def execution_for_scenario(scenario, candidates, price=None, objectives=None, ms=None,
                            min_rr: float = MIN_TARGET_RR, price_dp: int = 2) -> dict | None:
-    """Decide an active SCENARIO's execution state from the entry candidates generated on the execution
-    timeframe. This is the M15/M1 job: the higher timeframes already fixed the thesis (direction, zone,
-    draw); here we only watch for the entry inside the scenario's retracement zone.
-
-    Geometry per the agreed rule: entry = the entry-role PD array's CE (the candidate's entry); stop =
-    the candidate's manipulation-extreme stop; target = the SCENARIO's draw (not the candidate's own).
-    States: triggered (entry retraced into) → armed (entry PD array present, awaiting retrace) →
-    retracing (price in the zone, no entry array yet) → None (watching; price not in the zone)."""
-    zone = getattr(scenario, "entry_zone", None)
+    """FAITHFUL execution decision for one active SCENARIO (see the C1-C5 block above). The higher
+    timeframes fixed the thesis; THIS stage decides WHEN to execute, requiring the FULL course sequence:
+    a retrace into the correct premium/discount half (C2), a course-taught PD array in that zone (C3 =
+    WHERE), and a confirmed LOCAL structure shift at it (C4 = WHEN). Only then -> triggered. Neither the
+    PD array nor the structure shift alone is sufficient. Returns the execution dict (+ an `audit` trace)
+    or None (watching). The `bar`-level reachability gate in ScenarioBook.monitor still guards the fill."""
     dirn = scenario.direction
+    zone = getattr(scenario, "entry_zone", None)
+    if zone is None or price is None:
+        return None
+    lo, hi = (zone[0], zone[1]) if zone[0] <= zone[1] else (zone[1], zone[0])
+    pd_zone = "discount" if dirn == "long" else "premium"
+    new_struct = "HH/HL" if dirn == "long" else "LH/LL"
 
-    def in_zone(p):
-        return zone is not None and p is not None and zone[0] <= p <= zone[1]
+    retraced = lo <= price <= hi                                              # C2
+    arrays = _exec_arrays_in_zone(dirn, (lo, hi), candidates, objectives, price_dp)   # C3
+    shift = _local_structure_shift(candidates, ms, dirn, (lo, hi), price_dp)          # C4
 
-    def stop_ok(c):     # sane stop side for the direction (long: stop below entry; short: above)
-        if c.entry is None or c.stop is None:
-            return False
-        return (c.stop < c.entry) if dirn == "long" else (c.entry < c.stop)
+    def _audit(state, **extra):
+        a = {"pd_zone": pd_zone, "pd_zone_range": [round(lo, price_dp), round(hi, price_dp)],
+             "conditions": {"C2_retrace": bool(retraced),
+                            "C3_pd_array": bool(arrays),
+                            "C4_structure_shift": bool(shift)},
+             "confluence": [a2["kind"] for a2 in arrays],           # every PD array in the zone (unranked)
+             "structure_shift": shift, "state": state}
+        a.update(extra)
+        return a
 
-    def _live(c):
-        return getattr(getattr(c, "entry_obj", None), "state", "") == "valid"
+    # C3 fails — no course PD array in the retracement zone: there is no WHERE to execute.
+    if not arrays:
+        if retraced:
+            return {"state": "retracing", "entry": None, "stop": None, "target": None, "rr": None,
+                    "price": round(price, price_dp),
+                    "why": f"price in the {pd_zone} zone but no course PD array there yet - watching",
+                    "audit": _audit("retracing", reason="no PD array in the retracement zone")}
+        return None                                                          # watching: nothing set up
 
-    usable = [c for c in candidates if c.direction == dirn and c.entry is not None and in_zone(c.entry)
-              and getattr(c, "structure", "") == "valid" and stop_ok(c)]
-    # FVG is no longer MANDATORY (Lessons 15/16): a LIVE non-FVG-retrace entry — a confirmed market-
-    # structure reversal, which is live-on-confirmation and carries no context 'entry' role — TRIGGERS
-    # first (it still passes the discount/premium zone gate a reversal-off-the-low satisfies). Otherwise
-    # the FVG entry-role pool is used exactly as before (waiting → ARMED, retraced → triggered).
-    entry_cands = ([c for c in usable if _live(c) and getattr(c, "entry_role", "") != "entry"]
-                   or [c for c in usable if c.entry_role == "entry"] or usable)
-    if entry_cands:
-        c = entry_cands[0]
-        risk = abs(c.stop - c.entry)
-        draw_px = getattr(getattr(scenario, "draw", None), "price", None)
-        tgt, rr = _pick_target(dirn, c.entry, risk, objectives, draw_px, min_rr, price_dp)  # nearest draw >= min_rr
-        if tgt is not None:                                     # a target clearing >=2R exists -> tradeable
-            live = getattr(getattr(c, "entry_obj", None), "state", "") == "valid"
-            gap = (round(c.entry - price, price_dp) if price is not None else None)
-            # how far price has already travelled from the entry toward the target (0 at entry, 1 at target)
-            span = (tgt - c.entry)
-            progress = ((price - c.entry) / span) if (span and price is not None) else 0.0
-            # NOT ACTIONABLE (stale) in two ways, both taking precedence over a 'live' (touched) FVG:
-            #   • MISSED — price has covered >= STALE_PROGRESS of the entry→target move (draw nearly reached);
-            #   • INVALIDATED — price is beyond the STOP on the loss side (short: at/above stop; long:
-            #     at/below stop) → the setup is dead (an entry now would be an instant stop-out).
-            beyond_stop = (c.stop is not None and price is not None
-                           and ((price >= c.stop) if dirn == "short" else (price <= c.stop)))
-            stale = (progress >= STALE_PROGRESS) or beyond_stop
-            if beyond_stop:
-                why = (f"invalidated - price {round(price, price_dp)} is beyond the stop "
-                       f"{round(c.stop, price_dp)} (setup dead, not arming)")
-            elif stale:
-                rem = round(abs(tgt - price), price_dp) if price is not None else None
-                why = (f"missed - price already ran {round(progress * 100)}% from entry "
-                       f"{round(c.entry, price_dp)} to target {tgt} (now {round(price, price_dp)}); "
-                       f"only {rem} pts left - not arming")
-            elif live:
-                why = f"entry retraced into - trigger now (target {tgt}, {rr}R)"
-            elif gap is not None:
-                move = "rise" if gap > 0 else "fall"
-                why = (f"{dirn} entry rests at {round(c.entry, price_dp)} - awaiting price to {move} "
-                       f"{abs(gap):g} pts into it (now {round(price, price_dp)}); target {tgt} ({rr}R)")
-            else:
-                why = f"entry PD array armed - target {tgt} ({rr}R)"
-            # Topstep entry order TYPE depends on where price is vs the entry (a resting order must not
-            # be on the wrong side or it fills instantly at market):
-            #   long  — entry below price -> BUY LIMIT ; entry above price -> BUY STOP
-            #   short — entry above price -> SELL LIMIT; entry below price -> SELL STOP
-            # Bracket legs are fixed: SL = stop-market the other way, TP = limit.
-            if dirn == "long":
-                order = "BUY STOP" if (price is not None and price < c.entry) else "BUY LIMIT"
-            else:
-                order = "SELL STOP" if (price is not None and price > c.entry) else "SELL LIMIT"
-            _fvg = getattr(getattr(c, "entry_obj", None), "source", None)   # the v1 FVG (box bounds, for the chart)
-            fvg_top = round(float(_fvg.top), price_dp) if getattr(_fvg, "top", None) is not None else None
-            fvg_bottom = round(float(_fvg.bottom), price_dp) if getattr(_fvg, "bottom", None) is not None else None
-            usable_models = sorted({getattr(x, "entry_model", "") for x in usable if getattr(x, "entry_model", "")})
-            return {"state": ("stale" if stale else "triggered" if live else "armed"),
-                    "entry": round(c.entry, price_dp), "stop": round(c.stop, price_dp), "target": tgt, "rr": rr,
-                    "order": order, "sl_order": ("sell stop" if dirn == "long" else "buy stop"),
-                    "tp_order": ("sell limit" if dirn == "long" else "buy limit"),
-                    "fvg_top": fvg_top, "fvg_bottom": fvg_bottom,
-                    "entry_model": getattr(c, "entry_model", ""),   # which model produced the entry (structure|fvg)
-                    "usable_models": usable_models,                 # models that ALSO had a usable entry now
-                    "price": (round(price, price_dp) if price is not None else None), "dist_to_entry": gap,
-                    "entry_role": c.entry_role, "tf": getattr(c, "tf", ""), "why": why}
-        if in_zone(price):
-            return {"state": "retracing",
-                    "why": f"entry present but no opposing draw clears {min_rr:g}R - skipped"}
-    if in_zone(price):
-        return {"state": "retracing",
-                "why": "price retracing into the entry zone - awaiting an entry PD array"}
-    return None   # watching: price not yet in the retracement zone
+    # C5 geometry — entry LOCATION = the in-zone array NEAREST to price (nearest = the level price reaches
+    # first; a LOCATION choice, never a preference between array TYPES). Stop beyond the manip extreme.
+    arr = min(arrays, key=lambda a: abs(a["ref"] - price))
+    entry = round(arr["ref"], price_dp)
+    stop = _stop_beyond_manipulation(shift, arr, dirn, price_dp)
+    risk = abs(entry - stop)
+    draw_px = getattr(getattr(scenario, "draw", None), "price", None)
+    tgt, rr = _pick_target(dirn, entry, risk, objectives, draw_px, min_rr, price_dp)
+    gap = round(entry - price, price_dp)
+    has_band = arr["top"] > arr["bottom"]                                    # a boxed array (FVG/NWOG/ORG)
+    fvg_top = round(arr["top"], price_dp) if has_band else None              # the entry-array box, for the chart
+    fvg_bottom = round(arr["bottom"], price_dp) if has_band else None
+    usable_models = sorted({a["kind"] for a in arrays})                      # the confluence set
+    if dirn == "long":
+        order = "BUY STOP" if price < entry else "BUY LIMIT"
+    else:
+        order = "SELL STOP" if price > entry else "SELL LIMIT"
+
+    base = {"entry": entry, "stop": stop, "target": tgt, "rr": rr, "order": order,
+            "sl_order": ("sell stop" if dirn == "long" else "buy stop"),
+            "tp_order": ("sell limit" if dirn == "long" else "buy limit"),
+            "fvg_top": fvg_top, "fvg_bottom": fvg_bottom,
+            "entry_model": arr["kind"], "usable_models": usable_models,
+            "price": round(price, price_dp), "dist_to_entry": gap,
+            "entry_role": "entry", "tf": getattr(scenario, "tf", "")}
+
+    # No opposing draw clears min_rr -> a real PD array but not a tradeable setup (not armed, no alert).
+    if tgt is None:
+        return {**base, "state": "retracing",
+                "why": f"{pd_zone} PD array {arr['label']} at {entry}, but no opposing draw clears {min_rr:g}R - skipped",
+                "audit": _audit("retracing", reason="no target >= min_rr", pd_array=arr["source"])}
+
+    # STALE / INVALIDATION take precedence (Lesson 9 — never chase a move that already ran):
+    span = (tgt - entry)
+    progress = ((price - entry) / span) if span else 0.0                     # 0 at entry, 1 at target (both dirs)
+    beyond_stop = (price <= stop) if dirn == "long" else (price >= stop)
+    stale = (progress >= STALE_PROGRESS) or beyond_stop
+
+    if beyond_stop:
+        state = "stale"
+        why = (f"invalidated - price {round(price, price_dp)} is beyond the stop {stop} "
+               f"(setup dead, not arming)")
+    elif stale:
+        state = "stale"
+        rem = round(abs(tgt - price), price_dp)
+        why = (f"missed - price already ran {round(progress * 100)}% from entry {entry} to target {tgt} "
+               f"(now {round(price, price_dp)}); only {rem} pts left - not arming")
+    elif not shift:
+        # C3 met (price/array in the zone) but C4 not yet: reaching the array is only a POTENTIAL reversal.
+        state = "armed"
+        why = (f"price in the {pd_zone} at {arr['label']} {entry} (WHERE); awaiting a local structure "
+               f"shift ({new_struct}) to CONFIRM the reversal (WHEN) - Lessons 15/16")
+    elif not retraced:
+        # structure shifted, but price is not back in the retracement zone/array yet (awaiting the entry).
+        state = "armed"
+        move = "rise" if gap > 0 else "fall"
+        why = (f"structure shift confirmed ({shift['kind']}); awaiting price to {move} {abs(gap):g} pts "
+               f"into {arr['label']} {entry} in the {pd_zone} (now {round(price, price_dp)}); target {tgt} ({rr}R)")
+    else:
+        state = "triggered"
+        why = (f"structure shift confirmed ({shift['kind']}) at {arr['label']} {entry} in the {pd_zone} - "
+               f"WHERE+WHEN both met, trigger now (target {tgt}, {rr}R)")
+
+    return {**base, "state": state, "why": why,
+            "audit": _audit(state, pd_array=arr["source"],
+                            why_accepted=(why if state == "triggered" else ""),
+                            stale=stale, beyond_stop=beyond_stop)}
 
 
 def mtf_setup(bars, tf: str, context: HTFContext, *, refine_bars=None, min_stop=None,

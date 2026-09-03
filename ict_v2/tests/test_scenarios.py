@@ -114,67 +114,86 @@ def test_monitor_updates_state_without_touching_membership():
     assert book.active[0].state == "armed" and book.active[0].execution["entry"] == 150
 
 
-# ---- execution monitor geometry (M15/M1): only VALID, COHERENT entries become actionable ------
-def test_execution_for_scenario_only_surfaces_valid_coherent_entries():
-    from types import SimpleNamespace
+# ---- FAITHFUL execution model (Lessons 8-16): PD array = WHERE, structure shift = WHEN ------------
+# Shared mocks: a course PD array (an in-zone FVG objective) and a LOCAL structure shift (a confirmed
+# MSS carried on a candidate). Neither alone triggers; the two together do.
+from types import SimpleNamespace as _N
+
+
+def _fvg_obj(ce, top, bottom, direction="long", status="unfilled"):
+    """A course PD array in the retracement zone = the WHERE (Lessons 10-14)."""
+    return _N(kind="fvg", tf="1m", side=("high" if direction == "long" else "low"), price=ce,
+              top=top, bottom=bottom, status=status, label="FVG",
+              to_dict=lambda: {"kind": "fvg", "price": ce})
+
+
+def _draw_obj(price, side="high"):
+    return _N(kind="swing", tf="1H", side=side, price=price, top=None, bottom=None, status="unswept",
+              label=("BSL" if side == "high" else "SSL"), to_dict=lambda: {"kind": "swing", "price": price})
+
+
+def _shift_cand(direction="long", manip=100, confirmed=True):
+    """A candidate carrying the LOCAL structure shift = the WHEN (a confirmed MSS, Lessons 15/16)."""
+    pol = "bullish" if direction == "long" else "bearish"
+    mss = _N(state=("confirmed" if confirmed else "candidate"), direction=pol, confirm_index=9,
+             broken_price=125.0, acceptance=1.0, id="MSS", depends_on=("D",))
+    disp = _N(start_price=manip, net=20.0, span=5, id="D")
+    return _N(direction=direction, mss=mss, displacement=disp, entry_obj=_N(source=None), tf="1m")
+
+
+def test_execution_requires_both_a_pd_array_and_a_structure_shift():
+    """The faithful sequence: a PD array in the correct premium/discount half = WHERE, a confirmed local
+    structure shift there = WHEN. Neither alone is enough (Lessons 9-16)."""
     from ict_v2 import pipeline as P
-    sc = SimpleNamespace(direction="long", entry_zone=(100, 150), draw=SimpleNamespace(price=210))
+    sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
+    objs = [_fvg_obj(120, 122, 118), _draw_obj(210)]        # a PD array at 120 in the discount + the draw
 
-    def cand(entry, stop, structure="valid", role="entry", dirn="long", live=False):
-        return SimpleNamespace(direction=dirn, entry=entry, stop=stop, structure=structure,
-                               entry_role=role, tf="1m",
-                               entry_obj=SimpleNamespace(state=("valid" if live else "waiting")))
-
-    # coherent long (stop<entry<draw), valid, in zone → armed; live → triggered
-    assert P.execution_for_scenario(sc, [cand(120, 110)], price=120)["state"] == "armed"
-    assert P.execution_for_scenario(sc, [cand(120, 110, live=True)], price=120)["state"] == "triggered"
-    # wrong-side stop (stop>entry for a long) → not actionable; price in zone → retracing
-    assert P.execution_for_scenario(sc, [cand(120, 130)], price=120)["state"] == "retracing"
-    # structurally invalid → not actionable
-    assert P.execution_for_scenario(sc, [cand(120, 110, structure="invalid")], price=120)["state"] == "retracing"
-    # nothing in zone and price outside the zone → watching (None)
-    assert P.execution_for_scenario(sc, [cand(160, 150)], price=90) is None
-    # geometry: target = the SCENARIO draw (210), stop = the candidate's manipulation extreme (110)
-    ex = P.execution_for_scenario(sc, [cand(120, 110)], price=120)
-    assert ex["target"] == 210 and ex["stop"] == 110 and ex["entry"] == 120
+    # C3 met (PD array in zone) but NO structure shift yet → ARMED (reaching the array is only a POTENTIAL)
+    r = P.execution_for_scenario(sc, [_shift_cand("long", confirmed=False)], price=120, objectives=objs)
+    assert r["state"] == "armed" and "structure shift" in r["why"]
+    # C3 + C4 both met → TRIGGERED; geometry: entry = PD array (120), stop = manip extreme (100), target = draw
+    r = P.execution_for_scenario(sc, [_shift_cand("long", manip=100)], price=120, objectives=objs)
+    assert r["state"] == "triggered" and r["entry"] == 120 and r["stop"] == 100 and r["target"] == 210
+    # a structure shift but NO PD array in the zone → not actionable (no WHERE); price in zone → retracing
+    r = P.execution_for_scenario(sc, [_shift_cand("long")], price=120, objectives=[_draw_obj(210)])
+    assert r["state"] == "retracing" and "no course PD array" in r["why"]
+    # price outside the zone and nothing set up → watching (None)
+    assert P.execution_for_scenario(sc, [_shift_cand("long")], price=90, objectives=[_draw_obj(210)]) is None
+    # the decision is AUDITABLE: WHERE (zone + array) and WHEN (structure shift) are recorded
+    a = P.execution_for_scenario(sc, [_shift_cand("long")], price=120, objectives=objs)["audit"]
+    assert a["pd_zone"] == "discount" and a["conditions"]["C3_pd_array"] and a["conditions"]["C4_structure_shift"]
+    assert a["structure_shift"]["kind"] == "HL->HH" and "fvg" in a["confluence"]
 
 
 def test_execution_marks_a_late_entry_stale_not_armed():
-    """TIMELINESS: once price has run past the midpoint of the entry→target move (the draw is nearly
-    reached), a resting retrace-entry is STALE — surfaced as 'stale', never 'armed' (fixes armed-too-late)."""
-    from types import SimpleNamespace as N
+    """TIMELINESS (Lesson 9 — never chase a move that already ran): once price has run past the midpoint
+    of the entry→target move, the retrace-entry is STALE — surfaced as 'stale', even with a valid shift."""
     from ict_v2 import pipeline as P
-    sc = N(direction="long", entry_zone=(100, 150), draw=N(price=210))
-    def cand(entry, stop, live=False):
-        return N(direction="long", entry=entry, stop=stop, structure="valid", entry_role="entry",
-                 tf="1m", entry_obj=N(state=("valid" if live else "waiting")))
-    objs = [N(price=210, status="unswept")]
-    # price 180 = 67% of the way from entry 120 to target 210 → move already ran → STALE, not armed
-    r = P.execution_for_scenario(sc, [cand(120, 110)], price=180, objectives=objs)
+    sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
+    objs = [_fvg_obj(120, 122, 118), _draw_obj(210)]
+    shift = _shift_cand("long", manip=100)
+    # price 180 = 67% of the way from entry 120 to target 210 → move already ran → STALE, not triggered
+    r = P.execution_for_scenario(sc, [shift], price=180, objectives=objs)
     assert r["state"] == "stale" and "missed" in r["why"]
-    # price 130 = ~11% of the way → still ahead of the move → ARMED
-    assert P.execution_for_scenario(sc, [cand(120, 110)], price=130, objectives=objs)["state"] == "armed"
-    # a LIVE entry AT the entry (low progress) triggers; but a LIVE entry price has already run PAST is
-    # STALE too — a touched-earlier FVG does not make a passed setup actionable again (the reported bug)
-    assert P.execution_for_scenario(sc, [cand(120, 110, live=True)], price=125, objectives=objs)["state"] == "triggered"
-    assert P.execution_for_scenario(sc, [cand(120, 110, live=True)], price=180, objectives=objs)["state"] == "stale"
+    # price 125 (low progress) with array + shift → TRIGGERED
+    assert P.execution_for_scenario(sc, [shift], price=125, objectives=objs)["state"] == "triggered"
+    # array + NO shift, still ahead of the move → ARMED (awaiting the structure shift)
+    assert P.execution_for_scenario(sc, [_shift_cand("long", confirmed=False)],
+                                    price=130, objectives=objs)["state"] == "armed"
 
 
 def test_execution_marks_a_beyond_stop_setup_invalidated():
     """A setup whose price has run BEYOND the stop on the loss side is INVALIDATED (an entry now = an
-    instant stop-out) → 'stale', not armed — even a touched (live) FVG. Short: price at/above the stop."""
-    from types import SimpleNamespace as N
+    instant stop-out) → 'stale', not armed — even with a confirmed shift. Short: price at/above the stop."""
     from ict_v2 import pipeline as P
-    sc = N(direction="short", entry_zone=(150, 200), draw=N(price=90))
-    def cand(entry, stop, live=False):
-        return N(direction="short", entry=entry, stop=stop, structure="valid", entry_role="entry",
-                 tf="1m", entry_obj=N(state=("valid" if live else "waiting")))
-    objs = [N(price=90, status="unswept")]
-    # short entry 180, stop 190 (above); price 250 is ABOVE the stop → invalidated (even though live)
-    r = P.execution_for_scenario(sc, [cand(180, 190, live=True)], price=250, objectives=objs)
+    sc = _N(direction="short", entry_zone=(150, 200), draw=_N(price=90), tf="1m")
+    objs = [_fvg_obj(180, 182, 178, direction="short"), _draw_obj(90, side="low")]
+    # short entry 180 (PD array), stop 190 (manip extreme above); price 250 is ABOVE the stop → invalidated
+    r = P.execution_for_scenario(sc, [_shift_cand("short", manip=190)], price=250, objectives=objs)
     assert r["state"] == "stale" and "invalidated" in r["why"]
-    # price 175 (below the entry, still awaiting the sell) → armed
-    assert P.execution_for_scenario(sc, [cand(180, 190)], price=175, objectives=objs)["state"] == "armed"
+    # price 180 in the premium at the array, no shift yet → armed
+    assert P.execution_for_scenario(sc, [_shift_cand("short", manip=190, confirmed=False)],
+                                    price=180, objectives=objs)["state"] == "armed"
 
 
 # ---- sticky trigger + outcome tracking: once triggered it stays open until stop/target -----------
@@ -311,19 +330,17 @@ def test_dollar_pnl_per_trade():
 
 
 def test_target_requires_min_2R_and_picks_nearest_qualifying():
-    from types import SimpleNamespace
     from ict_v2 import pipeline as P
-    def cand(entry, stop):
-        return SimpleNamespace(direction="long", entry=entry, stop=stop, structure="valid",
-                               entry_role="entry", tf="1m", entry_obj=SimpleNamespace(state="waiting"))
-    # draw too NEAR (< 2R): entry 120 / stop 110 (risk 10), draw 135 → dist 15 < 20 → NOT tradeable
-    sc = SimpleNamespace(direction="long", entry_zone=(100, 150), draw=SimpleNamespace(price=135))
-    r = P.execution_for_scenario(sc, [cand(120, 110)], price=120)
+    fvg = _fvg_obj(120, 122, 118)                          # PD array (entry 120); manip extreme 110 → risk 10
+    shift = _shift_cand("long", manip=110)
+    # draw too NEAR (< 2R): draw 135 → dist 15 < 20 → NOT tradeable even with a PD array + shift
+    sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=135), tf="1m")
+    r = P.execution_for_scenario(sc, [shift], price=120, objectives=[fvg])
     assert r["state"] == "retracing" and "2R" in r["why"]
-    # with liquidity: a 145 (2.5R) and a far 300 → pick the NEAREST that clears 2R = 145
-    objs = [SimpleNamespace(price=145, status="unswept"), SimpleNamespace(price=300, status="unswept")]
-    r2 = P.execution_for_scenario(sc, [cand(120, 110)], price=120, objectives=objs)
-    assert r2["state"] == "armed" and r2["target"] == 145 and r2["rr"] == 2.5
+    # with liquidity: a 145 (2.5R) and a far 300 → pick the NEAREST that clears 2R = 145 → triggered
+    objs = [fvg, _draw_obj(145), _draw_obj(300)]
+    r2 = P.execution_for_scenario(sc, [shift], price=120, objectives=objs)
+    assert r2["state"] == "triggered" and r2["target"] == 145 and r2["rr"] == 2.5
 
 
 def test_same_direction_theses_collapse_to_one_with_a_ladder():
@@ -440,16 +457,15 @@ def test_draw_drift_does_not_create_a_duplicate_trade():
 
 
 def test_topstep_order_type_depends_on_price_vs_entry():
-    from types import SimpleNamespace as N
     from ict_v2 import pipeline as P
-    objs = [N(price=210, status="unswept"), N(price=40, status="unswept")]
-    def cand(entry, stop, dirn):
-        return N(direction=dirn, entry=entry, stop=stop, structure="valid", entry_role="entry",
-                 tf="1m", entry_obj=N(state="waiting"))
-    o = lambda sc, c, pr: P.execution_for_scenario(sc, [c], price=pr, objectives=objs)["order"]
-    scL = N(direction="long", entry_zone=(100, 150), draw=N(price=210))
-    scS = N(direction="short", entry_zone=(100, 150), draw=N(price=40))
-    assert o(scL, cand(120, 110, "long"), 140) == "BUY LIMIT"    # entry below price → limit
-    assert o(scL, cand(140, 130, "long"), 120) == "BUY STOP"     # entry above price → stop
-    assert o(scS, cand(130, 140, "short"), 120) == "SELL LIMIT"  # entry above price → limit
-    assert o(scS, cand(120, 130, "short"), 140) == "SELL STOP"   # entry below price → stop (price higher)
+    o = lambda sc, objs, sh, pr: P.execution_for_scenario(sc, [sh], price=pr, objectives=objs)["order"]
+    scL = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
+    objsL = [_fvg_obj(120, 122, 118), _draw_obj(210)]         # entry PD array at 120
+    shiftL = _shift_cand("long", manip=100)
+    assert o(scL, objsL, shiftL, 140) == "BUY LIMIT"          # entry 120 below price 140 → limit
+    assert o(scL, objsL, shiftL, 110) == "BUY STOP"           # entry 120 above price 110 → stop
+    scS = _N(direction="short", entry_zone=(100, 150), draw=_N(price=40), tf="1m")
+    objsS = [_fvg_obj(120, 122, 118, direction="short"), _draw_obj(40, side="low")]
+    shiftS = _shift_cand("short", manip=160)
+    assert o(scS, objsS, shiftS, 110) == "SELL LIMIT"         # entry 120 above price 110 → limit
+    assert o(scS, objsS, shiftS, 130) == "SELL STOP"          # entry 120 below price 130 → stop

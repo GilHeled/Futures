@@ -73,6 +73,9 @@ services:
       ICT_V2_OUT_DIR: /out                               # writable — v2 trigger→outcome trade logs land here
       ICT_V2_HOST: 0.0.0.0
       ICT_V2_PORT: "8020"
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}         # Telegram alert on each NEW armed scenario
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}             #   (both from .env; unset = alerts disabled)
+      ICT_V2_NOTIFY_MAX_AGE_SEC: "${ICT_V2_NOTIFY_MAX_AGE_SEC:-600}"   # skip alerts older than this (warmup/frozen feed)
       # OPTIONAL MTF entry-refinement: set ICT_V2_REFINE=5m to refine the 1H entry FVG onto 5m
       # (fresh gaps for fast instruments). Empty = OFF (standard v2). Overridable from the host env.
       ICT_V2_REFINE: "${ICT_V2_REFINE:-}"

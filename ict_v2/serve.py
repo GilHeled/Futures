@@ -18,6 +18,9 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from datetime import datetime, timezone
+
+from ict_live.live.notify import TelegramNotifier
 from ict_live.storage.market_store import MarketStore
 from ict_v2.live import V2Live
 
@@ -25,6 +28,12 @@ from ict_v2.live import V2Live
 class V2Service:
     def __init__(self, data_dir: str):
         self.store_path = Path(data_dir) / "raw_1m.jsonl"
+        # Telegram alert on each NEW armed scenario (operational only; disabled if the env vars are unset).
+        # Guards below prevent spam: rising-edge (one alert per arming) + recency (skip the historical
+        # warmup replay and frozen-feed symbols whose 'armed' timestamp is old).
+        self.notifier = TelegramNotifier()
+        self._armed_prev: dict[str, set] = {}
+        self.notify_max_age = float(os.environ.get("ICT_V2_NOTIFY_MAX_AGE_SEC", "600"))   # 10 min
         # writable output dir for the trade log (the /data store is read-only for v2). None = disabled.
         _out = os.environ.get("ICT_V2_OUT_DIR", "").strip()
         self.out_dir = None
@@ -74,9 +83,11 @@ class V2Service:
         number of bars newly ingested. Serialized (safe to call from several triggers)."""
         if not self.store_path.exists():
             return 0
+        pending: list = []                                   # (sym, scenario) armed alerts — sent after unlock
         with self._lock:
             store = MarketStore(path=self.store_path)        # re-read the append-only jsonl
             n = 0
+            now = datetime.now(timezone.utc)
             for sym in list(store._bars.keys()):
                 live = self.lives.get(sym)
                 if live is None:
@@ -88,12 +99,14 @@ class V2Service:
                         mstop = _C.min_stop_for(sym)
                         inst = _C.INSTRUMENTS.get(sym)          # $ per point (1 contract) for dollar P&L
                         pv = getattr(inst, "point_value", None) if inst is not None else None
+                        pdp = (getattr(inst, "price_dp", None) or getattr(inst, "digits", None)
+                               if inst is not None else None) or 2
                     except Exception:
                         pass
                     live = self.lives.setdefault(sym, V2Live(
                         self.context_tf, self.setup_tf, self.confirm_tf, self.trigger_tf,
                         refine_tf=self.refine_tf, min_stop=mstop, anchor_tf=self.anchor_tf,
-                        entry_models=self.entry_models, point_value=pv))
+                        entry_models=self.entry_models, point_value=pv, price_dp=pdp))
                 last = self.last_ms.get(sym, -1)
                 for b in store.bars(sym):                    # chronological
                     ms = int(b.open_time.timestamp() * 1000)
@@ -104,6 +117,10 @@ class V2Service:
                     n += 1
                 self.last_ms[sym] = last
                 self.state[sym] = live.snapshot()
+                if self.notifier.enabled:                    # collect newly-armed alerts (send after unlock)
+                    to_send, armed_now = self._armed_to_send(sym, self.state[sym].get("scenarios") or [], now)
+                    self._armed_prev[sym] = armed_now
+                    pending.extend((sym, sc) for sc in to_send)
                 # PERSIST the trigger→outcome log per symbol to the WRITABLE out dir (the /data store is
                 # mounted read-only for v2). Overwrite = idempotent; the book's trade list is a
                 # deterministic function of the replayed bars, so restarts don't duplicate.
@@ -115,7 +132,65 @@ class V2Service:
                     except Exception:
                         pass
             self.updated_ms = int(time.time() * 1000)
-            return n
+        for sym, sc in pending:                              # OUTSIDE the lock: a Telegram send never blocks ingest
+            try:
+                self.notifier.send(self._format_armed(sym, sc))
+            except Exception:
+                pass
+        return n
+
+    def _is_recent(self, iso, now) -> bool:
+        """True if an ET-iso timestamp is within notify_max_age of `now` — filters the historical warmup
+        replay and frozen-feed symbols (whose 'armed' time is hours old) from live alerts."""
+        if not iso:
+            return False
+        try:
+            d = datetime.fromisoformat(str(iso))
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=timezone.utc)
+            return 0 <= (now - d).total_seconds() <= self.notify_max_age
+        except Exception:
+            return False
+
+    def _armed_to_send(self, sym, scenarios, now):
+        """RISING EDGE + RECENCY: scenarios that just ENTERED 'armed' (not armed last cycle) whose arm
+        time is recent. Returns (list to notify, the current armed-id set to remember)."""
+        armed_now, out = set(), []
+        prev = self._armed_prev.get(sym, set())
+        for sc in scenarios:
+            if sc.get("state") != "armed":
+                continue
+            sid = sc.get("id")
+            armed_now.add(sid)
+            if sid in prev:                                  # already alerted this arming episode
+                continue
+            if self._is_recent((sc.get("events") or {}).get("armed"), now):
+                out.append(sc)
+        return out, armed_now
+
+    def _format_armed(self, sym, sc) -> str:
+        """Telegram text for a newly-armed scenario (operational alert; no trading instruction)."""
+        try:
+            from ict_live import config as C
+            name = (C.instrument_names().get(sym, "") if hasattr(C, "instrument_names") else "")
+        except Exception:
+            name = ""
+        d = sc.get("direction", "")
+        ex = sc.get("position") or sc.get("execution") or {}
+        e, s, t, rr = ex.get("entry"), ex.get("stop"), ex.get("target"), ex.get("rr")
+        order = ex.get("order") or ("BUY LIMIT" if d == "long" else "SELL LIMIT")
+        draw = sc.get("draw") or {}
+        at = str((sc.get("events") or {}).get("armed", ""))
+        head = f"{'🟢' if d == 'long' else '🔴'} ARMED — {d.upper()} {sym.split(':')[-1]}" + (f" ({name})" if name else "")
+        lines = [head,
+                 f"Entry {e} · Stop {s} · Target {t}" + (f" · {rr}R" if rr is not None else ""),
+                 f"Topstep: {order} @ {e} · SL {ex.get('sl_order', '')} {s} · TP {ex.get('tp_order', '')} {t}",
+                 f"→ {draw.get('label', '')} {draw.get('price', '')}"]
+        if ex.get("why"):
+            lines.append(str(ex["why"]))
+        if len(at) >= 16:
+            lines.append(at[11:16] + " ET")
+        return "\n".join(lines)
 
     def report(self) -> dict:
         return {"v2": True, "experimental": True, "updated_ms": self.updated_ms, "symbols": self.state}

@@ -222,6 +222,20 @@ def test_scenario_events_record_the_state_timeline():
     assert s.state == "target" and "target" in s.events
 
 
+def test_no_backdated_fill_open_only_when_entry_reachable_this_bar():
+    """NO BACK-DATED FILLS: a trade opens only if the entry is inside the trigger bar's [low, high]
+    (reachable now). A 'triggered' signal whose entry is outside the bar (the touch was earlier, price has
+    moved away) must NOT open a back-dated position — it stays armed and may open LATER if price returns."""
+    book, rk = _booked()
+    trig = {"state": "triggered", "entry": 120, "stop": 110, "target": 210}
+    # entry 120 is NOT in the bar range [130,140] (price already above it) → no fill, stays armed
+    book.monitor(lambda s: trig, bar=_bar(140, 130, 135))
+    assert not book.active[0].position and book.active[0].state == "armed" and len(book.trades) == 0
+    # price returns and the bar trades THROUGH the entry [119,121] → a real fill opens now (same scenario)
+    book.monitor(lambda s: trig, bar=_bar(121, 119, 120))
+    assert book.active[0].position and book.active[0].position["open"] and len(book.trades) == 1
+
+
 def test_stop_resolves_as_loss():
     book, rk = _booked()
     book.monitor(lambda s: {"state": "triggered", "entry": 120, "stop": 110, "target": 210}, bar=_bar(121, 119, 120))

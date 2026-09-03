@@ -365,16 +365,21 @@ class ScenarioBook:
             ex = execute_fn(s)
             s.execution = ex
             if ex and ex.get("state") == "triggered":
-                # OPEN a trade only on the TRIGGER TF (bar present — a non-trigger/context pass has
-                # bar=None and must never log a trade) and only if THIS setup has not already traded
-                # (its (id, sig) is not in the book's memory). Same setup re-firing → do nothing.
+                # OPEN a trade only on the TRIGGER TF (bar present) and only if:
+                #   (1) THIS setup has not already traded (its (id, sig) is not in the book's memory), and
+                #   (2) the entry is REALISTICALLY REACHABLE this bar — the entry price is inside the bar's
+                #       traded [low, high] range. NO BACK-DATED FILLS: if price is not at the entry now
+                #       (the touch was earlier and price has moved away), the fill is impossible → do not
+                #       open. The scenario stays a valid thesis and may trigger later if price returns.
                 if bar is not None:
+                    e = ex.get("entry")
+                    reachable = (e is not None and float(bar.low) <= float(e) <= float(bar.high))
                     sig = self._setup_sig(ex)
-                    if self._setup_key(s, sig) not in self._traded_setups:
+                    if reachable and self._setup_key(s, sig) not in self._traded_setups:
                         self._open_position(s, ex, bar, sig)  # sticky from here on
                     else:
-                        s.state = "armed"                     # a re-fire of an already-traded setup: show
-                        #                                       it as armed, but do NOT open a new trade
+                        s.state = "armed"                     # not reachable now, or a re-fire of a traded
+                        #                                       setup: show armed, but do NOT open a trade
             elif ex is None:
                 if s.state not in ("watching", "retracing"):
                     s.state = "watching"

@@ -176,11 +176,13 @@ class V2Service:
 
     def _format_alert(self, sym, sc, state) -> str:
         """Telegram text for a newly-actionable scenario (operational alert; no trading instruction)."""
+        pv = name = None
         try:
             from ict_live import config as C
             name = (C.instrument_names().get(sym, "") if hasattr(C, "instrument_names") else "")
+            pv = getattr(C.INSTRUMENTS.get(sym), "point_value", None)   # $ per point (1 contract)
         except Exception:
-            name = ""
+            name = name or ""
         d = sc.get("direction", "")
         ex = sc.get("position") or sc.get("execution") or {}
         e, s, t, rr = ex.get("entry"), ex.get("stop"), ex.get("target"), ex.get("rr")
@@ -191,8 +193,15 @@ class V2Service:
         head = f"{'🟢' if d == 'long' else '🔴'} {tag} — {d.upper()} {sym.split(':')[-1]}" + (f" ({name})" if name else "")
         lines = [head,
                  f"Entry {e} · Stop {s} · Target {t}" + (f" · {rr}R" if rr is not None else ""),
-                 f"Topstep: {order} @ {e} · SL {ex.get('sl_order', '')} {s} · TP {ex.get('tp_order', '')} {t}",
-                 f"→ {draw.get('label', '')} {draw.get('price', '')}"]
+                 f"Topstep: {order} @ {e} · SL {ex.get('sl_order', '')} {s} · TP {ex.get('tp_order', '')} {t}"]
+        # dollar value of 1R (the risk) and the target reward — per 1 contract, from the instrument point value
+        if pv and e is not None and s is not None:
+            risk_usd = abs(float(e) - float(s)) * pv
+            money = f"1R = ${risk_usd:,.0f} risk"
+            if t is not None:
+                money += f" · target = +${abs(float(t) - float(e)) * pv:,.0f}"
+            lines.append(money + " (1 contract)")
+        lines.append(f"→ {draw.get('label', '')} {draw.get('price', '')}")
         if ex.get("why"):
             lines.append(str(ex["why"]))
         if len(at) >= 16:

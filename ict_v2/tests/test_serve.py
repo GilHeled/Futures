@@ -67,6 +67,8 @@ def test_format_alert_armed_and_triggered(tmp_path):
     a = dict(base, state="armed", events={"armed": "2026-09-02T15:04:00-04:00"})
     m = svc._format_alert("COMEX_MINI:MGC1!", a, "armed")
     assert "ARMED" in m and "LONG" in m and "MGC1!" in m and "BUY LIMIT @ 4376.75" in m and "27.94R" in m and "15:04 ET" in m
+    # $ value of 1R (risk) and the target reward — MGC = $10/pt: risk 1.55pt→$16, reward 43.3pt→$433
+    assert "1R = $" in m and "risk" in m and "target = +$" in m and "(1 contract)" in m
     t = dict(base, state="triggered", events={"triggered": "2026-09-02T15:06:00-04:00"})
     assert "TRIGGERED" in svc._format_alert("COMEX_MINI:MGC1!", t, "triggered")
 

@@ -160,6 +160,23 @@ def test_execution_marks_a_late_entry_stale_not_armed():
     assert P.execution_for_scenario(sc, [cand(120, 110, live=True)], price=180, objectives=objs)["state"] == "stale"
 
 
+def test_execution_marks_a_beyond_stop_setup_invalidated():
+    """A setup whose price has run BEYOND the stop on the loss side is INVALIDATED (an entry now = an
+    instant stop-out) → 'stale', not armed — even a touched (live) FVG. Short: price at/above the stop."""
+    from types import SimpleNamespace as N
+    from ict_v2 import pipeline as P
+    sc = N(direction="short", entry_zone=(150, 200), draw=N(price=90))
+    def cand(entry, stop, live=False):
+        return N(direction="short", entry=entry, stop=stop, structure="valid", entry_role="entry",
+                 tf="1m", entry_obj=N(state=("valid" if live else "waiting")))
+    objs = [N(price=90, status="unswept")]
+    # short entry 180, stop 190 (above); price 250 is ABOVE the stop → invalidated (even though live)
+    r = P.execution_for_scenario(sc, [cand(180, 190, live=True)], price=250, objectives=objs)
+    assert r["state"] == "stale" and "invalidated" in r["why"]
+    # price 175 (below the entry, still awaiting the sell) → armed
+    assert P.execution_for_scenario(sc, [cand(180, 190)], price=175, objectives=objs)["state"] == "armed"
+
+
 # ---- sticky trigger + outcome tracking: once triggered it stays open until stop/target -----------
 from datetime import datetime, timezone as _tz
 

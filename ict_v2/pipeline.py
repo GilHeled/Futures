@@ -713,11 +713,17 @@ def execution_for_scenario(scenario, candidates, price=None, objectives=None,
             # how far price has already travelled from the entry toward the target (0 at entry, 1 at target)
             span = (tgt - c.entry)
             progress = ((price - c.entry) / span) if (span and price is not None) else 0.0
-            # STALE takes precedence over live: once price has covered >= STALE_PROGRESS of the entry→target
-            # move (the draw is nearly reached / already blown past), the entry is late even if the FVG was
-            # touched earlier — a "live" gap does NOT make a passed setup actionable again.
-            stale = (progress >= STALE_PROGRESS)
-            if stale:
+            # NOT ACTIONABLE (stale) in two ways, both taking precedence over a 'live' (touched) FVG:
+            #   • MISSED — price has covered >= STALE_PROGRESS of the entry→target move (draw nearly reached);
+            #   • INVALIDATED — price is beyond the STOP on the loss side (short: at/above stop; long:
+            #     at/below stop) → the setup is dead (an entry now would be an instant stop-out).
+            beyond_stop = (c.stop is not None and price is not None
+                           and ((price >= c.stop) if dirn == "short" else (price <= c.stop)))
+            stale = (progress >= STALE_PROGRESS) or beyond_stop
+            if beyond_stop:
+                why = (f"invalidated - price {round(price, price_dp)} is beyond the stop "
+                       f"{round(c.stop, price_dp)} (setup dead, not arming)")
+            elif stale:
                 rem = round(abs(tgt - price), price_dp) if price is not None else None
                 why = (f"missed - price already ran {round(progress * 100)}% from entry "
                        f"{round(c.entry, price_dp)} to target {tgt} (now {round(price, price_dp)}); "

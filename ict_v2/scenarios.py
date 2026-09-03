@@ -219,6 +219,8 @@ class ScenarioBook:
                "opened_price": (round(bar.close, self.price_dp) if bar is not None else None),
                "order": ex.get("order"), "sl_order": ex.get("sl_order"), "tp_order": ex.get("tp_order"),
                "fvg_top": ex.get("fvg_top"), "fvg_bottom": ex.get("fvg_bottom"),
+               "entry_model": ex.get("entry_model"), "usable_models": ex.get("usable_models"),
+
                "now": (round(bar.close, self.price_dp) if bar is not None else e),
                "pnl_usd": (self._pnl(e, bar.close, s.direction) if bar is not None else 0.0),  # CURRENT $ (live/realized)
                "plan_usd": self._pnl(e, tgt, s.direction),        # ORIGINAL $ — planned profit if the target is hit
@@ -322,8 +324,15 @@ class ScenarioBook:
             s.rank_factors, s.why, s.basis = p.rank_factors, p.why, p.basis
             survivors.append(s)
         held_ids = {s.scenario_id for s in survivors} | {s.scenario_id for s in open_trades}
+        # An OPEN trade already occupies its (direction, entry zone). A fresh thesis at the SAME entry but a
+        # different DRAW is NOT a second trade — it is the same position with a nearer/farther draw (already
+        # carried on the open trade's ladder). Do not admit a duplicate ticket for the same open entry.
+        kd = _key_dp(self.price_dp)
+        _zk = lambda z: (round(z[0], kd), round(z[1], kd)) if z else None
+        open_geo = {(s.direction, _zk(s.entry_zone)) for s in open_trades if s.entry_zone}
         newcomers = [p for p in proposals if p.scenario_id not in held_ids and p.rank < self.target
-                     and p.draw.status not in ("swept", "mitigated")]   # never admit a spent draw
+                     and p.draw.status not in ("swept", "mitigated")               # never admit a spent draw
+                     and (p.direction, _zk(p.entry_zone)) not in open_geo]          # nor a dup of an open entry
         for p in newcomers:
             p.created_ctx = context_key
             p.events.setdefault("created", context_key)

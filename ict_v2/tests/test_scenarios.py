@@ -210,6 +210,23 @@ def test_stop_resolves_as_loss():
     assert book.active[0].state == "stop" and book.active[0].position["result_r"] == -1.0
 
 
+def test_no_duplicate_ticket_for_an_already_open_entry():
+    """An OPEN trade occupies its (direction, entry zone). A fresh same-direction thesis at the SAME entry
+    zone but a DIFFERENT draw must NOT be admitted as a second ticket — it's the same position (the other
+    draw is just a ladder rung). Reproduces the "two shorts, same entry" the user saw."""
+    strat = _ctx(bias="short")
+    book = SC.ScenarioBook()
+    rk = SC._range_key(strat.dealing_range)
+    book.observe(SC.build_scenarios(strat, strat, [_draw("low", 40)], price=150), context_key="t0", cur_range_key=rk)
+    book.monitor(lambda s: {"state": "triggered", "entry": 160, "stop": 170, "target": 40}, bar=_bar(161, 159, 160))
+    assert book.active[0].state == "triggered" and book.active[0].position["open"]
+    # a later context close proposes the SAME short at the SAME premium zone but a NEARER draw (SSL 60,
+    # a different scenario_id) → it must NOT become a second ticket
+    book.observe(SC.build_scenarios(strat, strat, [_draw("low", 60)], price=150), context_key="t1", cur_range_key=rk)
+    shorts = [s for s in book.active if s.direction == "short"]
+    assert len(shorts) == 1 and shorts[0].position and shorts[0].position["open"]
+
+
 def test_open_trade_survives_a_context_rebuild():
     book, rk = _booked()
     book.monitor(lambda s: {"state": "triggered", "entry": 120, "stop": 110, "target": 210}, bar=_bar(121, 119, 120))

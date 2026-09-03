@@ -165,6 +165,21 @@ def test_execution_requires_both_a_pd_array_and_a_structure_shift():
     assert a["structure_shift"]["kind"] == "HL->HH" and "fvg" in a["confluence"]
 
 
+def test_execution_rejects_a_degenerate_stop():
+    """Spec §15 (Lesson 15): a PD array whose stop sits a hair from the manipulation extreme → a near-zero
+    risk is REJECTED, never executed — a point array (fib/EQH-EQL) must not manufacture absurd R."""
+    from ict_v2 import pipeline as P
+    sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
+    objs = [_fvg_obj(120, 122, 118), _draw_obj(210)]
+    # manip extreme 119.99 → risk 0.01 < the 2.0 execution floor → rejected (not actionable)
+    r = P.execution_for_scenario(sc, [_shift_cand("long", manip=119.99)], price=120,
+                                 objectives=objs, min_stop=2.0)
+    assert r["state"] == "retracing" and "degenerate stop" in r["why"]
+    # a healthy stop (manip 100 → risk 20) with the same floor → triggered
+    assert P.execution_for_scenario(sc, [_shift_cand("long", manip=100)], price=120,
+                                    objectives=objs, min_stop=2.0)["state"] == "triggered"
+
+
 def test_execution_marks_a_late_entry_stale_not_armed():
     """TIMELINESS (Lesson 9 — never chase a move that already ran): once price has run past the midpoint
     of the entry→target move, the retrace-entry is STALE — surfaced as 'stale', even with a valid shift."""

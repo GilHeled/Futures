@@ -790,6 +790,7 @@ def _stop_beyond_manipulation(shift, arr, direction, price_dp):
 
 
 def execution_for_scenario(scenario, candidates, price=None, objectives=None, ms=None,
+                           min_stop: float | None = None,
                            min_rr: float = MIN_TARGET_RR, price_dp: int = 2) -> dict | None:
     """FAITHFUL execution decision for one active SCENARIO (see the C1-C5 block above). The higher
     timeframes fixed the thesis; THIS stage decides WHEN to execute, requiring the FULL course sequence:
@@ -834,6 +835,15 @@ def execution_for_scenario(scenario, candidates, price=None, objectives=None, ms
     entry = round(arr["ref"], price_dp)
     stop = _stop_beyond_manipulation(shift, arr, dirn, price_dp)
     risk = abs(entry - stop)
+    # DEGENERATE-STOP REJECTION (Lesson 15 / spec §15: "never a tiny stop for R:R; invalid geometry
+    # rejects the setup"). A point PD array (fib/EQH-EQL) can sit a hair from the manipulation extreme →
+    # a near-zero risk that manufactures absurd R. Reject it (not actionable) rather than execute it.
+    if min_stop and risk < min_stop:
+        return {"state": "retracing", "entry": entry, "stop": stop, "target": None, "rr": None,
+                "price": round(price, price_dp),
+                "why": (f"degenerate stop - risk {round(risk, price_dp)} < execution floor {min_stop:g} at "
+                        f"{arr['label']} {entry} (setup rejected, Lesson 15)"),
+                "audit": _audit("retracing", reason="degenerate stop", pd_array=arr["source"])}
     draw_px = getattr(getattr(scenario, "draw", None), "price", None)
     tgt, rr = _pick_target(dirn, entry, risk, objectives, draw_px, min_rr, price_dp)
     gap = round(entry - price, price_dp)

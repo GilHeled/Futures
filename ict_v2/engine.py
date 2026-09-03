@@ -171,7 +171,8 @@ class MTFEngine:
                 day = None
         ts = _et_iso(bars[-1].close_time) if bars else None      # ET cursor time → scenario-timeline stamps
         self.book.monitor(lambda s: P.execution_for_scenario(s, cands, price, objectives=self.objectives,
-                                                             ms=ms, price_dp=self.price_dp),
+                                                             ms=ms, min_stop=self.min_stop,
+                                                             price_dp=self.price_dp),
                           bar=bar, day=day, ts=ts)
         self.exec_tf = tf
 

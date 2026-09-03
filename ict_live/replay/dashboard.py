@@ -348,6 +348,7 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .scchart .chdr{stroke:var(--line);stroke-width:1}
  .scchart .chfib{stroke:var(--warn);stroke-width:1;stroke-dasharray:4 3;opacity:.7}
  .scchart .chpool,.scchart .chdraw{stroke:var(--mut);stroke-width:2}
+ .scchart .cheqhl{stroke:var(--accent,#c8a24a);stroke-width:1.6;stroke-dasharray:2 2;opacity:.9} .scchart .chax.eqhl{fill:var(--accent,#c8a24a);font-weight:700}
  .scchart .chladder{stroke:var(--mut);stroke-width:1;stroke-dasharray:2 3;opacity:.6}
  .scchart .chlvl{stroke-width:2.6}
  .scchart .chlvl.tp{stroke:var(--long)} .scchart .chlvl.entry{stroke:var(--accent,#c8a24a)} .scchart .chlvl.sl{stroke:var(--short)}
@@ -871,6 +872,8 @@ function _scRender(){
   if(dr){ [['range high',dr.high],['EQ (CE)',dr.ce],['range low',dr.low]].forEach(a=>{ if(within(a[1])){ hline(a[1],'chdr'); lab(a[1],a[0]+' '+N(a[1]),''); } }); }
   fib.forEach(f=>{ if(within(f.price)){ hline(f.price,'chfib'); lab(f.price,'fib '+f.level+' '+N(f.price),'fib'); } });
   (strat.pools||[]).forEach(p=>{ if(within(p.price)){ hline(p.price,'chpool'); lab(p.price,(p.kind||'')+(p.loc?'·'+p.loc:'')+' '+N(p.price),''); } });
+  // EQH/EQL — equal highs/lows clusters (Lesson 11): a stronger resting pool at ~one level
+  (s.objectives||[]).forEach(o=>{ if(o.kind==='eqhl'&&within(o.price)){ hline(o.price,'cheqhl'); lab(o.price,(o.label||'EQ')+' '+N(o.price),'eqhl'); } });
   (sc.draw_ladder||[]).forEach(o=>{ if(within(o.price)) hline(o.price,'chladder'); });
   const drawLbl=(sc.draw&&sc.draw.label)||'draw';
   // TP / ENTRY / SL — solid when LIVE (armed), dashed "(plan)" when derived from the thesis (watching)
@@ -892,7 +895,7 @@ function _scRender(){
   const rr=ex.rr!=null?(' · '+N(ex.rr)+'R'):'', ordTxt=ex.order?(' · '+ex.order+' @ '+N(ex.entry)):'';
   const head=`${sym.split(':').pop()} · <b class="${isLong?'prole-long':'prole-short'}">${dir.toUpperCase()}</b> → ${(sc.draw&&sc.draw.label)||''} ${N(drawP)}${rr}${ordTxt}`;
   const tabs=tfList.map(t=>`<button class="sctf${t===tf?' on':''}" onclick="scenarioChartTF('${t}')">${t}</button>`).join('');
-  const note=`<div class=scchart-note>${n} ${tf} candles · fib 0/1 (range anchors) + 0.5/0.62/0.79 (OTE) · dealing range · pools (BSL/SSL) · NWOG/ORG gaps · draw+ladder. ${(ent!=null)?'Solid ENTRY/SL/TP = live (armed).':'Dashed = PLANNED thesis: TP = the draw, SL = far edge of the zone, entry = the zone band; firm ENTRY/SL/TP are set when price ARMS the scenario.'} EQH/EQL not marked (tolerance undefined).</div>`;
+  const note=`<div class=scchart-note>${n} ${tf} candles · fib 0/1 (range anchors) + 0.5/0.62/0.79 (OTE) · dealing range · pools (BSL/SSL) · EQH/EQL (equal highs/lows) · NWOG/ORG gaps · draw+ladder. ${(ent!=null)?'Solid ENTRY/SL/TP = live (armed).':'Dashed = PLANNED thesis: TP = the draw, SL = far edge of the zone, entry = the zone band; firm ENTRY/SL/TP are set when price ARMS the scenario.'}</div>`;
   $('#candmodal-title').innerHTML=head;
   $('#candmodal-body').innerHTML=`<div class=sctabs>${tabs}</div><svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" preserveAspectRatio="xMidYMid meet" class=scchart>${g}</svg>`+note;
   $('#candmodal').classList.add('on');

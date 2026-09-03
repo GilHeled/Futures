@@ -30,6 +30,30 @@ _LIFECYCLE_WEIGHT = {"unswept": 1.0, "unfilled": 1.0, "touched": 0.6,
 
 _OBJECTIVE_KINDS = ("swing", "eqhl", "fvg", "nwog", "org", "fib")
 
+# [RES:eqhl_tol] — "relatively equal" tolerance for equal highs/lows (Lesson 11). The course teaches EQH/
+# EQL loosely ("liquidity rarely resides at an exact price", Lesson 12), so a transparent range-relative
+# tolerance is faithful: two same-side swings are EQUAL when within this fraction of the dealing-range
+# height. A chart-reviewable choice, not P&L-tuned.
+EQHL_TOL_FRAC = 0.03
+
+
+def _equal_clusters(swings, side: str, tol: float):
+    """Cluster same-side UNSWEPT swings whose prices sit within `tol` of each other → equal highs / lows:
+    a double/triple top or bottom, stronger resting liquidity price draws to sweep. Returns
+    [(level, count)] for clusters of ≥2; level = the extreme a sweep must exceed (max highs / min lows)."""
+    pts = sorted(float(getattr(p, "price")) for p in swings if getattr(p, "kind", None) == side)
+    clusters, cur = [], []
+    for x in pts:
+        if cur and (x - cur[0]) <= tol:          # within tol of the cluster's lowest member → same level
+            cur.append(x)
+        else:
+            if len(cur) >= 2:
+                clusters.append(cur)
+            cur = [x]
+    if len(cur) >= 2:
+        clusters.append(cur)
+    return [((max(c) if side == "high" else min(c)), len(c)) for c in clusters]
+
 
 def _tf_weight(tf: str) -> float:
     return _TF_WEIGHT.get(tf, max((_TF_WEIGHT.get(k, 0.0) for k in _TF_WEIGHT if k == tf), default=0.5))
@@ -102,9 +126,8 @@ def _fib_label(level: float) -> str:
 def collect_objectives(context, *, direction: str | None = None, extra_arrays=None,
                        gaps=None) -> list[LiquidityObjective]:
     """Gather ALL liquidity objectives visible from `context` into one typed, roled, strength-scored
-    list — swing pools (BSL/SSL), the context's FVG PD arrays, NWOG/ORG gaps, and the key fib levels
-    (0.5/0.62/0.79). EQH/EQL is a KNOWN GAP (clustering tolerance undefined) — intentionally omitted
-    until defined; when it is, it becomes one more `kind` here with no redesign.
+    list — swing pools (BSL/SSL), EQUAL highs/lows (EQH/EQL clusters), the context's FVG PD arrays,
+    NWOG/ORG gaps, and the key fib levels (0.5/0.62/0.79).
 
     `direction` (long/short) is the trade direction the roles are assigned FOR (draw side = premium for
     long); if None, roles are left blank (pure inventory). `extra_arrays` = additional PDArrays (e.g.
@@ -129,6 +152,18 @@ def collect_objectives(context, *, direction: str | None = None, extra_arrays=No
         _add(LiquidityObjective(kind="swing", tf=getattr(context, "tf", ""), side=side,
                                 price=float(p.price), status="unswept",
                                 label=("BSL" if side == "high" else "SSL"), source=p))
+
+    # 1b) EQUAL highs / lows (Lesson 11): ≥2 same-side unswept swings at ~the same level = a stronger
+    # resting pool (a double/triple top or bottom) price draws to sweep. Tolerance = [RES:eqhl_tol].
+    if dr is not None:
+        swings = getattr(context, "liquidity", None) or []
+        tol = EQHL_TOL_FRAC * abs(float(dr.high) - float(dr.low))
+        for side in ("high", "low"):
+            for level, n in _equal_clusters(swings, side, tol):
+                _add(LiquidityObjective(kind="eqhl", tf=getattr(context, "tf", ""), side=side,
+                                        price=level, status="unswept",
+                                        label=("EQH" if side == "high" else "EQL") + (f"×{n}" if n > 2 else ""),
+                                        source={"count": n, "level": level, "tol": round(tol, 2)}))
 
     # 2) FVG PD arrays already roled on the context (draws) + any extra 1H/context FVGs supplied
     seen_fvg = set()

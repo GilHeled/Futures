@@ -38,6 +38,21 @@ def test_collect_unifies_all_kinds():
         assert o.kind in LQ._OBJECTIVE_KINDS and o.strength > 0 and o.role in pdarrays.PD_ROLES
 
 
+def test_equal_highs_lows_are_clustered_as_eqhl():
+    """Lesson 11: ≥2 same-side unswept swings within tolerance = an EQH/EQL cluster (stronger resting
+    liquidity). Tolerance = EQHL_TOL_FRAC × range height (range 100→200 → tol 3.0)."""
+    ctx = _ctx(pools=[_pool("high", 260), _pool("high", 261.5), _pool("high", 280),   # 260/261.5 equal; 280 lone
+                      _pool("low", 40), _pool("low", 41)])                             # 40/41 equal
+    objs = LQ.collect_objectives(ctx, direction="short")
+    eqhl = [o for o in objs if o.kind == "eqhl"]
+    eqh = [o for o in eqhl if o.side == "high"]
+    eql = [o for o in eqhl if o.side == "low"]
+    assert len(eqh) == 1 and eqh[0].label.startswith("EQH") and eqh[0].price == 261.5   # level = max of the equal highs
+    assert len(eql) == 1 and eql[0].label.startswith("EQL") and eql[0].price == 40.0    # level = min of the equal lows
+    assert not any(abs(o.price - 280) < 0.1 for o in eqhl)                              # a lone high is NOT an EQH
+    assert all(o.strength > 0 and o.role in pdarrays.PD_ROLES for o in eqhl)            # typed + scored + roled
+
+
 def test_higher_tf_objective_is_stronger():
     o4 = LQ.LiquidityObjective(kind="swing", tf="4H", side="high", price=260, status="unswept")
     o1 = LQ.LiquidityObjective(kind="swing", tf="1H", side="high", price=260, status="unswept")

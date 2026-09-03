@@ -37,25 +37,31 @@ def test_reads_shared_store_and_snapshots(tmp_path):
     assert "v2" in svc.report() and svc.report()["experimental"] is True
 
 
-def test_alert_rising_edge_and_recency_armed_and_triggered(tmp_path):
-    """Alerts fire once per NEW (scenario, actionable state) and only for RECENT events. 'armed' AND
-    'triggered' both alert (a structure entry triggers directly, skipping armed)."""
+def test_alert_rising_edge_and_feed_freshness(tmp_path):
+    """Alerts fire once per NEW (scenario, actionable state) as long as the symbol's FEED is live —
+    regardless of how long ago the state was reached. 'armed' AND 'triggered' both alert. A frozen feed
+    (stale last bar) never alerts, even for a currently-actionable scenario."""
     from datetime import timezone
     svc = V2Service(str(tmp_path)); svc.notify_max_age = 600
     now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
-    def sc(sid, state, min_ago=None):
-        ev = {state: (now - timedelta(minutes=min_ago)).isoformat()} if min_ago is not None else {}
-        return {"id": sid, "state": state, "direction": "long", "events": ev,
+    def snap(last_min_ago, scs):
+        return {"last": {"time": (now - timedelta(minutes=last_min_ago)).isoformat()}, "scenarios": scs}
+    def sc(sid, state, ev_min_ago):
+        return {"id": sid, "state": state, "direction": "long",
+                "events": {state: (now - timedelta(minutes=ev_min_ago)).isoformat()},
                 "execution": {"entry": 1, "stop": 0.5, "target": 3, "rr": 4}, "draw": {"label": "BSL", "price": 3}}
-    # fresh armed (2m) → alert; a fresh TRIGGERED (1m) → alert; old armed (30m) → recency-skipped; watching → ignored
-    to_send, seen = svc._alerts_to_send(SYM, [sc("a", "armed", 2), sc("t", "triggered", 1),
-                                              sc("b", "armed", 30), sc("c", "watching")], now)
+    # LIVE feed (last bar 1m ago): a STILL-armed scenario that armed 44 MIN ago DOES alert; a fresh trigger too
+    to_send, seen = svc._alerts_to_send(SYM, snap(1, [sc("a", "armed", 44), sc("t", "triggered", 1),
+                                                      sc("c", "watching", 0)]), now)
     assert sorted((x[0]["id"], x[1]) for x in to_send) == [("a", "armed"), ("t", "triggered")]
-    assert seen == {("a", "armed"), ("t", "triggered"), ("b", "armed")}
     svc._alert_prev[SYM] = seen
-    # next cycle: 'a' still armed → NOT re-sent; 'a' now TRIGGERED (new state) → alert; a new armed 'd' → alert
-    to_send2, _ = svc._alerts_to_send(SYM, [sc("a", "triggered", 1), sc("d", "armed", 1)], now)
-    assert sorted((x[0]["id"], x[1]) for x in to_send2) == [("a", "triggered"), ("d", "armed")]
+    # rising edge: 'a' still armed → NOT re-sent; 'a' now TRIGGERED → alert
+    to_send2, _ = svc._alerts_to_send(SYM, snap(1, [sc("a", "triggered", 1)]), now)
+    assert [(x[0]["id"], x[1]) for x in to_send2] == [("a", "triggered")]
+    # FROZEN feed (last bar 30m ago > 10m window): even a just-armed scenario does NOT alert
+    svc._alert_prev[SYM] = set()
+    to_send3, _ = svc._alerts_to_send(SYM, snap(30, [sc("z", "armed", 1)]), now)
+    assert to_send3 == []
 
 
 def test_format_alert_armed_and_triggered(tmp_path):

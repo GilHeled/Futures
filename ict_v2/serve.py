@@ -30,8 +30,9 @@ class V2Service:
         self.store_path = Path(data_dir) / "raw_1m.jsonl"
         # Telegram alert on each NEW actionable scenario — ARMED (place the resting order) and TRIGGERED
         # (entry live: a confirmed structure reversal or a filled FVG). Operational only; disabled if the
-        # env vars are unset. Guards prevent spam: rising-edge per (scenario, state) + recency (skip the
-        # historical warmup replay and frozen-feed symbols whose event timestamp is old).
+        # env vars are unset. Guards: rising-edge per (scenario, state) + FEED FRESHNESS (only alert while
+        # the symbol's feed is live — so a still-armed scenario alerts regardless of how long ago it armed,
+        # while frozen-feed symbols and a dead-feed warmup never do).
         self.notifier = TelegramNotifier()
         self._alert_prev: dict[str, set] = {}      # per symbol: set of (scenario_id, state) already alerted
         self.notify_max_age = float(os.environ.get("ICT_V2_NOTIFY_MAX_AGE_SEC", "600"))   # 10 min
@@ -119,7 +120,7 @@ class V2Service:
                 self.last_ms[sym] = last
                 self.state[sym] = live.snapshot()
                 if self.notifier.enabled:                    # collect newly-actionable alerts (send after unlock)
-                    to_send, seen_now = self._alerts_to_send(sym, self.state[sym].get("scenarios") or [], now)
+                    to_send, seen_now = self._alerts_to_send(sym, self.state[sym], now)
                     self._alert_prev[sym] = seen_now
                     pending.extend((sym, sc, st) for sc, st in to_send)
                 # PERSIST the trigger→outcome log per symbol to the WRITABLE out dir (the /data store is
@@ -141,8 +142,7 @@ class V2Service:
         return n
 
     def _is_recent(self, iso, now) -> bool:
-        """True if an ET-iso timestamp is within notify_max_age of `now` — filters the historical warmup
-        replay and frozen-feed symbols (whose 'armed' time is hours old) from live alerts."""
+        """True if an ET-iso timestamp is within notify_max_age of `now`."""
         if not iso:
             return False
         try:
@@ -153,24 +153,30 @@ class V2Service:
         except Exception:
             return False
 
+    def _feed_fresh(self, snap, now) -> bool:
+        """The symbol's feed is LIVE if its LATEST BAR is within notify_max_age. This — not the age of the
+        arm event — gates alerts: a scenario that armed 40 min ago and is STILL armed on a live feed is
+        still actionable and must alert; a frozen-feed symbol (last bar hours old) never alerts."""
+        return self._is_recent((snap.get("last") or {}).get("time"), now)
+
     ALERT_STATES = ("armed", "triggered")     # actionable: place the order / entry is live
 
-    def _alerts_to_send(self, sym, scenarios, now):
-        """RISING EDGE + RECENCY, per (scenario, state): a scenario that just ENTERED an actionable state
-        — 'armed' (place the resting order) or 'triggered' (entry live: a confirmed structure reversal or
-        a filled FVG) — whose event time is recent. Keyed by (id, state) so an arm and its later trigger
-        each alert once. Returns (list of (sc, state) to notify, the current (id,state) set to remember)."""
+    def _alerts_to_send(self, sym, snap, now):
+        """RISING EDGE per (scenario, state) on a LIVE FEED. Alert when a scenario ENTERS an actionable
+        state — 'armed' (place the resting order) or 'triggered' (entry live: a confirmed structure
+        reversal or a filled FVG) — as long as the symbol's FEED IS FRESH, regardless of how long ago the
+        state was reached (a still-armed scenario on a live feed is still actionable). Keyed by (id, state)
+        so an arm and its later trigger each alert once; frozen-feed symbols never alert."""
         seen_now, out = set(), []
         prev = self._alert_prev.get(sym, set())
-        for sc in scenarios:
+        fresh = self._feed_fresh(snap, now)
+        for sc in (snap.get("scenarios") or []):
             st = sc.get("state")
             if st not in self.ALERT_STATES:
                 continue
             key = (sc.get("id"), st)
             seen_now.add(key)
-            if key in prev:                                  # already alerted this (scenario, state)
-                continue
-            if self._is_recent((sc.get("events") or {}).get(st), now):
+            if key not in prev and fresh:                    # new (scenario, state) on a live feed → alert
                 out.append((sc, st))
         return out, seen_now
 

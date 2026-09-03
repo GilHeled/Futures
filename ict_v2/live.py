@@ -46,13 +46,15 @@ class V2Live:
     def __init__(self, context_tf: str = "4H", setup_tf: str = "1H", confirm_tf: str = "15m",
                  trigger_tf: str = "1m", window: int = _WINDOW, exec_window: int = _EXEC_WINDOW,
                  refine_tf: str | None = None, min_stop: float | None = None,
-                 anchor_tf: str | None = None, entry_models=None, point_value: float | None = None):
+                 anchor_tf: str | None = None, entry_models=None, point_value: float | None = None,
+                 price_dp: int = 2):
         self.context_tf, self.setup_tf = context_tf, setup_tf
         self.confirm_tf, self.trigger_tf = confirm_tf, trigger_tf
         self.window, self.exec_window = window, exec_window
         self.refine_tf = refine_tf                           # None = MTF entry-refinement OFF (default)
         self.anchor_tf = anchor_tf                           # None = no Daily/Weekly anchor (default); else "D"/"W"
         self.entry_models = entry_models                     # None = FVG only (default execution model)
+        self.point_value = point_value                       # $ per point (1 contract) — for $ risk/reward on the card
         # build every TF we need: intraday (5m/15m/1H/4H) + optional Daily/Weekly anchor (D/W need the
         # session calendar, which BarBuilder supplies by default)
         built = tuple(dict.fromkeys(tf for tf in (setup_tf, context_tf, confirm_tf, refine_tf, anchor_tf)
@@ -190,6 +192,7 @@ class V2Live:
             "bars": {self.confirm_tf: self._bars(self.confirm_tf, 90),
                      self.setup_tf: self._bars(self.setup_tf, 54),
                      self.trigger_tf: self._bars(self.trigger_tf, 120)},
+            "point_value": self.point_value,        # $ per point (1 contract) → $ risk/reward on the card
         }
 
     def save(self, path) -> None:

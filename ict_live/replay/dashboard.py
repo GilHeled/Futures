@@ -319,6 +319,7 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>ict_live — trading dashb
  .scstate.pass{color:var(--long);border-color:color-mix(in srgb,var(--long) 45%,var(--line))} .scstate.rej{color:var(--short);opacity:.7}
  .scstate.stale{color:var(--mut);border-color:color-mix(in srgb,var(--short) 30%,var(--line));opacity:.75;text-decoration:line-through}
  .sc-events{margin-top:6px;font-size:10px;color:var(--mut);font-family:"SF Mono",ui-monospace,Menlo,monospace;letter-spacing:.2px} .sc-events b{color:var(--fg);font-weight:600}
+ .sc-dollar{margin-top:6px;font-size:12px;color:var(--fg)} .sc-dollar b{font-weight:700}
  .sc-body{display:flex;gap:12px;flex-wrap:wrap;margin-top:5px;font-size:11px}
  .sc-exec{display:flex;gap:10px;flex-wrap:wrap;margin-top:5px}
  .sc-order{margin-top:5px;font-size:11px;padding:3px 8px;border-radius:6px;background:var(--panel2);border:1px solid var(--line);font-family:"SF Mono",ui-monospace,Menlo,monospace}
@@ -750,6 +751,12 @@ function v2Tables(rep){
     const plan=(pos&&pos.plan_usd!=null)?pos.plan_usd:null;   // ORIGINAL planned $ (entry → target)
     const planHtml=(plan!=null)?`<span class=cfact title="ORIGINAL P&L — the planned profit if this trigger reaches its target draw (1 contract)"><i>orig P&L</i><b class="${plan>=0?'rrq-good':'rrq-low'}">${money(plan)}</b></span>`:'';
     const exHtml=(src.entry!=null)?`<div class=sc-exec>${nowPx!=null?`<span class=cfact><i>now</i>${num(nowPx)}</span>`:''}<span class=cfact><i>entry</i>${num(src.entry)}</span><span class=cfact><i>stop</i>${num(src.stop)}</span><span class=cfact><i>target</i>${num(src.target)}</span>${rr!=null?`<span class=cfact><i>R:R</i>${num(rr)}</span>`:''}${resHtml}${pnlHtml}${planHtml}</div>`:'';
+    // $ value of the trade (1 contract): 1R = the risk (entry→stop), target = planned profit (entry→target)
+    const pv=(((window._v2last||{}).symbols||{})[sym]||{}).point_value;
+    const d0=v=>Math.round(v).toLocaleString();
+    const dollarHtml=(pv&&src.entry!=null&&src.stop!=null)
+      ? `<div class=sc-dollar title="dollar value, 1 contract — 1R = the risk (entry→stop); target = planned profit (entry→target). Multiply by your size.">1R = <b>$${d0(Math.abs(src.entry-src.stop)*pv)}</b> risk${src.target!=null?` · target <b class=rrq-good>+$${d0(Math.abs(src.target-src.entry)*pv)}</b>`:''} <span class=mut>(1 contract)</span></div>`
+      : '';
     const _oc={target:'TARGET hit',stop:'STOPPED',eod:'closed end-of-day (no overnight holds)'}[pos&&pos.outcome]||'';
     const why=(pos&&pos.outcome)?`${_oc} — closed ${pos.result_r>0?'+':''}${num(pos.result_r)}R`:(pos?'IN TRADE — open until stop or target (closes at session end)':((ex&&ex.why)?ex.why:(sc.why||'')));
     const actionable=(st==='armed'||st==='triggered');
@@ -763,7 +770,7 @@ function v2Tables(rep){
         <span class=sc-arrow>→</span><span class=sc-draw>${drawTxt}</span>
         <span class="scstate ${stcls}" title="ranking: ${_candEsc(rfTxt)}">${st}</span><button type=button class=sc-chartbtn onclick="scenarioChart('${sym}',${i})" title="show this scenario's levels — FVG, fib, pools, draws + entry/SL/TP">📈 chart</button></div>
       <div class=sc-body><span class=wc title="the ${dir==='long'?'discount':'premium'} half of the H4 dealing range — the AREA a valid entry may form in (Lesson 9/12). The exact ENTRY below is the FVG that formed inside it.">retrace zone <b>${zoneTxt}</b> <span class=mut>${dir==='long'?'discount':'premium'}</span></span><span class=wc title="transparent ranking factors">rank <b>${rfTxt}</b></span></div>
-      ${(src.entry!=null&&(st==='armed'||st==='triggered'))?`<div class=sc-order title="Entry order type depends on price vs the entry: a resting order on the wrong side fills instantly. Bracket: stop-loss = stop-market the other way; take-profit = limit.">Topstep: <b class="prole-${side}">${src.order||(dir==='long'?'BUY LIMIT':'SELL LIMIT')} @ ${num(src.entry)}</b> · SL ${src.sl_order||(dir==='long'?'sell-stop':'buy-stop')} ${num(src.stop)} · TP ${src.tp_order||(dir==='long'?'sell-limit':'buy-limit')} ${num(src.target)}${st==='triggered'?' · filled — in trade':''}</div>`:''}${exHtml}${(sc.draw_ladder&&sc.draw_ladder.length)?`<div class=sc-ladder title="farther same-direction liquidity — extension targets after the first">ladder → ${sc.draw_ladder.map(o=>num(o.price)).join(' · ')}</div>`:''}${evHtml}<div class=sc-why>${_candEsc(why)}</div></div>`;
+      ${(src.entry!=null&&(st==='armed'||st==='triggered'))?`<div class=sc-order title="Entry order type depends on price vs the entry: a resting order on the wrong side fills instantly. Bracket: stop-loss = stop-market the other way; take-profit = limit.">Topstep: <b class="prole-${side}">${src.order||(dir==='long'?'BUY LIMIT':'SELL LIMIT')} @ ${num(src.entry)}</b> · SL ${src.sl_order||(dir==='long'?'sell-stop':'buy-stop')} ${num(src.stop)} · TP ${src.tp_order||(dir==='long'?'sell-limit':'buy-limit')} ${num(src.target)}${st==='triggered'?' · filled — in trade':''}</div>`:''}${exHtml}${dollarHtml}${(sc.draw_ladder&&sc.draw_ladder.length)?`<div class=sc-ladder title="farther same-direction liquidity — extension targets after the first">ladder → ${sc.draw_ladder.map(o=>num(o.price)).join(' · ')}</div>`:''}${evHtml}<div class=sc-why>${_candEsc(why)}</div></div>`;
   };
   const cards=names.map(sym=>{
     const s=syms[sym], u=s.updated||{}, tf=s.timeframes||{};

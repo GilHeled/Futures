@@ -713,14 +713,17 @@ def execution_for_scenario(scenario, candidates, price=None, objectives=None,
             # how far price has already travelled from the entry toward the target (0 at entry, 1 at target)
             span = (tgt - c.entry)
             progress = ((price - c.entry) / span) if (span and price is not None) else 0.0
-            stale = (not live) and (progress >= STALE_PROGRESS)   # the move already ran → entry is late
-            if live:
-                why = f"entry retraced into - trigger now (target {tgt}, {rr}R)"
-            elif stale:
+            # STALE takes precedence over live: once price has covered >= STALE_PROGRESS of the entry→target
+            # move (the draw is nearly reached / already blown past), the entry is late even if the FVG was
+            # touched earlier — a "live" gap does NOT make a passed setup actionable again.
+            stale = (progress >= STALE_PROGRESS)
+            if stale:
                 rem = round(abs(tgt - price), price_dp) if price is not None else None
                 why = (f"missed - price already ran {round(progress * 100)}% from entry "
                        f"{round(c.entry, price_dp)} to target {tgt} (now {round(price, price_dp)}); "
                        f"only {rem} pts left - not arming")
+            elif live:
+                why = f"entry retraced into - trigger now (target {tgt}, {rr}R)"
             elif gap is not None:
                 move = "rise" if gap > 0 else "fall"
                 why = (f"{dirn} entry rests at {round(c.entry, price_dp)} - awaiting price to {move} "
@@ -739,11 +742,14 @@ def execution_for_scenario(scenario, candidates, price=None, objectives=None,
             _fvg = getattr(getattr(c, "entry_obj", None), "source", None)   # the v1 FVG (box bounds, for the chart)
             fvg_top = round(float(_fvg.top), price_dp) if getattr(_fvg, "top", None) is not None else None
             fvg_bottom = round(float(_fvg.bottom), price_dp) if getattr(_fvg, "bottom", None) is not None else None
-            return {"state": ("triggered" if live else "stale" if stale else "armed"),
+            usable_models = sorted({getattr(x, "entry_model", "") for x in usable if getattr(x, "entry_model", "")})
+            return {"state": ("stale" if stale else "triggered" if live else "armed"),
                     "entry": round(c.entry, price_dp), "stop": round(c.stop, price_dp), "target": tgt, "rr": rr,
                     "order": order, "sl_order": ("sell stop" if dirn == "long" else "buy stop"),
                     "tp_order": ("sell limit" if dirn == "long" else "buy limit"),
                     "fvg_top": fvg_top, "fvg_bottom": fvg_bottom,
+                    "entry_model": getattr(c, "entry_model", ""),   # which model produced the entry (structure|fvg)
+                    "usable_models": usable_models,                 # models that ALSO had a usable entry now
                     "price": (round(price, price_dp) if price is not None else None), "dist_to_entry": gap,
                     "entry_role": c.entry_role, "tf": getattr(c, "tf", ""), "why": why}
         if in_zone(price):

@@ -154,8 +154,10 @@ def test_execution_marks_a_late_entry_stale_not_armed():
     assert r["state"] == "stale" and "missed" in r["why"]
     # price 130 = ~11% of the way → still ahead of the move → ARMED
     assert P.execution_for_scenario(sc, [cand(120, 110)], price=130, objectives=objs)["state"] == "armed"
-    # a LIVE entry (price retraced into it) is never stale even if computed progress is high → triggered
-    assert P.execution_for_scenario(sc, [cand(120, 110, live=True)], price=180, objectives=objs)["state"] == "triggered"
+    # a LIVE entry AT the entry (low progress) triggers; but a LIVE entry price has already run PAST is
+    # STALE too — a touched-earlier FVG does not make a passed setup actionable again (the reported bug)
+    assert P.execution_for_scenario(sc, [cand(120, 110, live=True)], price=125, objectives=objs)["state"] == "triggered"
+    assert P.execution_for_scenario(sc, [cand(120, 110, live=True)], price=180, objectives=objs)["state"] == "stale"
 
 
 # ---- sticky trigger + outcome tracking: once triggered it stays open until stop/target -----------

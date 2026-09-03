@@ -691,9 +691,17 @@ def execution_for_scenario(scenario, candidates, price=None, objectives=None,
             return False
         return (c.stop < c.entry) if dirn == "long" else (c.entry < c.stop)
 
+    def _live(c):
+        return getattr(getattr(c, "entry_obj", None), "state", "") == "valid"
+
     usable = [c for c in candidates if c.direction == dirn and c.entry is not None and in_zone(c.entry)
               and getattr(c, "structure", "") == "valid" and stop_ok(c)]
-    entry_cands = [c for c in usable if c.entry_role == "entry"] or usable   # prefer true LTF entries
+    # FVG is no longer MANDATORY (Lessons 15/16): a LIVE non-FVG-retrace entry — a confirmed market-
+    # structure reversal, which is live-on-confirmation and carries no context 'entry' role — TRIGGERS
+    # first (it still passes the discount/premium zone gate a reversal-off-the-low satisfies). Otherwise
+    # the FVG entry-role pool is used exactly as before (waiting → ARMED, retraced → triggered).
+    entry_cands = ([c for c in usable if _live(c) and getattr(c, "entry_role", "") != "entry"]
+                   or [c for c in usable if c.entry_role == "entry"] or usable)
     if entry_cands:
         c = entry_cands[0]
         risk = abs(c.stop - c.entry)

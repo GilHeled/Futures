@@ -154,7 +154,8 @@ class MTFEngine:
             self.book.monitor(lambda s: None, bar=None)
             return
         ms = v1.analyze(bars, tf, min_stop=self.min_stop)
-        cands = P.generate_candidates(ms, self.strategic, tf=tf, min_stop=self.min_stop, bars=bars)
+        cands = P.generate_candidates(ms, self.strategic, tf=tf, min_stop=self.min_stop, bars=bars,
+                                      entry_models=self.entry_models)   # honour the configured model set
         price = bars[-1].close
         # the position lifecycle (open + stop/target/EOD resolution) runs ONLY on the trigger TF (1m,
         # finest, no look-ahead); the coarser 15m pass only advances watching/retracing/armed for display.

@@ -23,30 +23,30 @@ def test_daily_weekly_anchor_vetoes_counter_trend_bias(monkeypatch):
 
 
 def test_entry_models_registry_is_course_scoped():
-    """v2 implements THIS course, whose entry PD array is the FVG. FVG is the sole execution model;
-    broader-ICT constructs the course does not teach (Order Block / Breaker / Mitigation Block / IFVG
-    / IOFED) are intentionally absent. The layer is still pluggable — adding a model is a registry
-    entry — but only a course-defined model is registered."""
+    """v2 implements THIS course, whose execution models are the confirmed STRUCTURE reversal (Lessons
+    15/16, the core entry) and the FVG (Lesson 12, a contextual PD array / optional refinement). Broader-
+    ICT constructs the course does not teach (Order Block / Breaker / Mitigation Block / IFVG / IOFED)
+    are intentionally absent. The layer is pluggable — adding a model is a registry entry."""
     from ict_v2 import entry_models as EM
     cat = EM.catalog()
-    assert set(cat) == {"fvg"} and cat["fvg"]["implemented"] is True
+    assert set(cat) == {"structure", "fvg"} and cat["structure"]["implemented"] and cat["fvg"]["implemented"]
     for m in ("order_block", "breaker", "mitigation_block", "ifvg", "iofed"):
         assert m not in cat and m not in EM.LIFECYCLE           # not this course's methodology
-    assert EM.resolve(None) == ("fvg",)
+    assert EM.resolve(None) == ("structure", "fvg")
     assert EM.resolve(["fvg"]) == ("fvg",)
-    assert EM.resolve(["order_block", "breaker"]) == ("fvg",)   # unknown models drop → FVG kept
-    # every candidate that HAS an entry is tagged with the model that produced it (fvg);
+    assert EM.resolve(["order_block", "breaker"]) == ("structure", "fvg")   # unknown drop → defaults kept
+    # every candidate that HAS an entry is tagged with the model that produced it (structure|fvg);
     # partial candidates (no entry object yet) carry no model
     st = v2.demo_state(seed=7)
-    assert all(c["entry_model"] == "fvg" for c in st.setup.cand_info if c["entry_obj"])
+    assert all(c["entry_model"] in ("structure", "fvg") for c in st.setup.cand_info if c["entry_obj"])
     assert all(c["entry_model"] == "" for c in st.setup.cand_info if not c["entry_obj"])
 
 
 def test_detect_v11_bars_arg_is_inert_for_fvg():
-    """CONTRACT v1.1: detect() carries a `bars` argument (raw OHLC handed to EVERY model, so a future
-    candle-based course model could read candles v1 never pre-computes). FVG sources its gaps off `ms`,
-    so `bars` must be inert for it — threading real bars vs None must yield byte-identical candidates
-    across the whole cascade. This guards the "FVG behaves identically" requirement."""
+    """CONTRACT v1.1: detect() carries a `bars` argument (raw OHLC handed to EVERY model). The FVG model
+    sources its gaps off `ms`, so `bars` must be inert FOR IT — threading real bars vs None must yield
+    byte-identical candidates when FVG is the only model. (The structure model DOES use bars, by design —
+    that is why this guard isolates FVG via DEFAULT_MODELS.)"""
     import json
     from ict_v2 import entry_models as EM
 
@@ -55,13 +55,18 @@ def test_detect_v11_bars_arg_is_inert_for_fvg():
         return [json.dumps(c, sort_keys=True, default=str)
                 for stage in (st.setup, st.confirmation) for c in getattr(stage, "cand_info", [])]
 
-    base = {s: collect(s) for s in range(1, 30)}
-    orig = EM.detect
-    v2.EM.detect = lambda model, disp, mss, ms, direction, bars: orig(model, disp, mss, ms, direction, None)
+    orig_default = EM.DEFAULT_MODELS
+    EM.DEFAULT_MODELS = ("fvg",)                          # isolate FVG (structure legitimately uses bars)
     try:
-        alt = {s: collect(s) for s in range(1, 30)}
+        base = {s: collect(s) for s in range(1, 30)}
+        orig = EM.detect
+        v2.EM.detect = lambda model, disp, mss, ms, direction, bars: orig(model, disp, mss, ms, direction, None)
+        try:
+            alt = {s: collect(s) for s in range(1, 30)}
+        finally:
+            v2.EM.detect = orig
     finally:
-        v2.EM.detect = orig
+        EM.DEFAULT_MODELS = orig_default
     assert sum(len(v) for v in base.values()) > 0
     assert base == alt                                   # FVG output invariant to the new bars arg
 
@@ -85,7 +90,8 @@ def test_entry_common_contract():
     withentry = [c for c in st.setup.cand_info if c["entry_obj"]]
     assert withentry and all(set(c["entry_obj"]) == FIELDS for c in withentry)
     assert all(c["entry_obj"]["state"] in EM.COMMON_STATES for c in withentry)
-    assert all(c["entry_obj"]["lifecycle"] in EM.LIFECYCLE["fvg"]["vocab"] for c in withentry)
+    # each entry's lifecycle sub-state belongs to ITS OWN model's vocab (fvg or structure)
+    assert all(c["entry_obj"]["lifecycle"] in EM.LIFECYCLE[c["entry_obj"]["model"]]["vocab"] for c in withentry)
     # assemble() reads only the COMMON state (model-agnostic): a "completed" entry is not enterable;
     # a valid one is. State is set explicitly here to exercise the geometry without any model lifecycle.
     good = EM.Entry(model="fvg", direction="long", ref=100.0, invalidation=98.0, state="valid")
@@ -93,6 +99,24 @@ def test_entry_common_contract():
     assert g["stop"] == 97.0 and g["target"] == 110.0 and g["reject"] == "" and g["rr"] == 3.33
     done = EM.Entry(model="fvg", direction="long", ref=100.0, invalidation=98.0, state="completed")
     assert EM.assemble(done, 97.0, [SimpleNamespace(kind="high", price=110.0)], 2.0)["reject"] != ""
+
+
+def test_structure_entry_fires_on_confirmed_mss_without_an_fvg():
+    """CORRECTION (Lessons 15/16): the confirmed market-structure reversal IS a valid entry — no FVG.
+    The `structure` model emits a LIVE entry the moment the MSS is CONFIRMED in the trade direction,
+    with the entry = the confirmation close; it fires on nothing else (potential/candidate MSS, wrong
+    direction, or no MSS)."""
+    from types import SimpleNamespace as N
+    from ict_v2 import entry_models as EM
+    disp = N(start_price=100.0, end_price=140.0, id="D1")
+    bars = [N(close=100.0), N(close=110.0), N(close=135.0)]          # confirm bar = index 2, close 135
+    e = EM.structure_entries(disp, N(state="confirmed", direction="bullish", confirm_index=2), None, "long", bars)
+    assert len(e) == 1 and e[0].model == "structure"
+    assert e[0].state == "valid" and e[0].ref == 135.0 and e[0].invalidation == 100.0   # LIVE, entry = confirm close
+    # NOT emitted on anything but a confirmed MSS in the trade direction
+    assert EM.structure_entries(disp, N(state="candidate", direction="bullish", confirm_index=2), None, "long", bars) == []
+    assert EM.structure_entries(disp, N(state="confirmed", direction="bearish", confirm_index=2), None, "long", bars) == []
+    assert EM.structure_entries(disp, None, None, "long", bars) == []
 
 
 def test_engine_has_no_model_specific_branching():
@@ -292,10 +316,11 @@ def test_liquidity_floor_15m_and_pullback():
     assert v2.pullback_pct(disp, 130.0) == 0.7               # deeper (from the 200 end back to 130)
     assert v2.pullback_pct(disp, 180.0) == 0.2               # shallow
     assert v2.pullback_pct(None, 150.0) is None
-    # surfaced on candidates that reached an entry
+    # surfaced on candidates that reached an entry. Pullback is a RETRACE-depth quality read → meaningful
+    # only for FVG (retrace) entries; a structure-confirmation entry is not a retrace, so it isn't gated.
     st = v2.demo_state(seed=7)
-    withentry = [c for c in st.setup.cand_info if c["entry_obj"]]
-    assert withentry and all(c["pullback"] is None or 0.0 <= c["pullback"] <= 2.0 for c in withentry)
+    withfvg = [c for c in st.setup.cand_info if c["entry_obj"] and c["entry_model"] == "fvg"]
+    assert withfvg and all(c["pullback"] is None or 0.0 <= c["pullback"] <= 2.0 for c in withfvg)
 
 
 def test_fvg_tiebreak_is_explicit_res():

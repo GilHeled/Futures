@@ -99,16 +99,29 @@ and manipulation extreme SEPARATE** `[COURSE]`. SHORT: BSL swept → manip extre
 high of the manipulation sequence → entry below it, stop above it. LONG mirror. Manipulation
 extreme = running max/min updated across the sequence (already in `ict_faithful`).
 
-## 13. Preferred setup sequence `[COURSE]`
-ERL approached → sweep/manipulation → displacement → confirmed MSS → valid **same-leg** FVG
-→ **later** retrace into that FVG → entry. Entry must be **causally after** MSS confirmation
-(no pre-confirmation FVG interaction reused as a later fill). If no post-MSS retrace → NO
-TRADE. (Arming at FVG formation k+1, fill on a strictly later retrace — `ict_faithful §7c`.)
+## 13. Setup sequence `[COURSE]`
+ERL approached → sweep/manipulation → displacement → **confirmed market-structure reversal (MSS)**.
+The confirmed reversal is the setup's confirmation (Lessons 15/16). An FVG that forms on the same
+leg is a **contextual PD array** — a support/resistance level price may return to, a draw, or a
+lower-timeframe entry refinement — **not a mandatory step**.
 
-## 14. Entry
-Preferred = retrace into the same-leg FVG; **not** auto-enter at MSS close `[COURSE]`. Exact
-in-FVG location **configurable + documented, never P&L-selected** `[RES:fvg_entry_loc]`
-(candidates: full touch / midpoint (CE) / far edge). `ict_faithful` used CE midpoint.
+> **CORRECTION (2026-09-03), verified against the RAW lesson slides (§12/§15/§16), superseding a prior
+> over-hardening.** The earlier text here ("valid same-leg FVG → later retrace → entry; **if no
+> post-MSS retrace → NO TRADE**") and §14 ("**not** auto-enter at MSS close `[COURSE]`") were WRONG:
+> the raw course does **not** mandate an FVG retrace and does **not** reject a no-retrace trade. Lesson
+> 15 defines the reversal as the STRUCTURE sequence itself (long: Low→High→Higher-Low→Higher-High;
+> short: High→Low→Lower-High→Lower-Low); Lesson 16 (Power of 3) says after the manipulation "we look for
+> the change of direction / the intraday trend change to trade in the correct direction"; Lesson 12
+> teaches the FVG as an S/R PD array that "can break and fail." See memory `project_v2_structure_entry_correction`.
+
+## 14. Entry — TWO valid execution models
+- **`structure`** (Lessons 15/16, the core): the confirmed intraday market-structure reversal IS the
+  entry. Enter on the direction change (implemented: entry = the MSS confirmation close, invalidation =
+  the manipulation extreme; `[RES:structure_entry_ref]` — a transparent, chart-reviewable fill choice,
+  never P&L-selected). Catches reversals that never retrace.
+- **`fvg`** (Lesson 12, optional refinement): retrace into a same-leg FVG; still respects premium/
+  discount. In-FVG location `[RES:fvg_entry_loc]` = CE midpoint. **No longer mandatory** — an otherwise-
+  confirmed structural entry does not require an FVG.
 
 ## 15. Stop `[COURSE]` + `[NEC buffer]`
 Beyond structural invalidation = beyond max(true manipulation extreme, swept-zone outer

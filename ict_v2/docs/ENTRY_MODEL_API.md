@@ -1,13 +1,14 @@
 # v2 Execution-Model Plugin Contract  — **FROZEN v1.1 (2026-08-27)**
 
-> **SCOPE — this course, not ICT in general.** v2 faithfully implements the specific course
-> methodology in `ict_live/docs/METHODOLOGY_SPEC.md` (+ `ict_faithful/SPEC.md`). In that methodology
-> the entry PD array is the **Fair Value Gap** (§13/§14: sweep → displacement → confirmed MSS →
-> same-leg FVG → retrace → entry); the only other PD-arrays named are NWOG/ORG, as context/targets.
-> The course does **not** define Order Blocks, Breakers, or Mitigation Blocks as execution models —
-> those are broader-ICT constructs, out of scope here. **FVG is the sole execution model.** This
-> contract exists so that IF authoritative course material later defines another entry array, adding
-> it is a plugin, not a rebuild — not as an invitation to import general-ICT models.
+> **SCOPE — this course.** v2 implements the course methodology in `ict_live/docs/METHODOLOGY_SPEC.md`.
+> **CORRECTED 2026-09-03 against the RAW lesson slides:** there are **two** valid execution models —
+> (1) **`structure`**, the confirmed intraday market-structure reversal (Lessons 15/16: Low→High→HL→HH
+> for a long, High→Low→LH→LL for a short), which is the course's core entry and needs no FVG; and
+> (2) **`fvg`**, a Fair Value Gap used as a **contextual PD array / optional lower-timeframe entry
+> refinement** (Lesson 12), **no longer mandatory**. The prior claim "FVG is the sole execution model"
+> was an over-hardening that inverted the course emphasis (see memory `project_v2_structure_entry_correction`).
+> NWOG/ORG remain context/targets. Order Blocks / Breakers / Mitigation Blocks (broader-ICT constructs
+> the course does not teach) stay out of scope. This contract keeps adding a course model a plugin.
 
 > **v1.1 change (2026-08-27).** `detect()` carries a final `bars` argument:
 > `detect(disp, mss, ms, direction, bars) -> list[Entry]`. The engine hands the raw OHLC window (same

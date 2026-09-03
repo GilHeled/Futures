@@ -6,14 +6,20 @@ an invalidation level + a lifecycle). Every candidate is tagged with the `entry_
 it. The engine stays model-agnostic (no `if model ==`); adding a model is a registry entry, never an
 engine change. See `docs/ENTRY_MODEL_API.md` for the frozen contract.
 
-SCOPE = THIS COURSE, NOT ICT IN GENERAL. v2 faithfully implements the specific course methodology
-captured in `ict_live/docs/METHODOLOGY_SPEC.md` (+ `ict_faithful/SPEC.md`). In that methodology the
-entry PD array is the **Fair Value Gap** (§13/§14: sweep → displacement → confirmed MSS → same-leg
-FVG → retrace → entry); the only other PD-arrays named are NWOG/ORG, used as context/targets. The
-course does NOT define Order Blocks, Breakers, or Mitigation Blocks as execution models — those belong
-to broader ICT teaching, not to this course — so they are intentionally NOT implemented here. FVG is
-the sole execution model. Additional models are added ONLY when authoritative course material defines
-them; the framework exists so that is a plugin, not a rebuild. v1 is imported nowhere here; v1 frozen.
+SCOPE = THIS COURSE. v2 implements the course methodology (`ict_live/docs/METHODOLOGY_SPEC.md`).
+
+EXECUTION CONFIRMATION = the intraday MARKET-STRUCTURE reversal (Lessons 15 & 16), verified against the
+RAW course slides (2026-09-03): Lesson 15 defines a confirmed reversal as the STRUCTURE sequence itself
+(long: Low→High→Higher-Low→Higher-High; short: High→Low→Lower-High→Lower-Low), and Lesson 16 (Power of
+3) says after the manipulation "we look for the change of direction / the intraday trend change to trade
+in the correct direction." So TWO execution models are valid:
+  • `structure` — the confirmed structural reversal IS the entry (no FVG required). This is the course's
+    core entry basis; it catches reversals that never retrace.
+  • `fvg` — a Fair Value Gap is a CONTEXTUAL PD array (Lesson 12: support/resistance where price returns,
+    marked on 5m/1m as an entry/exit refinement). It is an OPTIONAL entry refinement, NOT mandatory —
+    correcting an earlier mis-hardening ("no FVG retrace = no trade") that inverted the course emphasis.
+Order Blocks / Breakers / Mitigation Blocks (broader-ICT constructs the course does not teach) stay out
+of scope. New models are added ONLY when the course defines them. v1 is imported nowhere here; v1 frozen.
 """
 from __future__ import annotations
 
@@ -34,6 +40,9 @@ COMMON_STATES = ("waiting", "valid", "rejected", "completed")
 LIFECYCLE = {
     "fvg": {"vocab": ["waiting", "valid", "mitigated"],
             "map": {"waiting": "waiting", "valid": "valid", "mitigated": "completed"}},
+    # structure-confirmation entry: LIVE the moment the reversal confirms (no retrace step)
+    "structure": {"vocab": ["forming", "confirmed"],
+                  "map": {"forming": "waiting", "confirmed": "valid"}},
 }
 
 
@@ -76,13 +85,19 @@ class Entry:
 # authoritative course material defines it (Order Block / Breaker / Mitigation Block / IFVG / IOFED
 # are broader-ICT constructs the captured course does NOT teach, so they are deliberately absent).
 REGISTRY: dict[str, dict] = {
+    "structure": {
+        "implemented": True, "detect": None,   # set below (structure_entries)
+        "desc": "Market-structure reversal — the confirmed MSS (Low→High→HL→HH long / High→Low→LH→LL short) "
+                "IS the entry; no FVG required (Lessons 15/16). Fires on the direction change, LIVE at once.",
+    },
     "fvg": {
         "implemented": True, "detect": None,   # FVG entries come from v1's frozen detector (see pipeline)
-        "desc": "Fair Value Gap — 3-candle imbalance; entry at CE (50%). The course's entry PD array.",
+        "desc": "Fair Value Gap — 3-candle imbalance; entry at CE (50%). A CONTEXTUAL PD array / optional "
+                "entry refinement (Lesson 12), no longer a mandatory trigger.",
     },
 }
 
-DEFAULT_MODELS: tuple[str, ...] = ("fvg",)          # FVG is the course's sole execution model
+DEFAULT_MODELS: tuple[str, ...] = ("structure", "fvg")   # confirmed reversal OR an FVG-retrace refinement
 
 # --- FVG detector: adapt v1's frozen FVG objects into the common Entry contract ------------------
 _FVG_STATUS = {"unfilled": "waiting", "touched": "valid", "mitigated": "mitigated"}
@@ -142,6 +157,36 @@ def fvg_entries(disp, mss, ms, direction, bars=None) -> list:
 
 
 REGISTRY["fvg"]["detect"] = fvg_entries
+
+
+# --- structure-confirmation detector: the confirmed reversal itself is the entry (no FVG) ----------
+def structure_entries(disp, mss, ms, direction, bars=None) -> list:
+    """STRUCTURE-CONFIRMATION entry (Lessons 15 & 16): the confirmed intraday market-structure reversal
+    IS the entry — no FVG retrace required. Fires once the leg's MSS is CONFIRMED (a body close beyond
+    the last opposing structural swing = the Higher-High that completes Low→High→HL→HH for a long, or the
+    Lower-Low completing High→Low→LH→LL for a short). Entry = the confirmation close (Lesson 16: "trade
+    the direction change"); invalidation = the manipulation extreme (the displacement origin). The entry
+    is LIVE the moment structure confirms, so a non-retracing reversal is still caught.
+
+    [RES:structure_entry_ref] — using the confirmation close as the fill price is a transparent, chart-
+    reviewable choice; the course teaches "enter on the direction change" without a tick-precise price.
+    Refine after live observation, not by optimization."""
+    if mss is None or getattr(mss, "state", "") != "confirmed":
+        return []
+    want = "bullish" if direction == "long" else "bearish"
+    if getattr(mss, "direction", "") != want:
+        return []
+    ci = getattr(mss, "confirm_index", None)
+    if ci is None or not bars or not (0 <= ci < len(bars)):
+        return []
+    ref = float(bars[ci].close)
+    manip = float(getattr(disp, "start_price", ref))          # manipulation extreme = displacement origin
+    sid = f"STRUCT-{getattr(disp, 'id', '')}-{ci}"            # unique per displacement leg (no id collisions)
+    return [Entry(model="structure", direction=direction, ref=ref, invalidation=manip,
+                  lifecycle="confirmed", id=sid, origin_index=ci, source=None)]
+
+
+REGISTRY["structure"]["detect"] = structure_entries
 
 
 def assemble(entry: Entry, sweep_extreme: float, active_erl, min_stop=None) -> dict:

@@ -41,7 +41,10 @@ def test_context_required_before_scenarios():
 
 def test_scenario_set_is_small_and_stable():
     base, h4, h1, m15 = _data()
-    eng = MTFEngine("4H", "1H", "15m", "1m")
+    # scenario-BUILDING stability = the thesis set under identical context. Isolate it from the execution
+    # layer with the FVG model only (the structure model can TRIGGER on this synthetic data, and a sticky
+    # open trade legitimately reshuffles thesis slots — that is execution, not a building-churn).
+    eng = MTFEngine("4H", "1H", "15m", "1m", entry_models=("fvg",))
     eng.on_trigger_close(base[-400:])
     eng.on_context_close(h4); eng.on_setup_close(h1)
     assert 0 <= len(eng.book.active) <= 3                  # target 2, max 3 — never a scanner

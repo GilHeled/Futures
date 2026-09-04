@@ -693,66 +693,70 @@ def _pick_target(direction, entry, risk, objectives, draw_px, min_rr, price_dp=2
 _ARRAY_ACTIVE = ("unswept", "unfilled", "open", "touched", "")   # not swept / mitigated / closed-spent
 
 
-def _reversal_chains(scenario, candidates, ms, price_dp):
-    """C2/C3 — the causal reversal chains (manipulation SWEEP -> displacement -> MSS -> same-leg FVG) for
-    the scenario's direction, in the engine's EXISTING transparent ranked order (candidates arrive ranked
-    from generate_candidates; NOT re-sorted by proximity). Each chain is a dict carrying the manipulation
-    extreme (the WHERE), the confirming leg (displacement start->end), whether its MSS is CONFIRMED, and
-    any same-leg FVG. A no-FVG chain is still a chain (its MSS/leg are intact) so no-FVG setups execute.
+def _structural_reversal(confirm_ms, direction, zone, price_dp):
+    """C2/C3 — the STRUCTURAL trend change on the HIGHER structural timeframe (the 15m confirm read; the
+    course's floor is '>=15m', Lesson 6). A 15m MSS breaks the LAST OPPOSING 15m STRUCTURAL swing — a
+    swing that is meaningful BY SCALE (a 15m structural high/low), NOT an arbitrary 1m local pivot. This
+    replaces the retired 1m-MSS + dominant/protected gate: the source-derived structural hierarchy (which
+    swing, at which scale, in which sequence) decides validity, per the forensic finding that the 1m-local
+    `dominant/protected` flag is not the course's definition of a meaningful swing.
 
-    SIGNIFICANCE GATE (course-grounded, threshold-free, Lessons 6/15): the MSS confirmation must break a
-    swing the existing significance layer marks `dominant` (a degree-2 structural extreme) or `protected`
-    (the standing unbroken extreme). Breaking a MINOR swing is a mechanically-valid MSS but NOT the
-    meaningful/energetic structural reversal the course reserves for significant swings. The swing is
-    looked up by `MSS.broken_index` in `ms.classified`; when significance is unavailable (no ms) the chain
-    is treated as significant (the live engine always supplies ms, so the gate is always enforced there)."""
-    dirn = scenario.direction
-    want = "bullish" if dirn == "long" else "bearish"
-    sig_by_idx = {}                                              # swing index -> ClassifiedSwing (dominant/protected)
-    for cs in (getattr(ms, "classified", None) or []):
+    Returns the WHERE (the 15m manipulation/sweep, in the correct premium/discount half), the confirming
+    reversal LEG (the 15m displacement start->end), the broken 15m structural swing, any same-leg 15m FVG,
+    and the state: `confirmed` (a 15m body close broke the last opposing structural swing = LL/HH) or
+    `potential` (a 15m candidate MSS, wick penetration only = a Lower-High/Higher-Low forming). None if no
+    reversal in `direction` has its manipulation in the half. `dominant/protected` are surfaced as METADATA
+    only (never the gate). Short = bearish 15m MSS (break last structural HL -> LL); long = bullish (HH).
+    The 1m layer only TIMES the retrace fill; it never redefines a 15m structural swing (no look-ahead:
+    the 15m structure is the last CLOSED 15m read, fixed between 15m closes)."""
+    if confirm_ms is None:
+        return None
+    lo, hi = zone
+    want = "bullish" if direction == "long" else "bearish"
+    disp_by_id = {d.item.id: d.item for d in getattr(confirm_ms, "ranked_displacements", [])}
+    sweep_by_id = {s.item.id: s.item for s in getattr(confirm_ms, "ranked_sweeps", [])}
+    flag = {}                                                   # swing index -> (dominant, protected) — metadata only
+    for cs in (getattr(confirm_ms, "classified", None) or []):
         sw2 = getattr(cs, "swing", None)
         if sw2 is not None:
-            sig_by_idx[getattr(sw2, "index", None)] = cs
-    out = []
-    for c in (candidates or []):
-        if getattr(c, "direction", "") != dirn:
+            flag[getattr(sw2, "index", None)] = (bool(getattr(cs, "dominant", False)),
+                                                 bool(getattr(cs, "protected", False)))
+    best_conf, best_pot = None, None
+    for r in getattr(confirm_ms, "ranked_mss", []):
+        m = r.item
+        if getattr(m, "direction", "") != want:
             continue
-        sw = getattr(c, "sweep", None)
-        if sw is None:
-            continue                                             # no manipulation = no WHERE interaction
-        disp = getattr(c, "displacement", None)
-        mss = getattr(c, "mss", None)
+        d = disp_by_id.get(m.depends_on[0]) if getattr(m, "depends_on", None) else None
+        if d is None:
+            continue
+        sw = sweep_by_id.get(d.depends_on[0]) if getattr(d, "depends_on", None) else None
         manip = getattr(sw, "extreme", None)
-        if manip is None and disp is not None:
-            manip = getattr(disp, "start_price", None)
         if manip is None:
+            manip = getattr(d, "start_price", None)
+        if manip is None or not (lo <= float(manip) <= hi):     # WHERE must interact inside the correct half
             continue
-        mss_conf = (mss is not None and getattr(mss, "state", "") == "confirmed"
-                    and getattr(mss, "direction", "") == want)
-        # significance of the BROKEN swing: ms.classified (live) else flags on the mss (tests) else unknown
-        cs = sig_by_idx.get(getattr(mss, "broken_index", None)) if mss is not None else None
-        if cs is not None:
-            dom, prot, known = bool(getattr(cs, "dominant", False)), bool(getattr(cs, "protected", False)), True
-        else:
-            fd = getattr(mss, "broken_dominant", None) if mss is not None else None
-            fp = getattr(mss, "broken_protected", None) if mss is not None else None
-            known = fd is not None or fp is not None
-            dom, prot = bool(fd), bool(fp)
-        significant = (dom or prot) if known else True           # unknown -> don't block (engine always knows)
-        fvgs = []
-        src = getattr(getattr(c, "entry_obj", None), "source", None)   # the v1-ranked same-leg entry FVG
-        if src is not None and getattr(src, "status", "") != "mitigated":
-            fvgs.append(src)
-        out.append({"manip": float(manip),
-                    "leg_a": (float(getattr(disp, "start_price")) if disp is not None else None),
-                    "leg_b": (float(getattr(disp, "end_price")) if disp is not None else None),
-                    "displaced": disp is not None, "mss_confirmed": mss_conf,
-                    "mss_id": (getattr(mss, "id", "") if mss is not None else ""),
-                    "broken_price": (round(float(getattr(mss, "broken_price")), price_dp)
-                                     if mss is not None and getattr(mss, "broken_price", None) is not None else None),
-                    "broken_dominant": dom, "broken_protected": prot, "significant": significant,
-                    "pool": float(getattr(sw, "pool_price", manip)), "fvgs": fvgs})
-    return out
+        rec = (m, d, sw, float(manip))
+        st = getattr(m, "state", "")
+        if st == "confirmed":
+            if best_conf is None or (getattr(m, "confirm_index", -1) or -1) > (getattr(best_conf[0], "confirm_index", -1) or -1):
+                best_conf = rec
+        elif st in ("candidate", "potential") and best_pot is None:
+            best_pot = rec
+    chosen = best_conf or best_pot
+    if chosen is None:
+        return None
+    m, d, sw, manip = chosen
+    dom, prot = flag.get(getattr(m, "broken_index", None), (False, False))
+    did = getattr(d, "id", None)
+    fvgs = [r.item for r in getattr(confirm_ms, "ranked_fvgs", [])
+            if getattr(r.item, "depends_on", None) and r.item.depends_on[0] == did
+            and getattr(r.item, "status", "") != "mitigated"]
+    return {"state": ("confirmed" if best_conf else "potential"), "manip": manip,
+            "leg_a": float(getattr(d, "start_price", manip)), "leg_b": float(getattr(d, "end_price", manip)),
+            "broken_price": round(float(getattr(m, "broken_price", 0.0)), price_dp),
+            "broken_dominant": dom, "broken_protected": prot,
+            "pool": float(getattr(sw, "pool_price", manip)) if sw is not None else float(manip),
+            "mss_id": getattr(m, "id", ""), "fvgs": fvgs}
 
 
 def _retrace_entry(chain, direction, ce, price_dp):
@@ -808,15 +812,21 @@ def _confluence_in(objectives, direction, lo, hi, price_dp):
     return out
 
 
-def execution_for_scenario(scenario, candidates, price=None, objectives=None, ms=None,
-                           min_stop: float | None = None,
+def execution_for_scenario(scenario, candidates=None, price=None, objectives=None, ms=None,
+                           confirm_ms=None, min_stop: float | None = None,
                            min_rr: float = MIN_TARGET_RR, price_dp: int = 2) -> dict | None:
-    """FAITHFUL execution decision for one active SCENARIO — the C1-C5 causal chain in the block above.
-    C2 WHERE (a manipulation sweep in the correct half) -> C3 WHEN (a CONFIRMED MSS on that SAME chain)
-    -> C4 the confirming leg retraced >=50% AND on the right P/D side -> C5 entry at the retrace (same-leg
-    FVG if it overlaps, else the >=50%+P/D level; NEVER the swept WHERE ref; FVG optional), stop beyond
-    the manipulation extreme, target the opposing draw >= min_rr. Returns the execution dict (+ `audit`)
-    or None (watching). The bar-level reachability gate in ScenarioBook.monitor still guards the fill."""
+    """FAITHFUL execution decision for one active SCENARIO. WHAT-corrected model (2026-09): the WHEN is a
+    STRUCTURAL trend change on the HIGHER structural timeframe (the 15m `confirm_ms`), NOT a 1m-local MSS.
+      C2 WHERE — a 15m manipulation/sweep in the correct premium/discount half.
+      C3 WHEN  — a CONFIRMED 15m structural reversal in the scenario direction: a 15m body close broke the
+                 LAST OPPOSING 15m structural swing (short: prior up-structure -> LH -> break last HL -> LL;
+                 long: prior down-structure -> HL -> break last LH -> HH). A 15m *potential* (candidate MSS,
+                 wick only) is WATCHING, not confirmed. `dominant/protected` are metadata, never the gate.
+      C4 RETRACE — the 15m reversal leg retraced >=50% AND the entry is on the correct P/D side.
+      C5 EXECUTE — entry = the >=50% retrace level (same-leg 15m FVG if it overlaps, else the leg level;
+                 FVG optional), stop beyond the 15m manipulation extreme, target opposing draw >= min_rr.
+    The 1m layer only TIMES the fill (the reachability gate in ScenarioBook.monitor). `candidates`/`ms`
+    (the 1m read) are accepted for signature compatibility but no longer define the structural swing."""
     dirn = scenario.direction
     zone = getattr(scenario, "entry_zone", None)
     if zone is None or price is None:
@@ -826,65 +836,38 @@ def execution_for_scenario(scenario, candidates, price=None, objectives=None, ms
     pd_zone = "discount" if dirn == "long" else "premium"
     new_struct = "HH/HL" if dirn == "long" else "LH/LL"
 
-    def in_half(p):
-        return p is not None and lo <= p <= hi
-
-    # C2 — reversal chains whose WHERE (the manipulation extreme) interacted inside the correct P/D half.
-    chains = _reversal_chains(scenario, candidates, ms, price_dp)
-    where_chains = [ch for ch in chains if in_half(ch["manip"])]           # ranked order preserved
-    # C3 = a CONFIRMED MSS on that chain that broke a SIGNIFICANT swing (dominant OR protected, Lessons
-    # 6/15) — a mechanically-confirmed MSS against a MINOR swing does NOT qualify as the meaningful reversal.
-    confirmed = [ch for ch in where_chains if ch["mss_confirmed"] and ch["significant"] and ch["displaced"]]
-    insignificant = [ch for ch in where_chains                            # confirmed but broke only a minor swing
-                     if ch["mss_confirmed"] and ch["displaced"] and not ch["significant"]]
+    # C2/C3 — the STRUCTURAL reversal on the 15m (the WHEN, at the meaningful scale; 1m does not define it).
+    R = _structural_reversal(confirm_ms, dirn, (lo, hi), price_dp)
 
     def _audit(state, **extra):
         a = {"pd_zone": pd_zone, "pd_zone_range": [round(lo, price_dp), round(hi, price_dp)],
-             "conditions": {"C2_where_sweep": bool(where_chains),
-                            "C3_confirmed_significant_mss": bool(confirmed),
-                            "C4_retrace_50_and_pd": None, "C5_geometry": None},
-             "where_chains": len(where_chains), "confirmed_chains": len(confirmed),
-             "rejected_minor_mss": len(insignificant), "state": state}
+             "structural_tf": "15m",
+             "conditions": {"C2_where_sweep": bool(R),
+                            "C3_confirmed_structural_reversal": bool(R and R["state"] == "confirmed"),
+                            "C4_retrace_50_and_pd": None, "C5_geometry": None}, "state": state}
         a.update(extra)
         return a
 
-    # C2 fails — no manipulation interacted with a WHERE in the correct half yet: nothing to execute.
-    if not where_chains:
+    # C2 fails — no 15m manipulation/reversal in `dirn` interacted with the correct half yet.
+    if R is None:
         return None                                                        # watching
 
-    # C3 fails — the WHERE was swept but no CONFIRMED+SIGNIFICANT structure shift on that chain yet. Either
-    # (a) no confirmed MSS at all, or (b) an MSS confirmed but it broke only a MINOR swing (not dominant/
-    # protected) — a mechanically-valid MSS that is NOT the meaningful structural reversal the course
-    # reserves for significant swings (Lessons 6/15). Both are FORMING: no reversal leg, no entry/stop/
-    # target, NOT actionable (WATCHING, not armed, no alert). Becomes armed only on a significant MSS + retrace.
-    if not confirmed:
-        if insignificant:
-            ic = insignificant[0]
-            why = (f"MSS confirmed but broke only a MINOR swing at {ic['broken_price']} "
-                   f"(dominant={ic['broken_dominant']}, protected={ic['broken_protected']}) - not the "
-                   f"meaningful structural reversal the course reserves for significant swings (Lessons 6/15); rejected")
-            reason = f"minor-swing MSS rejected (broken {ic['broken_price']}, dominant/protected both false)"
-            aud = _audit("watching", reason=reason,
-                         when={"mss_id": ic["mss_id"], "broken_swing": ic["broken_price"],
-                               "broken_dominant": ic["broken_dominant"], "broken_protected": ic["broken_protected"],
-                               "accepted": False,
-                               "rule": "MSS must break a dominant OR protected swing (Lessons 6/15)"})
-        else:
-            best = where_chains[0]
-            awaiting = "a CONFIRMED structure shift (MSS)" if best["displaced"] else "a displacement/reversal"
-            why = (f"WHERE swept at {round(best['pool'], price_dp)} in the {pd_zone} (manip "
-                   f"{round(best['manip'], price_dp)}); awaiting {awaiting} ({new_struct}) before an entry "
-                   f"forms - Lessons 15/16 (no order yet)")
-            aud = _audit("watching", reason="WHERE swept; awaiting confirmed MSS (no entry yet)")
+    # C3 fails — a 15m reversal is only POTENTIAL (candidate MSS / wick), not a CONFIRMED structural trend
+    # change (no 15m body close through the last opposing structural swing yet). FORMING: no entry/stop/
+    # target, NOT actionable — WATCHING, no alert. Becomes armed only once the 15m reversal confirms.
+    if R["state"] != "confirmed":
+        why = (f"POTENTIAL {new_struct} reversal on the 15m (manip {round(R['manip'], price_dp)} in the "
+               f"{pd_zone}); awaiting a CONFIRMED break of the last 15m structural swing (Lessons 6/15) - no order yet")
         return {"state": "watching", "entry": None, "stop": None, "target": None, "rr": None,
                 "order": None, "sl_order": None, "tp_order": None, "fvg_top": None, "fvg_bottom": None,
                 "entry_model": "", "usable_models": [], "price": round(price, price_dp),
                 "dist_to_entry": None, "entry_role": "", "tf": getattr(scenario, "tf", ""),
-                "why": why, "audit": aud}
+                "why": why, "audit": _audit("watching", reason="15m reversal only potential (not confirmed)",
+                                            when={"mss_id": R["mss_id"], "broken_swing": R["broken_price"],
+                                                  "state": "potential"})}
 
-    # C4/C5 — take the BEST-RANKED confirmed chain (the engine's transparent ranking, NOT proximity).
-    # Ambiguity (several confirmed chains) is exposed via audit.confirmed_chains, never silently tie-broken.
-    ch = confirmed[0]
+    # C4/C5 — the confirmed 15m reversal's leg + retrace entry (structural leg; 1m only fills it).
+    ch = R
     geom = _retrace_entry(ch, dirn, ce, price_dp)
     if geom is None:
         # C4 empty — the confirming leg does not retrace >=50% into the correct P/D half.
@@ -894,7 +877,7 @@ def execution_for_scenario(scenario, candidates, price=None, objectives=None, ms
                         f"{round(ch['leg_b'] or 0, price_dp)}) but its >=50% retrace does not reach the "
                         f"{pd_zone} half - not a valid execution zone (Lessons 8/9)"),
                 "audit": _audit("retracing", reason="leg 50% retrace not in the P/D half",
-                                **{"conditions": {"C2_where_sweep": True, "C3_confirmed_mss": True,
+                                **{"conditions": {"C2_where_sweep": True, "C3_confirmed_structural_reversal": True,
                                                   "C4_retrace_50_and_pd": False, "C5_geometry": None}})}
     entry, stop, leg_low, leg_high, fvg = geom
     risk = abs(entry - stop)
@@ -927,18 +910,20 @@ def execution_for_scenario(scenario, candidates, price=None, objectives=None, ms
             "entry_role": "entry", "tf": getattr(scenario, "tf", "")}
 
     def _full_audit(state):
-        acc = "MSS broke a %s swing" % ("dominant" if ch["broken_dominant"]
-                                        else "protected" if ch["broken_protected"] else "significant")
+        meta = ("dominant" if ch["broken_dominant"] else "protected" if ch["broken_protected"] else "not-flagged")
         return _audit(state, why_accepted=(why if state == "triggered" else ""),
                       where={"pool": round(ch["pool"], price_dp), "manip": round(ch["manip"], price_dp)},
                       when={"mss_id": ch["mss_id"], "kind": new_struct, "broken_swing": ch["broken_price"],
                             "broken_dominant": ch["broken_dominant"], "broken_protected": ch["broken_protected"],
-                            "accepted": True, "rule": acc + " (Lessons 6/15) — a significant, not minor, swing"},
+                            "accepted": True,
+                            "rule": "confirmed 15m structural reversal — a body close broke the last opposing "
+                                    "15m STRUCTURAL swing (meaningful by scale, Lessons 6/15); "
+                                    f"dominant/protected flags are metadata only (here: {meta})"},
                       reversal_leg={"low": leg_low, "high": leg_high,
                                     "mid_50pct": round((leg_low + leg_high) / 2.0, price_dp)},
                       entry_source=("same-leg FVG (confluence)" if fvg_used else ">=50% retrace level (no FVG)"),
                       confluence=confluence,
-                      **{"conditions": {"C2_where_sweep": True, "C3_confirmed_significant_mss": True,
+                      **{"conditions": {"C2_where_sweep": True, "C3_confirmed_structural_reversal": True,
                                         "C4_retrace_50_and_pd": True, "C5_geometry": tgt is not None}})
 
     # No opposing draw clears min_rr -> a real confirmed reversal but not a tradeable setup (no alert).

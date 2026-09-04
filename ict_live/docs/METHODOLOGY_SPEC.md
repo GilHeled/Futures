@@ -126,12 +126,15 @@ entry), each step recorded in the returned `audit` (auditable, like `role_of`). 
   manipulation **SWEEP** (raid + rejection), **not proximity** to a level (Lessons 6/16). Best-ranked by
   the engine's existing transparent sweep ranking; several qualifying → count exposed in `audit`, never a
   "nearest" tie-break. `[COURSE]`
-- **C3 WHEN** — a **confirmed MSS on the SAME chain** (sweep→displacement→MSS) that **breaks a
-  *significant* swing** — one the significance layer marks `dominant` (degree-2 extreme) or `protected`
-  (standing unbroken extreme). A mechanically-confirmed MSS against a **minor** swing is rejected: it is
-  not the meaningful/energetic reversal the course reserves for significant swings (Lessons 6/15). This is
-  **relational and threshold-free** (no point/ATR/leg-size minimum). The audit records the broken-swing
-  price, `dominant`, `protected`, and the accept/reject reason. `[COURSE]`
+- **C3 WHEN** — a **confirmed structural trend change on the HIGHER structural timeframe** (the 15m
+  `confirm_ms`; the course's floor is "≥15m", Lesson 6). A 15m body close breaks the **last opposing 15m
+  STRUCTURAL swing** — meaningful *by scale*, not a 1m-local pivot (short: prior HH/HL uptrend → LH → break
+  the last structural HL → LL; long: mirror). A 15m *potential* (candidate MSS / wick only) is WATCHING,
+  not confirmed. The **1m layer only TIMES the fill** (no look-ahead: the 15m structure is the last CLOSED
+  15m read, fixed between 15m closes; every 15m swing is knowable only after its 15m bar closes). The prior
+  1m-MSS + `dominant/protected` **significance gate is RETIRED** — the forensic showed `dominant/protected`
+  (a 1m degree-2 local test) is *not* the course's meaningful swing, over-accepting chop and over-rejecting
+  real breaks. Those flags remain as **audit metadata only**. Relational and threshold-free. `[COURSE]`
 - **C4 retrace** — the confirming **leg = the displacement** (manipulation extreme → impulse extreme) has
   retraced **≥50%** (Lesson 8 pullback DEPTH) **AND** the entry is on the correct **P/D side** of the
   H4/H1 range (Lesson 9). Two distinct 50%s, **both** required. **NOT** 0.62/0.79 — a 55% retrace is

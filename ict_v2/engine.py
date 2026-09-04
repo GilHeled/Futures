@@ -67,6 +67,8 @@ class MTFEngine:
         self._ctx_bars = None          # last 4H bars (NWOG window)
         self._confirm_bars = None      # last 15m bars (ORG window + execution setup)
         self._trigger_bars = None      # last 1m bars (execution trigger)
+        self.confirm_ms = None         # last CLOSED 15m market structure — the STRUCTURAL scale the WHEN
+        #                                (trend change) is read from; the 1m only TIMES the fill (no look-ahead)
 
     # ---- context stages (produce context; NEVER require an FVG) --------------------------------
     def on_context_close(self, bars, anchor_bars=None):
@@ -154,6 +156,8 @@ class MTFEngine:
             self.book.monitor(lambda s: None, bar=None)
             return
         ms = v1.analyze(bars, tf, min_stop=self.min_stop)
+        if tf == self.confirm_tf:                # store the 15m structural read (the WHEN's scale, Lesson 6)
+            self.confirm_ms = ms
         cands = P.generate_candidates(ms, self.strategic, tf=tf, min_stop=self.min_stop, bars=bars,
                                       entry_models=self.entry_models)   # honour the configured model set
         price = bars[-1].close
@@ -171,8 +175,8 @@ class MTFEngine:
                 day = None
         ts = _et_iso(bars[-1].close_time) if bars else None      # ET cursor time → scenario-timeline stamps
         self.book.monitor(lambda s: P.execution_for_scenario(s, cands, price, objectives=self.objectives,
-                                                             ms=ms, min_stop=self.min_stop,
-                                                             price_dp=self.price_dp),
+                                                             ms=ms, confirm_ms=self.confirm_ms,
+                                                             min_stop=self.min_stop, price_dp=self.price_dp),
                           bar=bar, day=day, ts=ts)
         self.exec_tf = tf
 

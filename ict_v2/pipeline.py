@@ -639,11 +639,12 @@ def generate_candidates(ms, context: HTFContext, entry_models=None, min_stop=Non
     return out
 
 
-MIN_TARGET_RR = 2.0   # the trade's target must give at least this reward:risk (user rule ~2R)
-# TIMELINESS: an entry is only ARMED while price is still AHEAD of the move. Once price has covered this
-# fraction of the entry→target distance (the draw is nearly reached), a retrace-entry is STALE — the move
-# already ran, so it is surfaced as 'stale', never armed/actionable (fixes the "armed too late" case).
-STALE_PROGRESS = 0.5
+MIN_TARGET_RR = 2.0   # [COURSE] the trade's target must clear at least this reward:risk (~2R, verbally
+#                       taught; confirmed by the methodology owner 2026-09-04 as course, not a [RES] knob)
+# NOTE: a STALE_PROGRESS=0.5 rule (invalidate once price ran >=50% entry→target) was REMOVED 2026-09-04 —
+# the raw course gives no basis for it (Lesson 8's >=50% governs retrace DEPTH, not run toward target).
+# Setup invalidation is now beyond-stop only (an execution-validity rule); a missed entry keeps the setup
+# and scenario alive to re-form. See execution_for_scenario.
 
 
 def _pick_target(direction, entry, risk, objectives, draw_px, min_rr, price_dp=2):
@@ -870,21 +871,19 @@ def execution_for_scenario(scenario, candidates, price=None, objectives=None, ms
                 "why": f"{pd_zone} PD array {arr['label']} at {entry}, but no opposing draw clears {min_rr:g}R - skipped",
                 "audit": _audit("retracing", reason="no target >= min_rr", pd_array=arr["source"])}
 
-    # STALE / INVALIDATION take precedence (Lesson 9 — never chase a move that already ran):
-    span = (tgt - entry)
-    progress = ((price - entry) / span) if span else 0.0                     # 0 at entry, 1 at target (both dirs)
+    # INVALIDATION — beyond the stop only. A setup is dead ONLY if price is already past the stop on the
+    # loss side (an entry now = an instant stop-out): an EXECUTION-VALIDITY rule, not a course fidelity
+    # rule. The old "missed - price ran >= 50% to target" (STALE_PROGRESS) was REMOVED (2026-09-04): the
+    # raw course gives no basis for invalidating a setup by progress toward target (Lesson 8's >=50% is a
+    # retrace-DEPTH rule, not a run-toward-target rule). A missed entry does NOT kill the setup or the
+    # scenario — if price returns and a fresh structure shift forms, it can re-arm/trigger (per-bar, never
+    # added to _traded_setups). Only beyond_stop stands, and only for THIS bar.
     beyond_stop = (price <= stop) if dirn == "long" else (price >= stop)
-    stale = (progress >= STALE_PROGRESS) or beyond_stop
 
     if beyond_stop:
         state = "stale"
         why = (f"invalidated - price {round(price, price_dp)} is beyond the stop {stop} "
-               f"(setup dead, not arming)")
-    elif stale:
-        state = "stale"
-        rem = round(abs(tgt - price), price_dp)
-        why = (f"missed - price already ran {round(progress * 100)}% from entry {entry} to target {tgt} "
-               f"(now {round(price, price_dp)}); only {rem} pts left - not arming")
+               f"(setup dead this bar, not arming)")
     elif not shift:
         # C3 met (price/array in the zone) but C4 not yet: reaching the array is only a POTENTIAL reversal.
         state = "armed"
@@ -904,7 +903,7 @@ def execution_for_scenario(scenario, candidates, price=None, objectives=None, ms
     return {**base, "state": state, "why": why,
             "audit": _audit(state, pd_array=arr["source"],
                             why_accepted=(why if state == "triggered" else ""),
-                            stale=stale, beyond_stop=beyond_stop)}
+                            beyond_stop=beyond_stop)}
 
 
 def mtf_setup(bars, tf: str, context: HTFContext, *, refine_bars=None, min_stop=None,

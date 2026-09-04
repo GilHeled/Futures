@@ -180,17 +180,19 @@ def test_execution_rejects_a_degenerate_stop():
                                     objectives=objs, min_stop=2.0)["state"] == "triggered"
 
 
-def test_execution_marks_a_late_entry_stale_not_armed():
-    """TIMELINESS (Lesson 9 — never chase a move that already ran): once price has run past the midpoint
-    of the entry→target move, the retrace-entry is STALE — surfaced as 'stale', even with a valid shift."""
+def test_a_missed_entry_stays_armed_not_stale():
+    """A MISSED entry does NOT invalidate the setup (the STALE_PROGRESS=0.5 rule was removed 2026-09-04 —
+    the raw course gives no basis for invalidating by progress toward target). Price that ran past the
+    entry but is NOT beyond the stop stays ARMED (awaiting a retrace back into the array), never 'stale'."""
     from ict_v2 import pipeline as P
     sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
     objs = [_fvg_obj(120, 122, 118), _draw_obj(210)]
     shift = _shift_cand("long", manip=100)
-    # price 180 = 67% of the way from entry 120 to target 210 → move already ran → STALE, not triggered
+    # price 180 ran well past the entry 120 toward target 210, but is NOT beyond the stop 100 →
+    # the entry was missed, yet the setup is still valid → ARMED (awaiting retrace), NOT stale
     r = P.execution_for_scenario(sc, [shift], price=180, objectives=objs)
-    assert r["state"] == "stale" and "missed" in r["why"]
-    # price 125 (low progress) with array + shift → TRIGGERED
+    assert r["state"] == "armed" and "stale" not in r["state"]
+    # price 125 (in the zone) with array + shift → TRIGGERED
     assert P.execution_for_scenario(sc, [shift], price=125, objectives=objs)["state"] == "triggered"
     # array + NO shift, still ahead of the move → ARMED (awaiting the structure shift)
     assert P.execution_for_scenario(sc, [_shift_cand("long", confirmed=False)],

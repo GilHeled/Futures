@@ -257,17 +257,20 @@ def _sw(kind, price, index):
     return _N(kind=kind, price=price, index=index)
 
 
-def _confirm_ms_seq(direction, structural, broken_index, manip, impulse, confirmed=True, fvg=None):
+def _confirm_ms_seq(direction, structural, broken_index, manip, impulse, confirmed=True, fvg=None,
+                    confirm_index=9):
     """`_confirm_ms` + the 15m STRUCTURAL skeleton so the Lesson-15 SEQUENCE gate is live. `structural` =
     list of (kind, price, index) (alternating high/low); `broken_index` = the index of the swing the 15m MSS
-    breaks (the prior trend's last structural swing when the sequence is valid)."""
+    breaks; `confirm_index` = the break bar that bounds the potential-survival scan. When `broken_index`
+    appears twice, the first entry is the broken swing and the second is the same-bar failed-continuation
+    pivot (the degenerate case)."""
     pol = "bullish" if direction == "long" else "bearish"
     skel = [_sw(k, p, i) for (k, p, i) in structural]
     broken_price = next(p for (k, p, i) in structural if i == broken_index)
     sw = _N(id="SW", extreme=manip, pool_price=manip)
     d = _N(id="D", start_price=manip, end_price=impulse, depends_on=("SW",))
     m = _N(id="MSS", direction=pol, state=("confirmed" if confirmed else "candidate"),
-           broken_price=broken_price, broken_index=broken_index, confirm_index=9, depends_on=("D",))
+           broken_price=broken_price, broken_index=broken_index, confirm_index=confirm_index, depends_on=("D",))
     return _N(ranked_mss=[_R(m)], ranked_displacements=[_R(d)], ranked_sweeps=[_R(sw)],
               ranked_fvgs=([_R(fvg)] if fvg is not None else []), classified=[], structural=skel)
 
@@ -341,6 +344,82 @@ def test_seq_continuation_break_in_prior_trend_is_not_mislabeled_a_reversal():
     a = r["audit"]
     assert a["conditions"]["C3_confirmed_structural_reversal"] is False
     assert a["when"]["classification"] == "continuation" and a["when"]["reversal_state"] == "none"
+
+
+# ---- Lesson-15 STATEFUL correction (V2_GAP Issue B/A): the potential must remain valid to the break -----
+# A local pivot pattern is not enough — the failed-continuation pivot must form STRICTLY AFTER the swing it
+# breaks (ordering) and the prior trend must NOT resume with a new structural extreme beyond S[k-1] before
+# the break (survival). Same-bar → degenerate; resumed prior trend → invalidated.
+
+def test_seq_valid_reversal_survives_intervening_swings_that_do_not_resume_the_trend():
+    """(1) A valid confirmed short: after the LH, price makes intervening highs that stay BELOW the prior high
+    (S[k-1]=105), so the uptrend never resumes — the potential survives to the break and CONFIRMS."""
+    sc = _N(direction="short", entry_zone=(50, 100), draw=_N(price=20), tf="1m")
+    objs = [_draw_obj(20, side="low")]
+    # HH/HL uptrend → LH 100 (<105) → intervening high 102 (still <105) → break the HL 60
+    skel = [("high", 70, 0), ("low", 50, 1), ("high", 105, 2), ("low", 60, 3), ("high", 100, 4),
+            ("low", 82, 5), ("high", 102, 6)]
+    r = _exec(sc, 80, objs, _confirm_ms_seq("short", skel, 3, manip=100, impulse=60, confirm_index=8))
+    assert r["state"] == "triggered" and r["entry"] == 80
+    w = r["audit"]["when"]
+    assert r["audit"]["conditions"]["C3_confirmed_structural_reversal"] is True
+    assert w["classification"] == "reversal" and w["reversal_state"] == "confirmed"
+
+
+def test_seq_long_potential_invalidated_by_a_new_lower_low_before_the_break():
+    """(2) Case-1 shape: a valid long potential (downtrend → HL 100 > prior low 95), but before the break of
+    the LH 140 the downtrend RESUMES with a new lower low (80 < 95) → INVALIDATED, not confirmed."""
+    sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
+    objs = [_draw_obj(210)]
+    skel = [("low", 130, 0), ("high", 150, 1), ("low", 95, 2), ("high", 140, 3), ("low", 100, 4),
+            ("high", 110, 5), ("low", 80, 6)]                       # low 80 < prior low 95 → prior trend resumed
+    r = _exec(sc, 120, objs, _confirm_ms_seq("long", skel, 3, manip=100, impulse=140, confirm_index=8))
+    assert r["state"] == "watching" and r["entry"] is None
+    w = r["audit"]["when"]
+    assert r["audit"]["conditions"]["C3_confirmed_structural_reversal"] is False
+    assert w["classification"] == "invalidated" and w["reversal_state"] == "cancelled"
+    assert w["resumed_beyond_prior_extreme"] == 80
+
+
+def test_seq_short_potential_invalidated_by_a_new_higher_high_before_the_break():
+    """(3) Mirror: a valid short potential (uptrend → LH 100 < prior high 105), but before the break of the
+    HL 60 the uptrend RESUMES with a new higher high (120 > 105) → INVALIDATED."""
+    sc = _N(direction="short", entry_zone=(50, 100), draw=_N(price=20), tf="1m")
+    objs = [_draw_obj(20, side="low")]
+    skel = [("high", 70, 0), ("low", 50, 1), ("high", 105, 2), ("low", 60, 3), ("high", 100, 4),
+            ("low", 80, 5), ("high", 120, 6)]                       # high 120 > prior high 105 → prior trend resumed
+    r = _exec(sc, 80, objs, _confirm_ms_seq("short", skel, 3, manip=100, impulse=60, confirm_index=8))
+    assert r["state"] == "watching" and r["entry"] is None
+    w = r["audit"]["when"]
+    assert w["classification"] == "invalidated" and w["reversal_state"] == "cancelled"
+    assert w["resumed_beyond_prior_extreme"] == 120
+
+
+def test_seq_same_bar_pivot_and_break_is_degenerate_not_a_reversal():
+    """(4) The failed-continuation pivot and the broken swing share one 15m bar (both index 3): no LH→HL→break
+    ordering exists → DEGENERATE, never a reversal."""
+    sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
+    objs = [_draw_obj(210)]
+    # broken LH high@3=140 and the HL low@3=100 are the SAME bar/index
+    skel = [("low", 130, 0), ("high", 150, 1), ("low", 95, 2), ("high", 140, 3), ("low", 100, 3)]
+    r = _exec(sc, 120, objs, _confirm_ms_seq("long", skel, 3, manip=100, impulse=140))
+    assert r["state"] == "watching" and r["entry"] is None
+    w = r["audit"]["when"]
+    assert r["audit"]["conditions"]["C3_confirmed_structural_reversal"] is False
+    assert w["classification"] == "degenerate" and w["reversal_state"] == "degenerate"
+
+
+def test_seq_failed_continuation_pivot_is_none_when_the_pivot_does_not_qualify():
+    """(5) Issue A: the audit `failed_continuation_pivot` must be None unless the pivot actually satisfies the
+    LH/HL relation. Here the low after the broken LH is a LOWER low (80 < prior low 95) → premature, and the
+    field must be None (not 'HL 80')."""
+    sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
+    objs = [_draw_obj(210)]
+    skel = [("low", 130, 0), ("high", 150, 1), ("low", 95, 2), ("high", 140, 3), ("low", 80, 4)]
+    r = _exec(sc, 120, objs, _confirm_ms_seq("long", skel, 3, manip=100, impulse=140))
+    w = r["audit"]["when"]
+    assert w["classification"] == "premature"
+    assert w["failed_continuation_pivot"] is None
 
 
 # ---- sticky trigger + outcome tracking: once triggered it stays open until stop/target -----------

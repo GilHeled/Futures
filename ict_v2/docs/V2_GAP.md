@@ -1,0 +1,198 @@
+# `ict_v2` fidelity-gap register — Lesson-15 sequence
+
+**Measured against `3ecd6a1`** (`fix(ict_v2): enforce Lesson-15 SEQUENCE for a confirmed 15m reversal`).
+These are **fidelity** findings, derived from the raw course material and a read-only behavioral audit on
+the MNQ Aug 9–28 1m dataset. **No performance/P&L reasoning is used or implied as justification** — the Aug
+numbers appear only as *where the behavior was observed*, never as *why* a change is warranted.
+
+Both issues live in `ict_v2/pipeline.py`: `_trend_sequence` (the Lesson-15 classifier) and the audit `when`
+block emitted by `execution_for_scenario`.
+
+---
+
+## Issue B — PRIMARY fidelity gap: the sequence is validated LOCALLY, not maintained as ORDERED STATE  ` [COURSE] `
+
+### The exact Lesson-15 sequence (source)
+
+Lesson 15 (שינויי מגמה תוך יומיים) defines a trend and its change structurally, not by magnitude:
+
+> An uptrend is defined when there are **two rising highs and two rising lows**; a downtrend when there are
+> two falling highs and two falling lows. When this movement ends — i.e. they **stop** creating rising
+> highs/rising lows (or stop creating falling lows/falling highs) — the trend halts and a change occurs.
+> In practice, the moment we see **a high that fails to break the previous high** (uptrend) — or a low that
+> fails to break the previous low (downtrend) — we define that point as a **POTENTIAL** for trend change.
+> **Only when we indeed see falling highs AND falling lows produced** (breaking an uptrend) — or rising
+> highs AND rising lows (breaking a downtrend) — do we define that the trend has **indeed broken**.
+
+The canonical 5-minute diagram (`screenshots/שיעור 15/שינוי מגמה - 5 דקות.png`) marks two **ordered** events:
+1. `שיאים שלא שברו שיא קודם — פוטנציאל להיפוך מגמה` — highs that fail to break the prior high = **POTENTIAL**.
+2. `שפל שששבר שפל קודם — היפוך מגמה` — a low that then breaks the prior low = **CONFIRMED**.
+
+The potential forms **first**; the lower-high stays below the prior high until the prior low breaks.
+
+### POTENTIAL vs CONFIRMED
+
+- **POTENTIAL** = an established trend has produced a *failed-continuation pivot*: in an uptrend, a **lower
+  high** (a high that failed to make a new HH); in a downtrend, a **higher low** (a low that failed to make a
+  new LL). This is a *watch* state — no reversal yet.
+- **CONFIRMED** = while that potential is still valid, price then **breaks the last opposing structural
+  swing** — in the short case the last HL (→ LL); in the long case the last LH (→ HH). This is the diagram's
+  "…שבר…שפל/שיא קודם — היפוך מגמה" marker.
+
+### The cancellation rule (the crux)
+
+A potential is alive **only while the original trend remains stopped**. The governing clause is *"the trend
+halts only when it **stops** creating falling lows/highs."* Therefore:
+
+> **CANCEL/RESET:** if the original trend **resumes** by making a **new structural extreme beyond the prior
+> trend's last extreme `S[k-1]`** — a new lower low below the last falling low (long case) / a new higher
+> high above the last rising high (short case) — the potential reversal is **invalidated** and the sequence
+> must restart. A subsequent higher low / lower high is required to form a *new* potential.
+
+This is equivalent to the source's confirmation condition read the other way: a confirmed long needs *rising
+highs **and** rising lows*; if the most recent structural low is a **new lower low**, "rising lows" is false,
+so no reversal exists regardless of a high having been broken.
+
+#### Why crossing the failed-continuation pivot itself is NOT the cancellation condition
+
+The invalidation reference is the **prior structural extreme `S[k-1]`**, *not* the failed-continuation pivot
+`S[k+1]`. Briefly trading through the pivot is not a trend resumption; only a **new extreme beyond the prior
+trend's last extreme** is. Case 2 (below) demonstrates this directly: price traded above the lower-high but
+never above the prior high, so the uptrend never resumed and the potential stayed valid. Using the pivot
+itself as the reference would wrongly cancel Case 2.
+
+### Why the current `_trend_sequence` cannot guarantee the potential remained valid
+
+`_trend_sequence(structural, mss, direction)` runs **at the confirmation bar** and reconstructs a *local*
+shape from the skeleton indices `k-3 … k+1` around the broken swing `k`:
+- it proves *a* prior trend and *a* failed-continuation pivot **existed** in that neighborhood;
+- it does **not** prove that pivot was **the active structural state that survived** from its formation to the
+  break. Any new extreme the prior trend printed **between** the pivot and the break is outside the
+  `k-3…k+1` window and is never consulted.
+
+So the classifier answers *"did the pattern ever exist locally?"* when the course asks *"is the potential
+still valid at the moment of the break?"* Those differ exactly when the trend resumed in between.
+
+### Demonstrated evidence (behavioral audit, read-only)
+
+Reference = the prior structural extreme `S[k-1]`.
+
+| confirmed reversal | prior extreme `S[k-1]` | failed-cont. pivot `S[k+1]` | broke `S[k-1]` before the break? | same 15m bar as `k`? | source verdict |
+|---|---|---|---|:--:|---|
+| **Case 1** — long, 2026-08-19 04:15 | low **29547.25** | HL 29559 | **yes** → to ~29435 (new lower low) | **yes** (both index 194) | **false confirmation** |
+| **Case 2** — short, 2026-08-25 10:15 | high **29420** | LH 29409.25 | **no** (stayed < 29420) | no | **valid, source-faithful** |
+
+- **Case 1** is a false long confirmation: after the HL (29559), price made materially lower lows (below the
+  prior low 29547.25) for ~13 hours, then rallied back through a stale high (29609.5). Per Lesson 15 the
+  downtrend resumed → the potential was already dead; the "reversal" should have been cancelled.
+- **Case 2** is a genuine short reversal: HH/HL uptrend → LH (29409.25 < prior high 29420) → break the last HL
+  (29302.5). The LH held below 29420 throughout, so the potential survived to the break.
+
+### The same-bar degeneracy is a symptom, not a separate rule
+
+In Case 1 the failed-continuation pivot `S[k+1]` (HL 29559) and the broken swing `S[k]` (high 29609.5) are the
+**same 15m bar** (index 194) — a wide outside-bar the skeleton keeps as both a high and a low pivot. The
+Lesson-15 sequence is inherently **time-ordered** (LH → *then* down to HL → *then* up through LH); collapsing
+the pivot and the broken swing onto one bar removes the "then," yielding a temporally impossible sequence.
+
+This is a **consequence of reconstructing a local pattern instead of maintaining ordered state** — a proper
+state machine, in which the potential must form as a distinct, later pivot and be carried forward to the
+break, excludes the degeneracy for free. **It is NOT a separate, arbitrary "the pivots must be on different
+bars" rule** and must not be implemented as one.
+
+### Required architectural direction  ` [COURSE] `
+
+Replace the point-in-time local reconstruction with an **ordered, stateful** progression maintained across
+15m closes:
+
+```
+established trend  ──▶  failed-continuation pivot forms  ──▶  POTENTIAL
+                                                               │
+      ┌────────────────────────────────────────────────────────┼───────────────────────────────┐
+      │ prior-trend NEW EXTREME beyond S[k-1]        required OPPOSING STRUCTURAL BREAK           │
+      │ (new LL below last falling low /             (break last HL→LL / last LH→HH)   neither    │
+      │  new HH above last rising high)              while potential still valid                  │
+      ▼                                              ▼                                 ▼          │
+   CANCEL / RESET                                 CONFIRMED                       remain POTENTIAL │
+   (await a new failed-continuation pivot)                                                        │
+      └──────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+The three transitions out of POTENTIAL are **mutually exclusive** and evaluated every 15m close. This is
+**`[COURSE]` structural behavior** — the literal Lesson-15 definition of when a trend has vs has not changed.
+It is **not** a performance filter, an `[RES]` heuristic, or a magnitude/energy rule.
+
+### Impact characterization (fidelity, not performance)
+
+- The flaw is **architectural**, not a one-off: the local classifier cannot enforce potential-validity for
+  *any* signal; Case 2 stayed valid by the data, not by any code enforcing it.
+- In the inspected window it exposed **1 of the 2** actionable (confirmed) reversals (Case 1).
+- The same prior-trend-resumed condition also appears in rejected events (premature 6/10, continuation 10/16)
+  but **does not change their decisions** — they are rejected regardless — so it is decision-relevant **only**
+  in the confirmed bucket.
+
+---
+
+## Issue A — SECONDARY audit defect: `failed_continuation_pivot` populated even when the pivot fails LH/HL  ` [AUDIT-ONLY] `
+
+`_trend_sequence` builds the audit `detail` **before** and **independent of** the `failed_lh` / `failed_hl`
+test, so `failed_continuation_pivot` is set to `"LH <px>"` / `"HL <px>"` for `structural[k+1]` **whenever that
+pivot exists**, regardless of whether it actually satisfies the lower-high / higher-low relationship.
+
+- **Required behavior:** `failed_continuation_pivot` must be `None` unless `S[k+1]` genuinely satisfies the
+  relationship (short: `S[k+1] ≤ S[k-1]`; long: `S[k+1] ≥ S[k-1]`).
+- **Scope:** the string is correct for both confirmed reversals but wrong for **26 of 28** rejected events in
+  the audit sample (premature 10/10; continuation 15/16) — i.e. it prints a pivot label precisely where *no
+  valid failed-continuation pivot exists*, which is misleading to a human reading the audit alone.
+- **Explicitly audit-only / decision-harmless:** the *classification* is unaffected (those events are
+  correctly `premature` / `continuation` / `reversal_state=none`). Only the human-facing audit field is wrong.
+
+---
+
+## Validation evidence (2026-09, read-only audit of `3ecd6a1`, MNQ Aug 9–28)
+
+Recorded for provenance. Not used as justification for either issue.
+
+- **No look-ahead found** in the six inspected cases: for every case, every structural pivot `_trend_sequence`
+  read was *knowable* (its `confirm_index` bar close) at or before both the confirmation-break bar and the
+  as-of decision cursor. The classifier is causally sound.
+- **Case 2** (confirmed short, Aug 25) is source-faithful: `HH/HL uptrend → LH → break last HL → LL`, potential
+  valid to the break.
+- **Case 1** (confirmed long, Aug 19) is **not** source-faithful: stale potential (prior trend resumed) +
+  same-bar degeneracy.
+- **1 of 2** actionable confirmed reversals in the window exposed the stale-potential problem (Issue B).
+- The stale/local-sequence condition also appeared in rejected (premature/continuation) events but **did not
+  affect their decisions**.
+
+---
+
+## Proposed fix (APPROVED 2026-09) — one minimal fidelity correction  ` [COURSE] `
+
+Issue B and Issue A are corrected together in a single touch of `_trend_sequence` (the audit surfacing is
+carried by `_structural_reversal`'s existing non-`reversal` path). **Skeleton-only** — no signature change, no
+15m-bars plumbing, no persisted mutable state. The engine already re-derives `confirm_ms` per 15m close, and
+`confirm_ms.structural` carries the full ordered skeleton, so the `POTENTIAL → CANCEL / CONFIRM / hold` state
+machine is re-derived faithfully at each close rather than persisted.
+
+**`_trend_sequence` gains three checks:**
+
+1. **Strict temporal ordering** — the failed-continuation pivot must form strictly after the swing it will
+   break: `S[k+1].index > S[k].index`. Fails ⇒ `degenerate`. (This is the ordering the sequence *implies*
+   — the HL forms after the LH — not an arbitrary "different bars" rule.)
+2. **Potential-survival scan** — after a qualifying prior-trend + failed-continuation pivot, scan skeleton
+   swings with `S[k+1].index < swing.index ≤ mss.confirm_index` for a prior-trend resumption **beyond the
+   prior extreme `S[k-1]`**: long ⇒ any structural **low `< S[k-1]`**; short ⇒ any structural **high
+   `> S[k-1]`**. Found ⇒ `invalidated`. The reference is `S[k-1]`, never the pivot itself.
+     - Granularity = a **confirmed structural swing** beyond `S[k-1]` (the source's "a new falling
+       low/rising high" is a pivot); **no** body-close rule is added (the course teaches none).
+     - Scan bound = **`mss.confirm_index`** (the confirmation break); behavior after confirmation is a
+       later event, not part of this reversal's validity.
+3. **Issue A** — `failed_continuation_pivot` is emitted only when `S[k+1]` actually satisfies the LH/HL
+   relation (`≤ S[k-1]` short / `≥ S[k-1]` long); otherwise `None`.
+
+**Outcomes** grow to `{reversal, premature, continuation, invalidated, degenerate, none}`; only `reversal`
+confirms. `_structural_reversal` routes `invalidated` / `degenerate` through its existing non-`reversal`
+(WATCHING) path, surfacing each as its own `classification` with `reversal_state` `cancelled` / `degenerate`.
+
+**Unchanged:** v1 (frozen); 15m scale; WHERE; ≥50% retrace; P/D side; FVG optional; stop beyond manipulation;
+target ≥2R; reachability; no STALE_PROGRESS; no displacement/energy. No new thresholds/ATR/buffers.

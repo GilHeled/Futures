@@ -694,23 +694,29 @@ _ARRAY_ACTIVE = ("unswept", "unfilled", "open", "touched", "")   # not swept / m
 
 
 def _trend_sequence(structural, mss, direction):
-    """LESSON-15 SEQUENCE classifier. A 15m MSS breaking the LAST OPPOSING structural swing is only a
-    *reversal* if the Lesson-15 sequence actually preceded it — otherwise it is a continuation or a
-    premature break, NOT a trend change. Reads the alternating 15m structural skeleton (HH/HL/LH/LL) around
-    the MSS's broken swing (kept by index) and returns (kind, detail):
+    """LESSON-15 SEQUENCE classifier as an ORDERED, STATEFUL progression (re-derived per 15m close from the
+    full skeleton, not a local point-in-time reconstruction — see ict_v2/docs/V2_GAP.md). A 15m MSS breaking
+    the LAST OPPOSING structural swing is a *reversal* only if the Lesson-15 sequence formed AND remained
+    valid up to the break. Reads the alternating 15m skeleton (HH/HL/LH/LL) and returns (kind, detail):
 
       SHORT (bearish MSS breaks a LOW):
-        'reversal'     — an established UPTREND (rising highs AND rising lows into the broken low) was
-                         followed by a LOWER HIGH (a failed new HH = the potential), and the broken low is
-                         that uptrend's last structural HL. (Confirmed vs potential is decided by mss.state.)
-        'premature'    — the uptrend's last HL is broken but NO lower-high formed first (a bare break, no
-                         Lesson-15 warning) — NOT a reversal.
-        'continuation' — the prior trend was DOWN (falling highs and lows): breaking a low just continues it.
-      LONG mirrors it (downtrend -> higher-low -> break last LH -> HH).
-      'none' — the skeleton around the break is not the expected alternating shape / too short to judge.
+        'reversal'     — an established UPTREND (rising highs AND rising lows into the broken low), then a
+                         LOWER HIGH (failed new HH = the potential) formed STRICTLY AFTER the broken HL, and
+                         no new HIGHER HIGH (beyond the prior high S[k-1]) resumed the uptrend before the
+                         break. (confirmed vs potential is decided by mss.state in _structural_reversal.)
+        'invalidated'  — a valid potential formed but the PRIOR TREND RESUMED: a new structural extreme beyond
+                         S[k-1] (short: a high > prior high; long: a low < prior low) printed between the
+                         failed-continuation pivot and the break (Lesson 15: the trend 'did not stop').
+        'degenerate'   — the failed-continuation pivot and the broken swing are the SAME 15m bar/index: no
+                         temporal LH→HL→break ordering exists (a wide outside-bar artifact, not a sequence).
+        'premature'    — the last opposing swing is broken but NO qualifying failed-continuation pivot first.
+        'continuation' — the prior trend ran the SAME way as the break.
+      LONG mirrors it (downtrend -> higher-low, strictly after -> break last LH -> HH; resumed = a new lower
+      low below the prior low). 'none' — the skeleton is not the expected alternating shape / too short.
 
-    Distinguishing these three is the whole point: 'a simple break of the most-recent opposing 15m swing is
-    not enough' — the prior opposite trend AND the failed-continuation pivot must precede the break."""
+    The invalidation reference is the PRIOR structural extreme S[k-1] (a new falling low/rising high = a
+    confirmed structural swing beyond it), NOT the failed-continuation pivot itself; the survival scan stops
+    at the confirmation break (mss.confirm_index)."""
     if not structural or mss is None:
         return ("none", {})
     bi = getattr(mss, "broken_index", None)
@@ -721,6 +727,28 @@ def _trend_sequence(structural, mss, direction):
     n = len(structural)
     px = lambda j: float(getattr(structural[j], "price"))
     kd = lambda j: getattr(structural[j], "kind", "")
+    brk = getattr(mss, "confirm_index", None)                      # the confirmation break bar (None if wick-only)
+
+    def _ordered_and_survived(ref, resume_kind):
+        """(state, resume) for a would-be reversal whose failed-continuation pivot is structural[k+1]:
+        'degenerate' if that pivot is NOT strictly after the broken swing (same bar); 'invalidated' if the
+        prior trend RESUMED (a structural `resume_kind` swing beyond `ref`) between the pivot and the break;
+        else 'reversal'. `resume` is the first resuming extreme (for the audit) or None."""
+        kp1_idx = getattr(structural[k + 1], "index", None)
+        if kp1_idx is None or kp1_idx <= bi:                       # strict temporal ordering (pivot after break-target)
+            return ("degenerate", None)
+        for s in structural:                                       # potential-survival scan, bounded by the break
+            sidx = getattr(s, "index", None)
+            if sidx is None or sidx <= kp1_idx:
+                continue
+            if brk is not None and sidx > brk:
+                break
+            if getattr(s, "kind", "") == resume_kind:
+                p = float(getattr(s, "price"))
+                if (p > ref) if resume_kind == "high" else (p < ref):
+                    return ("invalidated", round(p, 2))
+        return ("reversal", None)
+
     if direction == "short":                                       # bearish MSS breaks a LOW (uptrend's HL)
         if not (kd(k) == "low" and kd(k - 1) == "high" and kd(k - 2) == "low" and kd(k - 3) == "high"):
             return ("none", {})
@@ -730,12 +758,15 @@ def _trend_sequence(structural, mss, direction):
         H3 = px(k + 1) if (k + 1 < n and kd(k + 1) == "high") else None
         failed_lh = (H3 is not None and H3 <= H2)                  # the high after the HL is a LOWER high
         detail = {"prior_trend": ("up (HH/HL)" if prior_up else "down (LH/LL)" if prior_down else "sideways"),
-                  "failed_continuation_pivot": (f"LH {round(H3, 2)}" if H3 is not None else None),
+                  "failed_continuation_pivot": (f"LH {round(H3, 2)}" if failed_lh else None),   # only when it qualifies
                   "prior_opposing_extreme": round(H2, 2),          # the prior structural HIGH the LH failed
                   "last_structural_swing": round(L2, 2),           # the HL that gets broken -> LL
                   "break_kind": "LL"}
         if prior_up and failed_lh:
-            return ("reversal", detail)
+            state, resume = _ordered_and_survived(H2, "high")      # resumed = a new HIGHER HIGH above the prior high
+            if resume is not None:
+                detail = {**detail, "resumed_beyond_prior_extreme": resume}
+            return (state, detail)
         if prior_up:
             return ("premature", detail)                           # HL broken with no LH first
         if prior_down:
@@ -750,12 +781,15 @@ def _trend_sequence(structural, mss, direction):
     L3 = px(k + 1) if (k + 1 < n and kd(k + 1) == "low") else None
     failed_hl = (L3 is not None and L3 >= L2)                      # the low after the LH is a HIGHER low
     detail = {"prior_trend": ("down (LH/LL)" if prior_down else "up (HH/HL)" if prior_up else "sideways"),
-              "failed_continuation_pivot": (f"HL {round(L3, 2)}" if L3 is not None else None),
+              "failed_continuation_pivot": (f"HL {round(L3, 2)}" if failed_hl else None),        # only when it qualifies
               "prior_opposing_extreme": round(L2, 2),              # the prior structural LOW the HL failed
               "last_structural_swing": round(H2, 2),               # the LH that gets broken -> HH
               "break_kind": "HH"}
     if prior_down and failed_hl:
-        return ("reversal", detail)
+        state, resume = _ordered_and_survived(L2, "low")           # resumed = a new LOWER LOW below the prior low
+        if resume is not None:
+            detail = {**detail, "resumed_beyond_prior_extreme": resume}
+        return (state, detail)
     if prior_down:
         return ("premature", detail)                              # LH broken with no HL first
     if prior_up:
@@ -952,22 +986,37 @@ def execution_for_scenario(scenario, candidates=None, price=None, objectives=Non
               "entry_model": "", "usable_models": [], "price": round(price, price_dp),
               "dist_to_entry": None, "entry_role": "", "tf": getattr(scenario, "tf", "")}
 
-    # LESSON-15 SEQUENCE: a 15m break was seen in the correct half but it was NOT a Lesson-15 reversal — the
-    # prior opposite trend + failed-continuation pivot did not precede it. A 'continuation' break runs WITH
-    # the prior trend; a 'premature' break broke the last opposing swing with no failed-continuation pivot
-    # first. Either way it is NOT a structural trend change — WATCHING, no order, and the audit says so.
+    # LESSON-15 SEQUENCE: a 15m break was seen in the correct half but it was NOT a Lesson-15 reversal.
+    #   continuation — the break runs WITH the prior trend.
+    #   premature    — the last opposing swing broke with no qualifying failed-continuation pivot first.
+    #   invalidated  — a valid potential formed but the prior trend RESUMED (a new structural extreme beyond
+    #                  S[k-1]) before confirmation → the potential is cancelled (Lesson 15: it 'did not stop').
+    #   degenerate   — the failed-continuation pivot and the broken swing are the same 15m bar (no ordering).
+    # Every one is WATCHING, no order; the audit carries the classification and (for invalidated) the extreme.
     if R["state"] == "non-reversal":
         cls = R.get("classification", "non-reversal")
         seq = R.get("seq", {}) or {}
-        why = (f"a 15m break was detected (broke {R['broken_price']}) but classified {cls.upper()}, not a "
-               f"Lesson-15 reversal (prior trend {seq.get('prior_trend', '?')}, "
-               f"failed-continuation pivot {seq.get('failed_continuation_pivot') or 'none'}); no trend change - no order")
+        rstate = {"invalidated": "cancelled", "degenerate": "degenerate"}.get(cls, "none")
+        resumed = seq.get("resumed_beyond_prior_extreme")
+        if cls == "invalidated":
+            why = (f"POTENTIAL {new_struct} reversal CANCELLED — the prior trend ({seq.get('prior_trend', '?')}) "
+                   f"resumed with a new structural extreme ({resumed}) beyond its prior extreme "
+                   f"({seq.get('prior_opposing_extreme')}) before the break of {R['broken_price']}; per Lesson 15 "
+                   f"the trend did not stop, so there is no reversal - no order")
+        elif cls == "degenerate":
+            why = (f"a 15m break of {R['broken_price']} is DEGENERATE — its failed-continuation pivot and the "
+                   f"broken swing are the same 15m bar (no LH→HL→break ordering); not a Lesson-15 sequence - no order")
+        else:
+            why = (f"a 15m break was detected (broke {R['broken_price']}) but classified {cls.upper()}, not a "
+                   f"Lesson-15 reversal (prior trend {seq.get('prior_trend', '?')}, "
+                   f"failed-continuation pivot {seq.get('failed_continuation_pivot') or 'none'}); no trend change - no order")
         return {**_blank, "why": why,
                 "audit": _audit("watching", reason=f"15m break classified {cls} (not a Lesson-15 reversal)",
                                 when={"mss_id": R["mss_id"], "broken_swing": R["broken_price"],
-                                      "classification": cls, "reversal_state": "none",
+                                      "classification": cls, "reversal_state": rstate,
                                       "prior_trend": seq.get("prior_trend"),
                                       "failed_continuation_pivot": seq.get("failed_continuation_pivot"),
+                                      "resumed_beyond_prior_extreme": resumed,
                                       "last_structural_swing": seq.get("last_structural_swing"),
                                       "confirmation_break": None})}
 

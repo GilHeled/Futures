@@ -152,9 +152,10 @@ def test_execution_requires_where_then_when_then_retrace():
     from ict_v2 import pipeline as P
     sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
     objs = [_draw_obj(210)]
-    # WHERE swept (manip 100 in the discount) but NO confirmed MSS → ARMED, awaiting the WHEN
+    # WHERE swept (manip 100 in the discount) but NO confirmed MSS → WATCHING (a FORMING setup: no leg,
+    # no entry/stop/target yet — must NOT read as ARMED, which means an order is ready to place)
     r = P.execution_for_scenario(sc, [_chain("long", 100, 140, confirmed=False)], price=130, objectives=objs)
-    assert r["state"] == "armed" and "awaiting" in r["why"]
+    assert r["state"] == "watching" and r["entry"] is None and "awaiting" in r["why"]
     # WHERE + WHEN + >=50% retrace (leg 100→140, 50%=120; price 120) → TRIGGERED. Entry = the leg 50%
     # (no FVG) = 120, stop = manip extreme 100, target = the opposing draw 210.
     r = P.execution_for_scenario(sc, [_chain("long", 100, 140)], price=120, objectives=objs)

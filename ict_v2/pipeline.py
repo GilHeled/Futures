@@ -823,17 +823,21 @@ def execution_for_scenario(scenario, candidates, price=None, objectives=None, ms
         return None                                                        # watching
 
     # C3 fails — the WHERE was swept but no CONFIRMED structure shift on that chain yet (reaching a level
-    # is only a POTENTIAL reversal, Lesson 15). ARMED, awaiting the WHEN.
+    # is only a POTENTIAL reversal, Lesson 15). This is a FORMING setup: there is NO reversal leg yet, so
+    # NO entry/stop/target — it is NOT actionable and must NOT read as ARMED (armed = an order is ready to
+    # place) nor fire an alert. Surface it as WATCHING with the WHERE context; it becomes armed only once
+    # the MSS confirms and the >=50% retrace entry exists.
     if not confirmed:
         best = where_chains[0]
         awaiting = "a CONFIRMED structure shift (MSS)" if best["displaced"] else "a displacement/reversal"
         why = (f"WHERE swept at {round(best['pool'], price_dp)} in the {pd_zone} (manip "
-               f"{round(best['manip'], price_dp)}); awaiting {awaiting} ({new_struct}) - Lessons 15/16")
-        return {"state": "armed", "entry": None, "stop": None, "target": None, "rr": None,
+               f"{round(best['manip'], price_dp)}); awaiting {awaiting} ({new_struct}) before an entry "
+               f"forms - Lessons 15/16 (no order yet)")
+        return {"state": "watching", "entry": None, "stop": None, "target": None, "rr": None,
                 "order": None, "sl_order": None, "tp_order": None, "fvg_top": None, "fvg_bottom": None,
                 "entry_model": "", "usable_models": [], "price": round(price, price_dp),
                 "dist_to_entry": None, "entry_role": "", "tf": getattr(scenario, "tf", ""),
-                "why": why, "audit": _audit("armed", reason="awaiting confirmed MSS")}
+                "why": why, "audit": _audit("watching", reason="WHERE swept; awaiting confirmed MSS (no entry yet)")}
 
     # C4/C5 — take the BEST-RANKED confirmed chain (the engine's transparent ranking, NOT proximity).
     # Ambiguity (several confirmed chains) is exposed via audit.confirmed_chains, never silently tie-broken.

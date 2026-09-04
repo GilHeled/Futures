@@ -117,25 +117,35 @@ the structure shift answers *when*. **Neither alone is sufficient** (Lessons 8-1
 > catalog), 12 (FVG, the 5m/1m entry tool), 13 (NWOG), 14 (ORG). See memory
 > `project_v2_structure_entry_correction`.
 
-## 14. Entry — the faithful WHERE + WHEN sequence
-Implemented in `ict_v2/pipeline.execution_for_scenario` as five conditions, each recorded in the
-returned `audit` (auditable, like `role_of`):
-- **C1 thesis** — the active scenario (direction + dealing range). `[HTF, given]`
-- **C2 retrace** — price has pulled back into the correct **premium/discount half** (Lessons 8/9). `[COURSE]`
-- **C3 PD array = WHERE** — a course-taught PD array sits inside that zone: **FVG / fib 0.5-0.62-0.79 /
-  EQH-EQL / NWOG / ORG** (Lessons 10-14). **UNRANKED** — the course ranks no PD-array *type* above
-  another; confluence (several overlapping) only strengthens the location, and TF reliability + confluence
-  are the only orderings the course gives. `[COURSE]`
-- **C4 structure shift = WHEN** — a **confirmed local MSS** in the trade direction (Higher-High for a
-  long / Lower-Low for a short) whose reversal originated from the retracement side (Lessons 15/16). This
-  is the trigger. Momentum ("energetic move", Lesson 15) is *surfaced* as evidence, never gated on an
-  invented threshold. `[COURSE]`
-- **C5 execute** — entry = the PD-array reference; stop = **beyond the manipulation extreme** (Lesson
-  10/16); target = the opposing draw (≥ `MIN_TARGET_RR`). `[COURSE]` + `[NEC buffer]`
+## 14. Entry — the faithful CAUSAL sequence (locked 2026-09-04)
+Implemented in `ict_v2/pipeline.execution_for_scenario` as ONE causal chain (WHERE → WHEN → retrace-
+entry), each step recorded in the returned `audit` (auditable, like `role_of`). The pieces must be
+**causally linked on one chain**, not merely co-located in the same premium/discount half:
+- **C1 thesis** — the active scenario (direction + dealing range + draw). `[HTF, given]`
+- **C2 WHERE** — an actual **interaction** at a liquidity location in the correct P/D half: a
+  manipulation **SWEEP** (raid + rejection), **not proximity** to a level (Lessons 6/16). Best-ranked by
+  the engine's existing transparent sweep ranking; several qualifying → count exposed in `audit`, never a
+  "nearest" tie-break. `[COURSE]`
+- **C3 WHEN** — a **confirmed MSS on the SAME chain** (sweep→displacement→MSS): the structure shift
+  *originates from that interaction* (Lessons 15/16). Not "an MSS somewhere in the half." `[COURSE]`
+- **C4 retrace** — the confirming **leg = the displacement** (manipulation extreme → impulse extreme) has
+  retraced **≥50%** (Lesson 8 pullback DEPTH) **AND** the entry is on the correct **P/D side** of the
+  H4/H1 range (Lesson 9). Two distinct 50%s, **both** required. **NOT** 0.62/0.79 — a 55% retrace is
+  valid; 0.62/0.79 are preferred reaction levels within the half, never a boundary. `[COURSE]`
+- **C5 execute** — entry = a **same-leg FVG CE** if one sits in the C4 zone (confluence / sharper), **ELSE
+  the shallowest valid ≥50%+P/D level** (the leg 50% or the equilibrium edge). **FVG is OPTIONAL — no FVG
+  ≠ no trade.** Never the swept WHERE reference. Stop = **beyond the manipulation extreme**; target = the
+  nearest opposing draw ≥ `MIN_TARGET_RR` (**2R `[COURSE]`**, verbally taught, owner-confirmed). `[COURSE]`
 
-The `structure` **entry** model (entry at the MSS confirmation close) is retired from the default set —
-the structure shift is consumed as C4 above, not as an entry at the reversal extreme. **Order Blocks /
-Breakers / Mitigation Blocks / OTE-as-a-named-model are NOT in the course** and are intentionally absent.
+Trigger only when price has actually retraced to the entry (the bar-level reachability gate finalizes the
+fill — **no back-dated fills**); a missed entry stays **armed** and the scenario survives. `STALE_PROGRESS`
+is removed. **killzone = context/quality, never an execution veto** (Lesson 5 = recommended hours).
+Retired: the old "PD array in the half by proximity" WHERE, the "nearest array" pick, and using the swept
+WHERE reference as the entry price. **Order Blocks / Breakers / OTE-as-a-named-model are NOT in the course**
+and are absent. **Scope note:** the mechanized WHERE interaction is the manipulation *sweep* (the course's
+primary PO3 model); FVG/fib/NWOG/ORG appear as **confluence** at the WHERE/entry (surfaced in `audit`), not
+as independently reaction-detected WHEREs — a deliberate limit (no invented reaction detectors), flagged for
+review rather than filled with a guess.
 
 ## 15. Stop `[COURSE]` + `[NEC buffer]`
 Beyond structural invalidation = beyond max(true manipulation extreme, swept-zone outer

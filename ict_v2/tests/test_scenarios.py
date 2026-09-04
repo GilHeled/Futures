@@ -245,6 +245,104 @@ def test_execution_marks_a_beyond_stop_setup_invalidated():
     assert _exec(sc, 185, objs, _confirm_ms("short", 200, 160))["state"] == "triggered"
 
 
+# ---- LESSON-15 SEQUENCE enforcement --------------------------------------------------------------
+# A 15m MSS breaking the LAST opposing structural swing is a REVERSAL only after the Lesson-15 sequence:
+# an established OPPOSITE trend, then a FAILED-continuation pivot (a lower-high for a short after an uptrend
+# / a higher-low for a long after a downtrend), and only THEN the break of that trend's last structural
+# swing. A bare break (no failed-continuation pivot first) is PREMATURE; a break that runs WITH the prior
+# trend is a CONTINUATION. Neither is a confirmed structural reversal. The skeleton is the 15m structural
+# read carried on `confirm_ms.structural`.
+
+def _sw(kind, price, index):
+    return _N(kind=kind, price=price, index=index)
+
+
+def _confirm_ms_seq(direction, structural, broken_index, manip, impulse, confirmed=True, fvg=None):
+    """`_confirm_ms` + the 15m STRUCTURAL skeleton so the Lesson-15 SEQUENCE gate is live. `structural` =
+    list of (kind, price, index) (alternating high/low); `broken_index` = the index of the swing the 15m MSS
+    breaks (the prior trend's last structural swing when the sequence is valid)."""
+    pol = "bullish" if direction == "long" else "bearish"
+    skel = [_sw(k, p, i) for (k, p, i) in structural]
+    broken_price = next(p for (k, p, i) in structural if i == broken_index)
+    sw = _N(id="SW", extreme=manip, pool_price=manip)
+    d = _N(id="D", start_price=manip, end_price=impulse, depends_on=("SW",))
+    m = _N(id="MSS", direction=pol, state=("confirmed" if confirmed else "candidate"),
+           broken_price=broken_price, broken_index=broken_index, confirm_index=9, depends_on=("D",))
+    return _N(ranked_mss=[_R(m)], ranked_displacements=[_R(d)], ranked_sweeps=[_R(sw)],
+              ranked_fvgs=([_R(fvg)] if fvg is not None else []), classified=[], structural=skel)
+
+
+def test_seq_short_uptrend_break_low_with_no_lower_high_first_must_not_confirm():
+    """(1) Uptrend (HH/HL), then the last HL is broken WITHOUT a lower-high forming first → PREMATURE, NOT a
+    Lesson-15 short reversal. Even a 15m body-close break must NOT confirm — watching, no order."""
+    sc = _N(direction="short", entry_zone=(50, 100), draw=_N(price=20), tf="1m")
+    objs = [_draw_obj(20, side="low")]
+    skel = [("high", 70, 0), ("low", 50, 1), ("high", 105, 2), ("low", 60, 3)]   # uptrend, no LH after the HL
+    r = _exec(sc, 80, objs, _confirm_ms_seq("short", skel, 3, manip=100, impulse=60))
+    assert r["state"] == "watching" and r["entry"] is None
+    a = r["audit"]
+    assert a["conditions"]["C3_confirmed_structural_reversal"] is False
+    assert a["when"]["classification"] == "premature" and a["when"]["reversal_state"] == "none"
+
+
+def test_seq_long_downtrend_break_high_with_no_higher_low_first_must_not_confirm():
+    """(2) Downtrend (LH/LL), then the last LH is broken WITHOUT a higher-low forming first → PREMATURE, NOT
+    a Lesson-15 long reversal. Must NOT confirm."""
+    sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
+    objs = [_draw_obj(210)]
+    skel = [("low", 130, 0), ("high", 150, 1), ("low", 95, 2), ("high", 140, 3)]  # downtrend, no HL after the LH
+    r = _exec(sc, 120, objs, _confirm_ms_seq("long", skel, 3, manip=100, impulse=140))
+    assert r["state"] == "watching" and r["entry"] is None
+    a = r["audit"]
+    assert a["conditions"]["C3_confirmed_structural_reversal"] is False
+    assert a["when"]["classification"] == "premature" and a["when"]["reversal_state"] == "none"
+
+
+def test_seq_short_full_sequence_uptrend_lower_high_break_last_hl_confirms():
+    """(3) Full Lesson-15 short sequence: uptrend HH/HL → a LOWER HIGH (failed new HH) → body-close break of
+    the last structural HL → LL. This is a CONFIRMED structural reversal (and triggers on the >=50% retrace)."""
+    sc = _N(direction="short", entry_zone=(50, 100), draw=_N(price=20), tf="1m")
+    objs = [_draw_obj(20, side="low")]
+    # uptrend H1=70,L1=50,H2=105,L2(HL)=60 ; then H3=100 (LH<105) ; break the HL 60 down
+    skel = [("high", 70, 0), ("low", 50, 1), ("high", 105, 2), ("low", 60, 3), ("high", 100, 4)]
+    r = _exec(sc, 80, objs, _confirm_ms_seq("short", skel, 3, manip=100, impulse=60))
+    assert r["state"] == "triggered" and r["entry"] == 80 and r["stop"] == 100
+    w = r["audit"]["when"]
+    assert r["audit"]["conditions"]["C3_confirmed_structural_reversal"] is True
+    assert w["classification"] == "reversal" and w["reversal_state"] == "confirmed"
+    assert w["prior_trend"] == "up (HH/HL)" and w["failed_continuation_pivot"] == "LH 100.0"
+    assert w["last_structural_swing"] == 60 and w["confirmation_break"] == 60
+
+
+def test_seq_long_full_sequence_downtrend_higher_low_break_last_lh_confirms():
+    """(4) Full Lesson-15 long sequence: downtrend LH/LL → a HIGHER LOW (failed new LL) → body-close break of
+    the last structural LH → HH. CONFIRMED structural reversal (triggers on the >=50% retrace)."""
+    sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
+    objs = [_draw_obj(210)]
+    # downtrend L0=130,H1=150,L1=95,H2(LH)=140 ; then L2=100 (HL>95) ; break the LH 140 up
+    skel = [("low", 130, 0), ("high", 150, 1), ("low", 95, 2), ("high", 140, 3), ("low", 100, 4)]
+    r = _exec(sc, 120, objs, _confirm_ms_seq("long", skel, 3, manip=100, impulse=140))
+    assert r["state"] == "triggered" and r["entry"] == 120 and r["stop"] == 100
+    w = r["audit"]["when"]
+    assert r["audit"]["conditions"]["C3_confirmed_structural_reversal"] is True
+    assert w["classification"] == "reversal" and w["reversal_state"] == "confirmed"
+    assert w["prior_trend"] == "down (LH/LL)" and w["failed_continuation_pivot"] == "HL 100.0"
+    assert w["last_structural_swing"] == 140 and w["confirmation_break"] == 140
+
+
+def test_seq_continuation_break_in_prior_trend_is_not_mislabeled_a_reversal():
+    """(5) A break that CONTINUES the prior trend (a low broken while the 15m is already making lower highs
+    AND lower lows) must be classified CONTINUATION, never a reversal — no confirmation, watching."""
+    sc = _N(direction="short", entry_zone=(50, 100), draw=_N(price=20), tf="1m")
+    objs = [_draw_obj(20, side="low")]
+    skel = [("high", 105, 0), ("low", 70, 1), ("high", 100, 2), ("low", 50, 3)]   # downtrend; the low 50 is a LL
+    r = _exec(sc, 80, objs, _confirm_ms_seq("short", skel, 3, manip=100, impulse=50))
+    assert r["state"] == "watching" and r["entry"] is None
+    a = r["audit"]
+    assert a["conditions"]["C3_confirmed_structural_reversal"] is False
+    assert a["when"]["classification"] == "continuation" and a["when"]["reversal_state"] == "none"
+
+
 # ---- sticky trigger + outcome tracking: once triggered it stays open until stop/target -----------
 from datetime import datetime, timezone as _tz
 

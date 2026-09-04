@@ -693,6 +693,76 @@ def _pick_target(direction, entry, risk, objectives, draw_px, min_rr, price_dp=2
 _ARRAY_ACTIVE = ("unswept", "unfilled", "open", "touched", "")   # not swept / mitigated / closed-spent
 
 
+def _trend_sequence(structural, mss, direction):
+    """LESSON-15 SEQUENCE classifier. A 15m MSS breaking the LAST OPPOSING structural swing is only a
+    *reversal* if the Lesson-15 sequence actually preceded it — otherwise it is a continuation or a
+    premature break, NOT a trend change. Reads the alternating 15m structural skeleton (HH/HL/LH/LL) around
+    the MSS's broken swing (kept by index) and returns (kind, detail):
+
+      SHORT (bearish MSS breaks a LOW):
+        'reversal'     — an established UPTREND (rising highs AND rising lows into the broken low) was
+                         followed by a LOWER HIGH (a failed new HH = the potential), and the broken low is
+                         that uptrend's last structural HL. (Confirmed vs potential is decided by mss.state.)
+        'premature'    — the uptrend's last HL is broken but NO lower-high formed first (a bare break, no
+                         Lesson-15 warning) — NOT a reversal.
+        'continuation' — the prior trend was DOWN (falling highs and lows): breaking a low just continues it.
+      LONG mirrors it (downtrend -> higher-low -> break last LH -> HH).
+      'none' — the skeleton around the break is not the expected alternating shape / too short to judge.
+
+    Distinguishing these three is the whole point: 'a simple break of the most-recent opposing 15m swing is
+    not enough' — the prior opposite trend AND the failed-continuation pivot must precede the break."""
+    if not structural or mss is None:
+        return ("none", {})
+    bi = getattr(mss, "broken_index", None)
+    k = next((j for j, s in enumerate(structural)
+              if getattr(s, "index", None) == bi), None)
+    if k is None or k < 3:                                          # need H1,L1,H2,L2 (…,k-3,k-2,k-1,k)
+        return ("none", {})
+    n = len(structural)
+    px = lambda j: float(getattr(structural[j], "price"))
+    kd = lambda j: getattr(structural[j], "kind", "")
+    if direction == "short":                                       # bearish MSS breaks a LOW (uptrend's HL)
+        if not (kd(k) == "low" and kd(k - 1) == "high" and kd(k - 2) == "low" and kd(k - 3) == "high"):
+            return ("none", {})
+        L1, L2, H1, H2 = px(k - 2), px(k), px(k - 3), px(k - 1)
+        prior_up = (L1 < L2) and (H1 < H2)                         # rising lows AND rising highs (HH/HL)
+        prior_down = (L1 > L2) and (H1 > H2)
+        H3 = px(k + 1) if (k + 1 < n and kd(k + 1) == "high") else None
+        failed_lh = (H3 is not None and H3 <= H2)                  # the high after the HL is a LOWER high
+        detail = {"prior_trend": ("up (HH/HL)" if prior_up else "down (LH/LL)" if prior_down else "sideways"),
+                  "failed_continuation_pivot": (f"LH {round(H3, 2)}" if H3 is not None else None),
+                  "prior_opposing_extreme": round(H2, 2),          # the prior structural HIGH the LH failed
+                  "last_structural_swing": round(L2, 2),           # the HL that gets broken -> LL
+                  "break_kind": "LL"}
+        if prior_up and failed_lh:
+            return ("reversal", detail)
+        if prior_up:
+            return ("premature", detail)                           # HL broken with no LH first
+        if prior_down:
+            return ("continuation", detail)
+        return ("none", detail)
+    # long: bullish MSS breaks a HIGH (the downtrend's last LH)
+    if not (kd(k) == "high" and kd(k - 1) == "low" and kd(k - 2) == "high" and kd(k - 3) == "low"):
+        return ("none", {})
+    H1, H2, L1, L2 = px(k - 2), px(k), px(k - 3), px(k - 1)
+    prior_down = (H1 > H2) and (L1 > L2)                           # falling highs AND falling lows (LH/LL)
+    prior_up = (H1 < H2) and (L1 < L2)
+    L3 = px(k + 1) if (k + 1 < n and kd(k + 1) == "low") else None
+    failed_hl = (L3 is not None and L3 >= L2)                      # the low after the LH is a HIGHER low
+    detail = {"prior_trend": ("down (LH/LL)" if prior_down else "up (HH/HL)" if prior_up else "sideways"),
+              "failed_continuation_pivot": (f"HL {round(L3, 2)}" if L3 is not None else None),
+              "prior_opposing_extreme": round(L2, 2),              # the prior structural LOW the HL failed
+              "last_structural_swing": round(H2, 2),               # the LH that gets broken -> HH
+              "break_kind": "HH"}
+    if prior_down and failed_hl:
+        return ("reversal", detail)
+    if prior_down:
+        return ("premature", detail)                              # LH broken with no HL first
+    if prior_up:
+        return ("continuation", detail)
+    return ("none", detail)
+
+
 def _structural_reversal(confirm_ms, direction, zone, price_dp):
     """C2/C3 — the STRUCTURAL trend change on the HIGHER structural timeframe (the 15m confirm read; the
     course's floor is '>=15m', Lesson 6). A 15m MSS breaks the LAST OPPOSING 15m STRUCTURAL swing — a
@@ -721,7 +791,14 @@ def _structural_reversal(confirm_ms, direction, zone, price_dp):
         if sw2 is not None:
             flag[getattr(sw2, "index", None)] = (bool(getattr(cs, "dominant", False)),
                                                  bool(getattr(cs, "protected", False)))
-    best_conf, best_pot = None, None
+    # LESSON-15 SEQUENCE GATE. A direction-matching 15m MSS breaking the last opposing swing is only a
+    # REVERSAL if the Lesson-15 sequence preceded the break (prior opposite trend -> failed-continuation
+    # pivot -> break the last structural swing). Otherwise it is a CONTINUATION or a PREMATURE break, never
+    # a confirmed structural reversal. The skeleton is the 15m structural read; if it is unavailable (e.g. a
+    # unit fixture that supplies no skeleton) the sequence cannot be judged and the break is taken at face
+    # value (live always carries a structural skeleton, so the gate is always active in the engine).
+    structural = getattr(confirm_ms, "structural", None) or []
+    best_conf, best_pot, non_rev = None, None, None
     for r in getattr(confirm_ms, "ranked_mss", []):
         m = r.item
         if getattr(m, "direction", "") != want:
@@ -735,17 +812,35 @@ def _structural_reversal(confirm_ms, direction, zone, price_dp):
             manip = getattr(d, "start_price", None)
         if manip is None or not (lo <= float(manip) <= hi):     # WHERE must interact inside the correct half
             continue
-        rec = (m, d, sw, float(manip))
+        if structural:
+            seq_kind, seq_detail = _trend_sequence(structural, m, direction)
+        else:
+            seq_kind, seq_detail = ("reversal", {"prior_trend": "(no 15m skeleton in this read)",
+                                                 "failed_continuation_pivot": None,
+                                                 "last_structural_swing": round(float(getattr(m, "broken_price", 0.0)), price_dp),
+                                                 "break_kind": ("HH" if direction == "long" else "LL")})
+        rec = (m, d, sw, float(manip), seq_detail)
+        if seq_kind != "reversal":                              # continuation / premature / none — NOT a reversal
+            if non_rev is None:
+                non_rev = (m, d, sw, float(manip), seq_kind, seq_detail)
+            continue
         st = getattr(m, "state", "")
-        if st == "confirmed":
+        if st == "confirmed":                                  # body close broke the last structural swing = LL/HH
             if best_conf is None or (getattr(m, "confirm_index", -1) or -1) > (getattr(best_conf[0], "confirm_index", -1) or -1):
                 best_conf = rec
         elif st in ("candidate", "potential") and best_pot is None:
-            best_pot = rec
+            best_pot = rec                                     # LH/HL formed, break not a body close yet -> potential
     chosen = best_conf or best_pot
     if chosen is None:
+        # No Lesson-15 reversal. If a break was seen but classified continuation/premature, surface WHY so
+        # the audit shows the engine detected a 15m break and rejected it as not-a-reversal (WATCHING).
+        if non_rev is not None:
+            m, d, sw, manip, seq_kind, seq_detail = non_rev
+            return {"state": "non-reversal", "classification": seq_kind, "seq": seq_detail, "manip": manip,
+                    "broken_price": round(float(getattr(m, "broken_price", 0.0)), price_dp),
+                    "mss_id": getattr(m, "id", "")}
         return None
-    m, d, sw, manip = chosen
+    m, d, sw, manip, seq_detail = chosen
     dom, prot = flag.get(getattr(m, "broken_index", None), (False, False))
     did = getattr(d, "id", None)
     fvgs = [r.item for r in getattr(confirm_ms, "ranked_fvgs", [])
@@ -754,7 +849,7 @@ def _structural_reversal(confirm_ms, direction, zone, price_dp):
     return {"state": ("confirmed" if best_conf else "potential"), "manip": manip,
             "leg_a": float(getattr(d, "start_price", manip)), "leg_b": float(getattr(d, "end_price", manip)),
             "broken_price": round(float(getattr(m, "broken_price", 0.0)), price_dp),
-            "broken_dominant": dom, "broken_protected": prot,
+            "broken_dominant": dom, "broken_protected": prot, "seq": seq_detail, "classification": "reversal",
             "pool": float(getattr(sw, "pool_price", manip)) if sw is not None else float(manip),
             "mss_id": getattr(m, "id", ""), "fvgs": fvgs}
 
@@ -852,19 +947,47 @@ def execution_for_scenario(scenario, candidates=None, price=None, objectives=Non
     if R is None:
         return None                                                        # watching
 
+    _blank = {"state": "watching", "entry": None, "stop": None, "target": None, "rr": None,
+              "order": None, "sl_order": None, "tp_order": None, "fvg_top": None, "fvg_bottom": None,
+              "entry_model": "", "usable_models": [], "price": round(price, price_dp),
+              "dist_to_entry": None, "entry_role": "", "tf": getattr(scenario, "tf", "")}
+
+    # LESSON-15 SEQUENCE: a 15m break was seen in the correct half but it was NOT a Lesson-15 reversal — the
+    # prior opposite trend + failed-continuation pivot did not precede it. A 'continuation' break runs WITH
+    # the prior trend; a 'premature' break broke the last opposing swing with no failed-continuation pivot
+    # first. Either way it is NOT a structural trend change — WATCHING, no order, and the audit says so.
+    if R["state"] == "non-reversal":
+        cls = R.get("classification", "non-reversal")
+        seq = R.get("seq", {}) or {}
+        why = (f"a 15m break was detected (broke {R['broken_price']}) but classified {cls.upper()}, not a "
+               f"Lesson-15 reversal (prior trend {seq.get('prior_trend', '?')}, "
+               f"failed-continuation pivot {seq.get('failed_continuation_pivot') or 'none'}); no trend change - no order")
+        return {**_blank, "why": why,
+                "audit": _audit("watching", reason=f"15m break classified {cls} (not a Lesson-15 reversal)",
+                                when={"mss_id": R["mss_id"], "broken_swing": R["broken_price"],
+                                      "classification": cls, "reversal_state": "none",
+                                      "prior_trend": seq.get("prior_trend"),
+                                      "failed_continuation_pivot": seq.get("failed_continuation_pivot"),
+                                      "last_structural_swing": seq.get("last_structural_swing"),
+                                      "confirmation_break": None})}
+
     # C3 fails — a 15m reversal is only POTENTIAL (candidate MSS / wick), not a CONFIRMED structural trend
     # change (no 15m body close through the last opposing structural swing yet). FORMING: no entry/stop/
     # target, NOT actionable — WATCHING, no alert. Becomes armed only once the 15m reversal confirms.
     if R["state"] != "confirmed":
+        seq = R.get("seq", {}) or {}
         why = (f"POTENTIAL {new_struct} reversal on the 15m (manip {round(R['manip'], price_dp)} in the "
-               f"{pd_zone}); awaiting a CONFIRMED break of the last 15m structural swing (Lessons 6/15) - no order yet")
-        return {"state": "watching", "entry": None, "stop": None, "target": None, "rr": None,
-                "order": None, "sl_order": None, "tp_order": None, "fvg_top": None, "fvg_bottom": None,
-                "entry_model": "", "usable_models": [], "price": round(price, price_dp),
-                "dist_to_entry": None, "entry_role": "", "tf": getattr(scenario, "tf", ""),
-                "why": why, "audit": _audit("watching", reason="15m reversal only potential (not confirmed)",
-                                            when={"mss_id": R["mss_id"], "broken_swing": R["broken_price"],
-                                                  "state": "potential"})}
+               f"{pd_zone}); Lesson-15 sequence present (prior trend {seq.get('prior_trend', '?')}, "
+               f"failed-continuation pivot {seq.get('failed_continuation_pivot') or 'none'}) but awaiting a "
+               f"CONFIRMED body-close break of the last 15m structural swing (Lessons 6/15) - no order yet")
+        return {**_blank, "why": why,
+                "audit": _audit("watching", reason="15m reversal only potential (not confirmed)",
+                                when={"mss_id": R["mss_id"], "broken_swing": R["broken_price"],
+                                      "classification": "reversal", "reversal_state": "potential",
+                                      "prior_trend": seq.get("prior_trend"),
+                                      "failed_continuation_pivot": seq.get("failed_continuation_pivot"),
+                                      "last_structural_swing": seq.get("last_structural_swing"),
+                                      "confirmation_break": None})}
 
     # C4/C5 — the confirmed 15m reversal's leg + retrace entry (structural leg; 1m only fills it).
     ch = R
@@ -915,9 +1038,14 @@ def execution_for_scenario(scenario, candidates=None, price=None, objectives=Non
                       where={"pool": round(ch["pool"], price_dp), "manip": round(ch["manip"], price_dp)},
                       when={"mss_id": ch["mss_id"], "kind": new_struct, "broken_swing": ch["broken_price"],
                             "broken_dominant": ch["broken_dominant"], "broken_protected": ch["broken_protected"],
-                            "accepted": True,
-                            "rule": "confirmed 15m structural reversal — a body close broke the last opposing "
-                                    "15m STRUCTURAL swing (meaningful by scale, Lessons 6/15); "
+                            "accepted": True, "classification": "reversal", "reversal_state": "confirmed",
+                            "prior_trend": (ch.get("seq") or {}).get("prior_trend"),
+                            "failed_continuation_pivot": (ch.get("seq") or {}).get("failed_continuation_pivot"),
+                            "last_structural_swing": (ch.get("seq") or {}).get("last_structural_swing"),
+                            "confirmation_break": ch["broken_price"],
+                            "rule": "confirmed 15m structural reversal — an established opposite trend, then a "
+                                    "failed-continuation pivot (LH/HL), then a body close broke the last "
+                                    "opposing 15m STRUCTURAL swing (Lesson-15 sequence, scale Lesson 6); "
                                     f"dominant/protected flags are metadata only (here: {meta})"},
                       reversal_leg={"low": leg_low, "high": leg_high,
                                     "mid_50pct": round((leg_low + leg_high) / 2.0, price_dp)},

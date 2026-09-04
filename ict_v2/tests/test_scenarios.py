@@ -132,17 +132,38 @@ def _draw_obj(price, side="high"):
               label=("BSL" if side == "high" else "SSL"), to_dict=lambda: {"kind": "swing", "price": price})
 
 
-def _chain(direction="long", manip=100, impulse=140, confirmed=True, fvg=None):
+def _chain(direction="long", manip=100, impulse=140, confirmed=True, fvg=None, significant=True):
     """A causal reversal chain: sweep (manipulation at `manip`, the WHERE) → displacement (manip→impulse,
     the confirming leg) → MSS (confirmed?) → optional same-leg FVG. Long: manip is the low, impulse the
-    high; short mirrors."""
+    high; short mirrors. `significant` sets whether the MSS broke a dominant/protected swing (Lessons 6/15);
+    False = broke only a minor swing (should be rejected)."""
     pol = "bullish" if direction == "long" else "bearish"
     sw = _N(extreme=manip, pool_price=manip, id="SW", direction=pol)
     disp = _N(start_price=manip, end_price=impulse, net=abs(impulse - manip), span=5, id="D",
               depends_on=("SW",))
     mss = _N(state=("confirmed" if confirmed else "candidate"), direction=pol, confirm_index=9,
-             broken_price=impulse, acceptance=1.0, id="MSS", depends_on=("D",))
+             broken_price=impulse, broken_index=3, acceptance=1.0, id="MSS", depends_on=("D",),
+             broken_dominant=bool(significant), broken_protected=False)
     return _N(direction=direction, sweep=sw, displacement=disp, mss=mss, entry_obj=_N(source=fvg), tf="1m")
+
+
+def test_minor_swing_mss_is_rejected_significant_required():
+    """FIDELITY (Lessons 6/15, threshold-free): a CONFIRMED MSS that broke only a MINOR swing (not dominant
+    nor protected) is NOT the meaningful structural reversal — rejected (watching), never triggered. The
+    audit records the broken-swing significance and the accept/reject reason. A dominant/protected break
+    proceeds."""
+    from ict_v2 import pipeline as P
+    sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
+    objs = [_draw_obj(210)]
+    # confirmed MSS but broke a MINOR swing → rejected → WATCHING (not triggered), audit says why
+    r = P.execution_for_scenario(sc, [_chain("long", 100, 140, significant=False)], price=120, objectives=objs)
+    assert r["state"] == "watching" and "MINOR swing" in r["why"]
+    assert r["audit"]["when"]["accepted"] is False and r["audit"]["rejected_minor_mss"] == 1
+    assert r["audit"]["when"]["broken_dominant"] is False and r["audit"]["when"]["broken_protected"] is False
+    # broke a DOMINANT (significant) swing → triggered; audit records the accepted significance
+    r2 = P.execution_for_scenario(sc, [_chain("long", 100, 140, significant=True)], price=120, objectives=objs)
+    assert r2["state"] == "triggered" and r2["audit"]["when"]["accepted"] is True
+    assert r2["audit"]["when"]["broken_dominant"] is True and r2["audit"]["conditions"]["C3_confirmed_significant_mss"]
 
 
 def test_execution_requires_where_then_when_then_retrace():
@@ -164,7 +185,7 @@ def test_execution_requires_where_then_when_then_retrace():
     assert P.execution_for_scenario(sc, [_chain("long", 160, 200)], price=120, objectives=objs) is None
     # AUDITABLE: WHERE (the swept manip) / WHEN (the MSS) / the reversal leg + its 50% are recorded
     a = r["audit"]
-    assert a["conditions"]["C2_where_sweep"] and a["conditions"]["C3_confirmed_mss"] \
+    assert a["conditions"]["C2_where_sweep"] and a["conditions"]["C3_confirmed_significant_mss"] \
         and a["conditions"]["C4_retrace_50_and_pd"]
     assert a["where"]["manip"] == 100 and a["reversal_leg"]["mid_50pct"] == 120
 

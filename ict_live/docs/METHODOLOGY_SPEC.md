@@ -126,8 +126,12 @@ entry), each step recorded in the returned `audit` (auditable, like `role_of`). 
   manipulation **SWEEP** (raid + rejection), **not proximity** to a level (Lessons 6/16). Best-ranked by
   the engine's existing transparent sweep ranking; several qualifying → count exposed in `audit`, never a
   "nearest" tie-break. `[COURSE]`
-- **C3 WHEN** — a **confirmed MSS on the SAME chain** (sweep→displacement→MSS): the structure shift
-  *originates from that interaction* (Lessons 15/16). Not "an MSS somewhere in the half." `[COURSE]`
+- **C3 WHEN** — a **confirmed MSS on the SAME chain** (sweep→displacement→MSS) that **breaks a
+  *significant* swing** — one the significance layer marks `dominant` (degree-2 extreme) or `protected`
+  (standing unbroken extreme). A mechanically-confirmed MSS against a **minor** swing is rejected: it is
+  not the meaningful/energetic reversal the course reserves for significant swings (Lessons 6/15). This is
+  **relational and threshold-free** (no point/ATR/leg-size minimum). The audit records the broken-swing
+  price, `dominant`, `protected`, and the accept/reject reason. `[COURSE]`
 - **C4 retrace** — the confirming **leg = the displacement** (manipulation extreme → impulse extreme) has
   retraced **≥50%** (Lesson 8 pullback DEPTH) **AND** the entry is on the correct **P/D side** of the
   H4/H1 range (Lesson 9). Two distinct 50%s, **both** required. **NOT** 0.62/0.79 — a 55% retrace is

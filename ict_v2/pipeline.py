@@ -693,14 +693,26 @@ def _pick_target(direction, entry, risk, objectives, draw_px, min_rr, price_dp=2
 _ARRAY_ACTIVE = ("unswept", "unfilled", "open", "touched", "")   # not swept / mitigated / closed-spent
 
 
-def _reversal_chains(scenario, candidates, price_dp):
+def _reversal_chains(scenario, candidates, ms, price_dp):
     """C2/C3 — the causal reversal chains (manipulation SWEEP -> displacement -> MSS -> same-leg FVG) for
     the scenario's direction, in the engine's EXISTING transparent ranked order (candidates arrive ranked
     from generate_candidates; NOT re-sorted by proximity). Each chain is a dict carrying the manipulation
     extreme (the WHERE), the confirming leg (displacement start->end), whether its MSS is CONFIRMED, and
-    any same-leg FVG. A no-FVG chain is still a chain (its MSS/leg are intact) so no-FVG setups execute."""
+    any same-leg FVG. A no-FVG chain is still a chain (its MSS/leg are intact) so no-FVG setups execute.
+
+    SIGNIFICANCE GATE (course-grounded, threshold-free, Lessons 6/15): the MSS confirmation must break a
+    swing the existing significance layer marks `dominant` (a degree-2 structural extreme) or `protected`
+    (the standing unbroken extreme). Breaking a MINOR swing is a mechanically-valid MSS but NOT the
+    meaningful/energetic structural reversal the course reserves for significant swings. The swing is
+    looked up by `MSS.broken_index` in `ms.classified`; when significance is unavailable (no ms) the chain
+    is treated as significant (the live engine always supplies ms, so the gate is always enforced there)."""
     dirn = scenario.direction
     want = "bullish" if dirn == "long" else "bearish"
+    sig_by_idx = {}                                              # swing index -> ClassifiedSwing (dominant/protected)
+    for cs in (getattr(ms, "classified", None) or []):
+        sw2 = getattr(cs, "swing", None)
+        if sw2 is not None:
+            sig_by_idx[getattr(sw2, "index", None)] = cs
     out = []
     for c in (candidates or []):
         if getattr(c, "direction", "") != dirn:
@@ -717,6 +729,16 @@ def _reversal_chains(scenario, candidates, price_dp):
             continue
         mss_conf = (mss is not None and getattr(mss, "state", "") == "confirmed"
                     and getattr(mss, "direction", "") == want)
+        # significance of the BROKEN swing: ms.classified (live) else flags on the mss (tests) else unknown
+        cs = sig_by_idx.get(getattr(mss, "broken_index", None)) if mss is not None else None
+        if cs is not None:
+            dom, prot, known = bool(getattr(cs, "dominant", False)), bool(getattr(cs, "protected", False)), True
+        else:
+            fd = getattr(mss, "broken_dominant", None) if mss is not None else None
+            fp = getattr(mss, "broken_protected", None) if mss is not None else None
+            known = fd is not None or fp is not None
+            dom, prot = bool(fd), bool(fp)
+        significant = (dom or prot) if known else True           # unknown -> don't block (engine always knows)
         fvgs = []
         src = getattr(getattr(c, "entry_obj", None), "source", None)   # the v1-ranked same-leg entry FVG
         if src is not None and getattr(src, "status", "") != "mitigated":
@@ -726,6 +748,9 @@ def _reversal_chains(scenario, candidates, price_dp):
                     "leg_b": (float(getattr(disp, "end_price")) if disp is not None else None),
                     "displaced": disp is not None, "mss_confirmed": mss_conf,
                     "mss_id": (getattr(mss, "id", "") if mss is not None else ""),
+                    "broken_price": (round(float(getattr(mss, "broken_price")), price_dp)
+                                     if mss is not None and getattr(mss, "broken_price", None) is not None else None),
+                    "broken_dominant": dom, "broken_protected": prot, "significant": significant,
                     "pool": float(getattr(sw, "pool_price", manip)), "fvgs": fvgs})
     return out
 
@@ -805,16 +830,21 @@ def execution_for_scenario(scenario, candidates, price=None, objectives=None, ms
         return p is not None and lo <= p <= hi
 
     # C2 — reversal chains whose WHERE (the manipulation extreme) interacted inside the correct P/D half.
-    chains = _reversal_chains(scenario, candidates, price_dp)
+    chains = _reversal_chains(scenario, candidates, ms, price_dp)
     where_chains = [ch for ch in chains if in_half(ch["manip"])]           # ranked order preserved
-    confirmed = [ch for ch in where_chains if ch["mss_confirmed"] and ch["displaced"]]   # C3
+    # C3 = a CONFIRMED MSS on that chain that broke a SIGNIFICANT swing (dominant OR protected, Lessons
+    # 6/15) — a mechanically-confirmed MSS against a MINOR swing does NOT qualify as the meaningful reversal.
+    confirmed = [ch for ch in where_chains if ch["mss_confirmed"] and ch["significant"] and ch["displaced"]]
+    insignificant = [ch for ch in where_chains                            # confirmed but broke only a minor swing
+                     if ch["mss_confirmed"] and ch["displaced"] and not ch["significant"]]
 
     def _audit(state, **extra):
         a = {"pd_zone": pd_zone, "pd_zone_range": [round(lo, price_dp), round(hi, price_dp)],
              "conditions": {"C2_where_sweep": bool(where_chains),
-                            "C3_confirmed_mss": bool(confirmed),
+                            "C3_confirmed_significant_mss": bool(confirmed),
                             "C4_retrace_50_and_pd": None, "C5_geometry": None},
-             "where_chains": len(where_chains), "confirmed_chains": len(confirmed), "state": state}
+             "where_chains": len(where_chains), "confirmed_chains": len(confirmed),
+             "rejected_minor_mss": len(insignificant), "state": state}
         a.update(extra)
         return a
 
@@ -822,22 +852,35 @@ def execution_for_scenario(scenario, candidates, price=None, objectives=None, ms
     if not where_chains:
         return None                                                        # watching
 
-    # C3 fails — the WHERE was swept but no CONFIRMED structure shift on that chain yet (reaching a level
-    # is only a POTENTIAL reversal, Lesson 15). This is a FORMING setup: there is NO reversal leg yet, so
-    # NO entry/stop/target — it is NOT actionable and must NOT read as ARMED (armed = an order is ready to
-    # place) nor fire an alert. Surface it as WATCHING with the WHERE context; it becomes armed only once
-    # the MSS confirms and the >=50% retrace entry exists.
+    # C3 fails — the WHERE was swept but no CONFIRMED+SIGNIFICANT structure shift on that chain yet. Either
+    # (a) no confirmed MSS at all, or (b) an MSS confirmed but it broke only a MINOR swing (not dominant/
+    # protected) — a mechanically-valid MSS that is NOT the meaningful structural reversal the course
+    # reserves for significant swings (Lessons 6/15). Both are FORMING: no reversal leg, no entry/stop/
+    # target, NOT actionable (WATCHING, not armed, no alert). Becomes armed only on a significant MSS + retrace.
     if not confirmed:
-        best = where_chains[0]
-        awaiting = "a CONFIRMED structure shift (MSS)" if best["displaced"] else "a displacement/reversal"
-        why = (f"WHERE swept at {round(best['pool'], price_dp)} in the {pd_zone} (manip "
-               f"{round(best['manip'], price_dp)}); awaiting {awaiting} ({new_struct}) before an entry "
-               f"forms - Lessons 15/16 (no order yet)")
+        if insignificant:
+            ic = insignificant[0]
+            why = (f"MSS confirmed but broke only a MINOR swing at {ic['broken_price']} "
+                   f"(dominant={ic['broken_dominant']}, protected={ic['broken_protected']}) - not the "
+                   f"meaningful structural reversal the course reserves for significant swings (Lessons 6/15); rejected")
+            reason = f"minor-swing MSS rejected (broken {ic['broken_price']}, dominant/protected both false)"
+            aud = _audit("watching", reason=reason,
+                         when={"mss_id": ic["mss_id"], "broken_swing": ic["broken_price"],
+                               "broken_dominant": ic["broken_dominant"], "broken_protected": ic["broken_protected"],
+                               "accepted": False,
+                               "rule": "MSS must break a dominant OR protected swing (Lessons 6/15)"})
+        else:
+            best = where_chains[0]
+            awaiting = "a CONFIRMED structure shift (MSS)" if best["displaced"] else "a displacement/reversal"
+            why = (f"WHERE swept at {round(best['pool'], price_dp)} in the {pd_zone} (manip "
+                   f"{round(best['manip'], price_dp)}); awaiting {awaiting} ({new_struct}) before an entry "
+                   f"forms - Lessons 15/16 (no order yet)")
+            aud = _audit("watching", reason="WHERE swept; awaiting confirmed MSS (no entry yet)")
         return {"state": "watching", "entry": None, "stop": None, "target": None, "rr": None,
                 "order": None, "sl_order": None, "tp_order": None, "fvg_top": None, "fvg_bottom": None,
                 "entry_model": "", "usable_models": [], "price": round(price, price_dp),
                 "dist_to_entry": None, "entry_role": "", "tf": getattr(scenario, "tf", ""),
-                "why": why, "audit": _audit("watching", reason="WHERE swept; awaiting confirmed MSS (no entry yet)")}
+                "why": why, "audit": aud}
 
     # C4/C5 — take the BEST-RANKED confirmed chain (the engine's transparent ranking, NOT proximity).
     # Ambiguity (several confirmed chains) is exposed via audit.confirmed_chains, never silently tie-broken.
@@ -884,14 +927,18 @@ def execution_for_scenario(scenario, candidates, price=None, objectives=None, ms
             "entry_role": "entry", "tf": getattr(scenario, "tf", "")}
 
     def _full_audit(state):
+        acc = "MSS broke a %s swing" % ("dominant" if ch["broken_dominant"]
+                                        else "protected" if ch["broken_protected"] else "significant")
         return _audit(state, why_accepted=(why if state == "triggered" else ""),
                       where={"pool": round(ch["pool"], price_dp), "manip": round(ch["manip"], price_dp)},
-                      when={"mss_id": ch["mss_id"], "kind": new_struct},
+                      when={"mss_id": ch["mss_id"], "kind": new_struct, "broken_swing": ch["broken_price"],
+                            "broken_dominant": ch["broken_dominant"], "broken_protected": ch["broken_protected"],
+                            "accepted": True, "rule": acc + " (Lessons 6/15) — a significant, not minor, swing"},
                       reversal_leg={"low": leg_low, "high": leg_high,
                                     "mid_50pct": round((leg_low + leg_high) / 2.0, price_dp)},
                       entry_source=("same-leg FVG (confluence)" if fvg_used else ">=50% retrace level (no FVG)"),
                       confluence=confluence,
-                      **{"conditions": {"C2_where_sweep": True, "C3_confirmed_mss": True,
+                      **{"conditions": {"C2_where_sweep": True, "C3_confirmed_significant_mss": True,
                                         "C4_retrace_50_and_pd": True, "C5_geometry": tgt is not None}})
 
     # No opposing draw clears min_rr -> a real confirmed reversal but not a tradeable setup (no alert).

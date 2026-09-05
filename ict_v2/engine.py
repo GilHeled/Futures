@@ -37,26 +37,21 @@ from ict_v2 import liquidity as LQ
 from ict_v2 import pdarrays as PDA
 from ict_v2 import pipeline as P
 from ict_v2 import scenarios as SC
-from ict_v2.reversals import ReversalBook   # persistent Lesson-15 POTENTIAL lifecycle (V2_GAP fix)
 
 _SCENARIO_TARGET = 2       # user: keep the top 2 theses …
 _SCENARIO_MAX = 3          # … at most 3
 
 
 class MTFEngine:
-    def __init__(self, context_tf: str = "4H", setup_tf: str = "1H", confirm_tf: str = "5m",
+    def __init__(self, context_tf: str = "4H", setup_tf: str = "1H", confirm_tf: str = "15m",
                  trigger_tf: str = "1m", refine_tf: str | None = None, min_stop: float | None = None,
                  anchor_tf: str | None = None, entry_models=None, point_value: float | None = None,
-                 price_dp: int = 2, liquidity_tf: str = "15m"):
-        # ≥15-minute liquidity floor (Lesson 6/8): the LIQUIDITY / meaningful-swing / dealing-range TFs
-        # (context, setup, liquidity_tf) must be ≥15m — 'we do not mark liquidity below the 15-minute chart'.
-        # The Lesson-15 intraday TREND-CHANGE confirmation (confirm_tf) is a SEPARATE responsibility taught on
-        # a small interval (1m/5m/15m, canonically 5m); it is NOT subject to the liquidity floor. The 1m
-        # trigger (and refine) are finer still — they only TIME the fill, they do not mark liquidity.
-        P.assert_liquidity_floor(context_tf, setup_tf, liquidity_tf)
+                 price_dp: int = 2):
+        # ≥15-minute liquidity floor (Lesson 6/8): the CONTEXT/execution-setup TFs must be ≥15m; the 1m
+        # trigger (and refine) may be finer — they only trigger, they do not mark liquidity.
+        P.assert_liquidity_floor(context_tf, setup_tf, confirm_tf)
         self.context_tf, self.setup_tf = context_tf, setup_tf
         self.confirm_tf, self.trigger_tf = confirm_tf, trigger_tf
-        self.liquidity_tf = liquidity_tf          # 15m: nearer liquidity pools / meaningful swings / ORG (context)
         self.refine_tf, self.min_stop, self.anchor_tf = refine_tf, min_stop, anchor_tf
         self.entry_models = entry_models
         # --- responsibility-based state ---
@@ -70,12 +65,8 @@ class MTFEngine:
         self.exec_tf = None            # the TF the current execution states were monitored on
         self.last_price = None
         self._ctx_bars = None          # last 4H bars (NWOG window)
-        self._liquidity_bars = None    # last 15m bars — nearer liquidity pools + ORG (Lesson 6/8/14 context)
-        self._confirm_bars = None      # last 5m bars — the Lesson-15 trend-change confirmation window
+        self._confirm_bars = None      # last 15m bars (ORG window + execution setup)
         self._trigger_bars = None      # last 1m bars (execution trigger)
-        self.confirm_ms = None         # last CLOSED 5m market structure — the STRUCTURAL scale the Lesson-15
-        #                                WHEN (trend change) is read from; the 1m only TIMES the fill (no look-ahead)
-        self.reversals = ReversalBook(price_dp=price_dp)   # persistent Lesson-15 POTENTIAL state across 5m closes
 
     # ---- context stages (produce context; NEVER require an FVG) --------------------------------
     def on_context_close(self, bars, anchor_bars=None):
@@ -96,21 +87,10 @@ class MTFEngine:
         self._rebuild_scenarios(self._ctx_key(bars))
         return self.intraday
 
-    # ---- liquidity/context stage (15m): nearer pools + ORG; NEVER the WHEN, NEVER an entry -------
-    def on_liquidity_close(self, bars):
-        """15m liquidity/context close — refresh the nearer liquidity pools / meaningful swings / ORG that
-        the next scenario rebuild consumes (Lesson 6/8/14). It does NOT set `confirm_ms` and does NOT run the
-        execution monitor: the Lesson-15 trend-change confirmation is the 5m `on_confirm_close`'s job."""
-        self._liquidity_bars = bars
-        return self.book.active
-
     # ---- execution stages (monitor the scenarios; the ONLY place an entry lives) ---------------
     def on_confirm_close(self, bars, refine_bars=None):
-        """5m Lesson-15 trend-change confirmation — recompute the 5m structure (`confirm_ms`, the WHEN) and
-        monitor whether any active scenario is retracing into its entry zone. Liquidity/P-D stay ≥15m/4H."""
+        """15m execution setup — monitor whether any active scenario is retracing into its entry zone."""
         self._confirm_bars = bars
-        if self.liquidity_tf == self.confirm_tf:   # coincident config (confirm == liquidity): serve both roles
-            self._liquidity_bars = bars
         self._monitor(bars, self.confirm_tf)
         return self.book.active
 
@@ -128,14 +108,13 @@ class MTFEngine:
         return _et_iso(bars[-1].close_time) if bars else ""
 
     def _gaps(self):
-        """NWOG (from the 4H buffer) + ORG (from the 15m LIQUIDITY buffer, Lesson 14) as liquidity-objective
-        source dicts. ORG stays on 15m — it is context, not the 5m Lesson-15 confirmation."""
+        """NWOG (from the 4H buffer) + ORG (from the 15m buffer) as liquidity-objective source dicts."""
         gaps = []
         for g in (PDA.nwogs(self._ctx_bars or [])):
             g = dict(g); g["_kind"] = "nwog"; g["tf"] = self.context_tf; gaps.append(g)
-        org = PDA.org(self._liquidity_bars or [])
+        org = PDA.org(self._confirm_bars or [])
         if org:
-            org = dict(org); org["_kind"] = "org"; org["tf"] = self.liquidity_tf; gaps.append(org)
+            org = dict(org); org["_kind"] = "org"; org["tf"] = self.confirm_tf; gaps.append(org)
         return gaps
 
     def _rebuild_scenarios(self, context_key: str):
@@ -147,13 +126,12 @@ class MTFEngine:
                                      gaps=self._gaps())
         if self.intraday is not None:
             objs += LQ.collect_objectives(self.intraday, direction=(self.intraday.bias or None))
-        # NEARER liquidity: also collect the 15m LIQUIDITY-TF intraday pools/FVGs so the scenario can target
-        # a CLOSER draw than the coarse 4H/1H pools (Lesson 10: price seeks the NEXT draw). The 15m is ≥ the
-        # liquidity floor, so its pools are valid draws for an intraday target — the 5m confirmation TF is
-        # NOT used here (liquidity/swings are never marked below 15m, Lesson 6).
-        if self._liquidity_bars:
+        # NEARER liquidity: also collect the execution-TF (15m) intraday pools/FVGs so the scenario can
+        # target a CLOSER draw than the coarse 4H/1H pools (Lesson 10: price seeks the NEXT draw). The
+        # 15m is ≥ the liquidity floor, so its pools are valid draws for an intraday target.
+        if self._confirm_bars:
             try:
-                ctx15 = P.htf_context(self._liquidity_bars, self.liquidity_tf)
+                ctx15 = P.htf_context(self._confirm_bars, self.confirm_tf)
                 objs += LQ.collect_objectives(ctx15, direction=(self.strategic.bias or None))
             except Exception:
                 pass
@@ -176,11 +154,6 @@ class MTFEngine:
             self.book.monitor(lambda s: None, bar=None)
             return
         ms = v1.analyze(bars, tf, min_stop=self.min_stop)
-        if tf == self.confirm_tf:                # 5m structural read (the Lesson-15 WHEN scale)
-            self.confirm_ms = ms
-            # PERSIST the Lesson-15 POTENTIAL lifecycle: create/advance/terminate on this CLOSED 5m bar,
-            # BEFORE the scenario monitor consumes it. (M1 never reaches here → M1 cannot mutate this state.)
-            self.reversals.update(ms, bars, _et_iso(bars[-1].close_time) if bars else "")
         cands = P.generate_candidates(ms, self.strategic, tf=tf, min_stop=self.min_stop, bars=bars,
                                       entry_models=self.entry_models)   # honour the configured model set
         price = bars[-1].close
@@ -198,17 +171,9 @@ class MTFEngine:
                 day = None
         ts = _et_iso(bars[-1].close_time) if bars else None      # ET cursor time → scenario-timeline stamps
         self.book.monitor(lambda s: P.execution_for_scenario(s, cands, price, objectives=self.objectives,
-                                                             ms=ms, confirm_ms=self.confirm_ms,
-                                                             min_stop=self.min_stop, price_dp=self.price_dp,
-                                                             reversals=self.reversals),
+                                                             ms=ms, min_stop=self.min_stop,
+                                                             price_dp=self.price_dp),
                           bar=bar, day=day, ts=ts)
-        # CONSUME-ONCE: a CONFIRMED reversal a scenario has opened a position on is marked emitted, so the
-        # book never re-offers it as a fresh reversal for a new setup (the ScenarioBook owns the live trade).
-        for s in self.book.active:
-            if getattr(s, "state", "") in ("triggered", "target", "stop", "eod"):
-                mid = ((getattr(s, "execution", None) or {}).get("audit") or {}).get("when", {}).get("mss_id")
-                if mid:
-                    self.reversals.mark_emitted(mid)
         self.exec_tf = tf
 
     # ---- accessors ----------------------------------------------------------------------------
@@ -229,14 +194,12 @@ class MTFEngine:
 
 def _demo() -> None:
     base = P._base_1m(20000, 7)
-    h4, h1 = P.resample(base, 240, "4H"), P.resample(base, 60, "1H")
-    m15, m5 = P.resample(base, 15, "15m"), P.resample(base, 5, "5m")
-    eng = MTFEngine("4H", "1H", "5m", "1m", liquidity_tf="15m")
+    h4, h1, m15 = P.resample(base, 240, "4H"), P.resample(base, 60, "1H"), P.resample(base, 15, "15m")
+    eng = MTFEngine("4H", "1H", "15m", "1m")
     eng.on_trigger_close(base[-400:])          # prime price
     eng.on_context_close(h4)
     eng.on_setup_close(h1)
-    eng.on_liquidity_close(m15)                 # 15m liquidity/context
-    eng.on_confirm_close(m5)                    # 5m Lesson-15 trend-change confirmation
+    eng.on_confirm_close(m15)
     eng.on_trigger_close(base[-400:])
     print("ICT v2 — responsibility cascade + scenario layer\n")
     print(eng.describe())

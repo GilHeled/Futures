@@ -62,8 +62,8 @@ def test_refine_mode_is_optional_and_off_by_default():
 def test_snapshot_is_persistable(tmp_path):
     v = run_bars(_1m(1200))
     snap = v.snapshot()
-    assert snap["timeframes"] == {"context": "4H", "setup": "1H", "liquidity": "15m", "confirm": "5m",
-                                  "trigger": "1m", "refine": None, "anchor": None}  # 5m Lesson-15 confirm, 15m liquidity
+    assert snap["timeframes"] == {"context": "4H", "setup": "1H", "confirm": "15m", "trigger": "1m",
+                                  "refine": None, "anchor": None}     # refine + anchor OFF by default
     # scenario-centric shape: H4 strategic + H1 intraday context + the 2-3 scenarios
     assert "strategic" in snap and "intraday" in snap and "scenarios" in snap and "scenario_summary" in snap
     assert isinstance(snap["scenarios"], list) and len(snap["scenarios"]) <= 3
@@ -73,44 +73,4 @@ def test_snapshot_is_persistable(tmp_path):
     p = tmp_path / "v2_state.json"
     v.save(p)
     reloaded = json.loads(p.read_text())
-    assert reloaded["timeframes"]["confirm"] == "5m" and reloaded["timeframes"]["liquidity"] == "15m"
-
-
-def test_timeframe_responsibilities_confirm_5m_liquidity_15m():
-    """Lesson-15 responsibility split: the trend-change CONFIRMATION is 5m (`confirm_ms`), while liquidity /
-    meaningful swings / ORG stay on the 15m LIQUIDITY tf. The ≥15m floor governs liquidity/context, NOT the
-    5m confirmation. 1m stays timing-only."""
-    v = V2Live()                                          # defaults: 4H / 1H / 15m-liquidity / 5m-confirm / 1m
-    assert v.confirm_tf == "5m" and v.liquidity_tf == "15m" and v.engine.confirm_tf == "5m"
-    assert v.engine.liquidity_tf == "15m"
-    for b in _1m(1500):                                   # 25h of 1m
-        v.push_1m(b)
-    assert "5m" in v.buf and "15m" in v.buf               # both TFs are built/buffered
-    # the WHEN is read from the 5m structure: confirm_ms is the last CLOSED 5m read
-    ms = v.engine.confirm_ms
-    assert ms is not None and getattr(ms, "tf", "5m") == "5m"
-    # the 5m confirm buffer's last bar is not ahead of the 1m cursor (frozen between 5m closes)
-    assert v.buf["5m"][-1].close_time <= v.buf["1m"][-1].close_time
-    # liquidity buffer (15m) is populated and drives ORG/nearer pools, not the WHEN
-    assert v.engine._liquidity_bars is not None and len(v.buf["15m"]) > 0
-    # cadence: 5m closes strictly more often than 15m, and 1m more than 5m
-    from collections import Counter
-    v2c = V2Live()
-    cnt = Counter()
-    prev = {tf: None for tf in ("15m", "5m", "1m")}
-    for b in _1m(1500):
-        v2c.push_1m(b)
-        for tf in ("15m", "5m", "1m"):
-            if v2c.updated.get(tf) != prev[tf]:
-                cnt[tf] += 1
-                prev[tf] = v2c.updated.get(tf)
-    assert cnt["15m"] < cnt["5m"] < cnt["1m"]
-
-
-def test_liquidity_floor_allows_5m_confirmation_but_not_5m_liquidity():
-    """The ≥15m floor (Lesson 6/8) applies to context/setup/liquidity, NOT to the Lesson-15 confirmation."""
-    from ict_v2.engine import MTFEngine
-    MTFEngine("4H", "1H", "5m", "1m", liquidity_tf="15m")       # ok: 5m confirmation is allowed
-    import pytest
-    with pytest.raises(ValueError):
-        MTFEngine("4H", "1H", "5m", "1m", liquidity_tf="5m")    # 5m as the LIQUIDITY tf violates the floor
+    assert reloaded["timeframes"]["confirm"] == "15m"

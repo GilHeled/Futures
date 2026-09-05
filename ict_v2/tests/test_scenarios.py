@@ -114,22 +114,17 @@ def test_monitor_updates_state_without_touching_membership():
     assert book.active[0].state == "armed" and book.active[0].execution["entry"] == 150
 
 
-# ---- WHAT-corrected execution model: the WHEN is a 15m STRUCTURAL reversal (not a 1m-local MSS) --------
-# Mock `confirm_ms` = the higher-TF (15m) market structure: a manipulation SWEEP (WHERE) → a displacement
-# leg → a (confirmed?) 15m MSS breaking the last opposing 15m STRUCTURAL swing (WHEN) → optional same-leg
-# FVG. The entry is the >=50% retrace of that 15m leg in the correct P/D half. The 1m only TIMES the fill.
+# ---- FAITHFUL execution model (Lessons 8-16): PD array = WHERE, structure shift = WHEN ------------
+# Shared mocks: a course PD array (an in-zone FVG objective) and a LOCAL structure shift (a confirmed
+# MSS carried on a candidate). Neither alone triggers; the two together do.
 from types import SimpleNamespace as _N
 
 
-def _R(item):
-    return _N(item=item)
-
-
-def _fvg_src(ce, top, bottom, direction="long", status="unfilled"):
-    """A same-leg 15m displacement FVG (the OPTIONAL confluence sharpener), as v1 exposes it (depends_on the
-    displacement 'D')."""
-    return _N(ce=ce, top=top, bottom=bottom, direction=("bullish" if direction == "long" else "bearish"),
-              status=status, id="FVG", depends_on=("D",))
+def _fvg_obj(ce, top, bottom, direction="long", status="unfilled"):
+    """A course PD array in the retracement zone = the WHERE (Lessons 10-14)."""
+    return _N(kind="fvg", tf="1m", side=("high" if direction == "long" else "low"), price=ce,
+              top=top, bottom=bottom, status=status, label="FVG",
+              to_dict=lambda: {"kind": "fvg", "price": ce})
 
 
 def _draw_obj(price, side="high"):
@@ -137,289 +132,83 @@ def _draw_obj(price, side="high"):
               label=("BSL" if side == "high" else "SSL"), to_dict=lambda: {"kind": "swing", "price": price})
 
 
-def _confirm_ms(direction="long", manip=100, impulse=140, confirmed=True, broken=None, fvg=None):
-    """A 15m market-structure read: sweep (manipulation at `manip`, the WHERE) → displacement (manip→impulse,
-    the confirming leg) → 15m MSS (confirmed / candidate) breaking the last opposing 15m structural swing
-    → optional same-leg 15m FVG. Long: manip low, impulse high; short mirrors."""
+def _shift_cand(direction="long", manip=100, confirmed=True):
+    """A candidate carrying the LOCAL structure shift = the WHEN (a confirmed MSS, Lessons 15/16)."""
     pol = "bullish" if direction == "long" else "bearish"
-    broken = impulse if broken is None else broken
-    sw = _N(id="SW", extreme=manip, pool_price=manip)
-    d = _N(id="D", start_price=manip, end_price=impulse, depends_on=("SW",))
-    m = _N(id="MSS", direction=pol, state=("confirmed" if confirmed else "candidate"),
-           broken_price=broken, broken_index=3, confirm_index=9, depends_on=("D",))
-    return _N(ranked_mss=[_R(m)], ranked_displacements=[_R(d)], ranked_sweeps=[_R(sw)],
-              ranked_fvgs=([_R(fvg)] if fvg is not None else []), classified=[])
+    mss = _N(state=("confirmed" if confirmed else "candidate"), direction=pol, confirm_index=9,
+             broken_price=125.0, acceptance=1.0, id="MSS", depends_on=("D",))
+    disp = _N(start_price=manip, net=20.0, span=5, id="D")
+    return _N(direction=direction, mss=mss, displacement=disp, entry_obj=_N(source=None), tf="1m")
 
 
-def _exec(sc, price, objectives, confirm_ms, **kw):
+def test_execution_requires_both_a_pd_array_and_a_structure_shift():
+    """The faithful sequence: a PD array in the correct premium/discount half = WHERE, a confirmed local
+    structure shift there = WHEN. Neither alone is enough (Lessons 9-16)."""
     from ict_v2 import pipeline as P
-    return P.execution_for_scenario(sc, None, price=price, objectives=objectives, confirm_ms=confirm_ms, **kw)
-
-
-def test_when_is_the_15m_structural_reversal_not_a_1m_pivot():
-    """The WHEN is a CONFIRMED 15m structural reversal (a 15m body close through the last opposing 15m
-    structural swing), read by the 1m only for timing. dominant/protected are metadata, not a gate."""
     sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
-    objs = [_draw_obj(210)]
-    # 15m reversal only POTENTIAL (candidate MSS, wick) → WATCHING (no order, not actionable)
-    r = _exec(sc, 130, objs, _confirm_ms("long", 100, 140, confirmed=False))
-    assert r["state"] == "watching" and r["entry"] is None and "POTENTIAL" in r["why"]
-    # CONFIRMED 15m reversal + >=50% retrace (leg 100→140, 50%=120; price 120) → TRIGGERED
-    r = _exec(sc, 120, objs, _confirm_ms("long", 100, 140))
+    objs = [_fvg_obj(120, 122, 118), _draw_obj(210)]        # a PD array at 120 in the discount + the draw
+
+    # C3 met (PD array in zone) but NO structure shift yet → ARMED (reaching the array is only a POTENTIAL)
+    r = P.execution_for_scenario(sc, [_shift_cand("long", confirmed=False)], price=120, objectives=objs)
+    assert r["state"] == "armed" and "structure shift" in r["why"]
+    # C3 + C4 both met → TRIGGERED; geometry: entry = PD array (120), stop = manip extreme (100), target = draw
+    r = P.execution_for_scenario(sc, [_shift_cand("long", manip=100)], price=120, objectives=objs)
     assert r["state"] == "triggered" and r["entry"] == 120 and r["stop"] == 100 and r["target"] == 210
-    # the 15m manipulation is NOT in the correct half (manip 160 > equilibrium 150) → watching (None)
-    assert _exec(sc, 120, objs, _confirm_ms("long", 160, 200)) is None
-    # AUDITABLE: structural_tf=15m, the confirmed reversal, the leg + its 50%
-    a = r["audit"]
-    assert a["structural_tf"] == "5m" and a["conditions"]["C3_confirmed_structural_reversal"] \
-        and a["conditions"]["C4_retrace_50_and_pd"]
-    assert a["where"]["manip"] == 100 and a["reversal_leg"]["mid_50pct"] == 120
-
-
-def test_dominant_protected_are_metadata_not_a_gate():
-    """The retired significance gate must NOT decide validity: a confirmed 15m reversal triggers whether or
-    not its broken swing is flagged dominant/protected (they are surfaced as metadata only)."""
-    sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
-    objs = [_draw_obj(210)]
-    cm = _confirm_ms("long", 100, 140)
-    cm.classified = [_N(swing=_N(index=3), dominant=False, protected=False)]   # broken swing NOT flagged
-    r = _exec(sc, 120, objs, cm)
-    assert r["state"] == "triggered" and r["audit"]["when"]["broken_dominant"] is False \
-        and r["audit"]["when"]["accepted"] is True
-
-
-def test_no_fvg_setup_still_executes_and_fvg_only_sharpens():
-    """FVG is OPTIONAL. Without a same-leg 15m FVG the entry is the leg >=50% level; WITH one in the band the
-    entry SHARPENS to the FVG CE. Lessons 12/8."""
-    sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
-    objs = [_draw_obj(210)]
-    r = _exec(sc, 120, objs, _confirm_ms("long", 100, 140, fvg=None))
-    assert r["state"] == "triggered" and r["entry"] == 120 and r["entry_model"] == "retrace"
-    fvg = _fvg_src(110, 112, 108, "long")
-    r2 = _exec(sc, 110, objs, _confirm_ms("long", 100, 140, fvg=fvg))
-    assert r2["state"] == "triggered" and r2["entry"] == 110 and r2["entry_model"] == "fvg"
-
-
-def test_entry_is_the_retrace_not_the_swept_where():
-    """Entry is the post-confirmation >=50% retrace of the 15m leg, NEVER the swept WHERE (manip 100)."""
-    sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
-    r = _exec(sc, 120, [_draw_obj(210)], _confirm_ms("long", 100, 140))
-    assert r["entry"] == 120 and r["entry"] != 100
-
-
-def test_requires_50pct_retrace_055_is_valid_no_062_gate():
-    """>=50% retrace of the 15m leg — a 55% retrace triggers (no 0.62 gate); a 45% retrace is ARMED."""
-    sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
-    objs = [_draw_obj(210)]
-    cm = _confirm_ms("long", 100, 140)                     # leg 100→140, 50% = 120
-    assert _exec(sc, 122, objs, cm)["state"] == "armed"    # 45% retrace, above the 50% level
-    assert _exec(sc, 118, objs, cm)["state"] == "triggered"  # 55% retrace, past the 50% level
+    # a structure shift but NO PD array in the zone → not actionable (no WHERE); price in zone → retracing
+    r = P.execution_for_scenario(sc, [_shift_cand("long")], price=120, objectives=[_draw_obj(210)])
+    assert r["state"] == "retracing" and "no course PD array" in r["why"]
+    # price outside the zone and nothing set up → watching (None)
+    assert P.execution_for_scenario(sc, [_shift_cand("long")], price=90, objectives=[_draw_obj(210)]) is None
+    # the decision is AUDITABLE: WHERE (zone + array) and WHEN (structure shift) are recorded
+    a = P.execution_for_scenario(sc, [_shift_cand("long")], price=120, objectives=objs)["audit"]
+    assert a["pd_zone"] == "discount" and a["conditions"]["C3_pd_array"] and a["conditions"]["C4_structure_shift"]
+    assert a["structure_shift"]["kind"] == "HL->HH" and "fvg" in a["confluence"]
 
 
 def test_execution_rejects_a_degenerate_stop():
-    """Spec §15: a near-zero risk (a same-leg FVG a hair from the 15m manipulation extreme) is rejected."""
+    """Spec §15 (Lesson 15): a PD array whose stop sits a hair from the manipulation extreme → a near-zero
+    risk is REJECTED, never executed — a point array (fib/EQH-EQL) must not manufacture absurd R."""
+    from ict_v2 import pipeline as P
     sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
-    objs = [_draw_obj(210)]
-    fvg = _fvg_src(100.5, 101, 100, "long")                # CE 100.5 just above manip 100 → risk 0.5
-    r = _exec(sc, 100.5, objs, _confirm_ms("long", 100, 140, fvg=fvg), min_stop=2.0)
-    assert r["state"] == "retracing" and "degenerate" in r["why"]
-    assert _exec(sc, 120, objs, _confirm_ms("long", 100, 140), min_stop=2.0)["state"] == "triggered"
+    objs = [_fvg_obj(120, 122, 118), _draw_obj(210)]
+    # manip extreme 119.99 → risk 0.01 < the 2.0 execution floor → rejected (not actionable)
+    r = P.execution_for_scenario(sc, [_shift_cand("long", manip=119.99)], price=120,
+                                 objectives=objs, min_stop=2.0)
+    assert r["state"] == "retracing" and "degenerate stop" in r["why"]
+    # a healthy stop (manip 100 → risk 20) with the same floor → triggered
+    assert P.execution_for_scenario(sc, [_shift_cand("long", manip=100)], price=120,
+                                    objectives=objs, min_stop=2.0)["state"] == "triggered"
 
 
-def test_a_missed_entry_stays_armed_not_stale():
-    """A missed entry (price past the entry but not beyond the stop) stays ARMED, never 'stale'."""
+def test_execution_marks_a_late_entry_stale_not_armed():
+    """TIMELINESS (Lesson 9 — never chase a move that already ran): once price has run past the midpoint
+    of the entry→target move, the retrace-entry is STALE — surfaced as 'stale', even with a valid shift."""
+    from ict_v2 import pipeline as P
     sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
-    objs = [_draw_obj(210)]
-    cm = _confirm_ms("long", 100, 140)                     # entry 120, stop 100
-    r = _exec(sc, 135, objs, cm)
-    assert r["state"] == "armed" and r["state"] != "stale"
-    assert _exec(sc, 118, objs, cm)["state"] == "triggered"
+    objs = [_fvg_obj(120, 122, 118), _draw_obj(210)]
+    shift = _shift_cand("long", manip=100)
+    # price 180 = 67% of the way from entry 120 to target 210 → move already ran → STALE, not triggered
+    r = P.execution_for_scenario(sc, [shift], price=180, objectives=objs)
+    assert r["state"] == "stale" and "missed" in r["why"]
+    # price 125 (low progress) with array + shift → TRIGGERED
+    assert P.execution_for_scenario(sc, [shift], price=125, objectives=objs)["state"] == "triggered"
+    # array + NO shift, still ahead of the move → ARMED (awaiting the structure shift)
+    assert P.execution_for_scenario(sc, [_shift_cand("long", confirmed=False)],
+                                    price=130, objectives=objs)["state"] == "armed"
 
 
 def test_execution_marks_a_beyond_stop_setup_invalidated():
-    """Price beyond the stop → INVALIDATED ('stale'). Short: 15m manip high 200, leg 200→160, entry 180, stop 200."""
+    """A setup whose price has run BEYOND the stop on the loss side is INVALIDATED (an entry now = an
+    instant stop-out) → 'stale', not armed — even with a confirmed shift. Short: price at/above the stop."""
+    from ict_v2 import pipeline as P
     sc = _N(direction="short", entry_zone=(150, 200), draw=_N(price=90), tf="1m")
-    objs = [_draw_obj(90, side="low")]
-    r = _exec(sc, 250, objs, _confirm_ms("short", 200, 160))
+    objs = [_fvg_obj(180, 182, 178, direction="short"), _draw_obj(90, side="low")]
+    # short entry 180 (PD array), stop 190 (manip extreme above); price 250 is ABOVE the stop → invalidated
+    r = P.execution_for_scenario(sc, [_shift_cand("short", manip=190)], price=250, objectives=objs)
     assert r["state"] == "stale" and "invalidated" in r["why"]
-    assert _exec(sc, 185, objs, _confirm_ms("short", 200, 160))["state"] == "triggered"
-
-
-# ---- LESSON-15 SEQUENCE enforcement --------------------------------------------------------------
-# A 15m MSS breaking the LAST opposing structural swing is a REVERSAL only after the Lesson-15 sequence:
-# an established OPPOSITE trend, then a FAILED-continuation pivot (a lower-high for a short after an uptrend
-# / a higher-low for a long after a downtrend), and only THEN the break of that trend's last structural
-# swing. A bare break (no failed-continuation pivot first) is PREMATURE; a break that runs WITH the prior
-# trend is a CONTINUATION. Neither is a confirmed structural reversal. The skeleton is the 15m structural
-# read carried on `confirm_ms.structural`.
-
-def _sw(kind, price, index):
-    return _N(kind=kind, price=price, index=index)
-
-
-def _confirm_ms_seq(direction, structural, broken_index, manip, impulse, confirmed=True, fvg=None,
-                    confirm_index=9):
-    """`_confirm_ms` + the 15m STRUCTURAL skeleton so the Lesson-15 SEQUENCE gate is live. `structural` =
-    list of (kind, price, index) (alternating high/low); `broken_index` = the index of the swing the 15m MSS
-    breaks; `confirm_index` = the break bar that bounds the potential-survival scan. When `broken_index`
-    appears twice, the first entry is the broken swing and the second is the same-bar failed-continuation
-    pivot (the degenerate case)."""
-    pol = "bullish" if direction == "long" else "bearish"
-    skel = [_sw(k, p, i) for (k, p, i) in structural]
-    broken_price = next(p for (k, p, i) in structural if i == broken_index)
-    sw = _N(id="SW", extreme=manip, pool_price=manip)
-    d = _N(id="D", start_price=manip, end_price=impulse, depends_on=("SW",))
-    m = _N(id="MSS", direction=pol, state=("confirmed" if confirmed else "candidate"),
-           broken_price=broken_price, broken_index=broken_index, confirm_index=confirm_index, depends_on=("D",))
-    return _N(ranked_mss=[_R(m)], ranked_displacements=[_R(d)], ranked_sweeps=[_R(sw)],
-              ranked_fvgs=([_R(fvg)] if fvg is not None else []), classified=[], structural=skel)
-
-
-def test_seq_short_uptrend_break_low_with_no_lower_high_first_must_not_confirm():
-    """(1) Uptrend (HH/HL), then the last HL is broken WITHOUT a lower-high forming first → PREMATURE, NOT a
-    Lesson-15 short reversal. Even a 15m body-close break must NOT confirm — watching, no order."""
-    sc = _N(direction="short", entry_zone=(50, 100), draw=_N(price=20), tf="1m")
-    objs = [_draw_obj(20, side="low")]
-    skel = [("high", 70, 0), ("low", 50, 1), ("high", 105, 2), ("low", 60, 3)]   # uptrend, no LH after the HL
-    r = _exec(sc, 80, objs, _confirm_ms_seq("short", skel, 3, manip=100, impulse=60))
-    assert r["state"] == "watching" and r["entry"] is None
-    a = r["audit"]
-    assert a["conditions"]["C3_confirmed_structural_reversal"] is False
-    assert a["when"]["classification"] == "premature" and a["when"]["reversal_state"] == "none"
-
-
-def test_seq_long_downtrend_break_high_with_no_higher_low_first_must_not_confirm():
-    """(2) Downtrend (LH/LL), then the last LH is broken WITHOUT a higher-low forming first → PREMATURE, NOT
-    a Lesson-15 long reversal. Must NOT confirm."""
-    sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
-    objs = [_draw_obj(210)]
-    skel = [("low", 130, 0), ("high", 150, 1), ("low", 95, 2), ("high", 140, 3)]  # downtrend, no HL after the LH
-    r = _exec(sc, 120, objs, _confirm_ms_seq("long", skel, 3, manip=100, impulse=140))
-    assert r["state"] == "watching" and r["entry"] is None
-    a = r["audit"]
-    assert a["conditions"]["C3_confirmed_structural_reversal"] is False
-    assert a["when"]["classification"] == "premature" and a["when"]["reversal_state"] == "none"
-
-
-def test_seq_short_full_sequence_uptrend_lower_high_break_last_hl_confirms():
-    """(3) Full Lesson-15 short sequence: uptrend HH/HL → a LOWER HIGH (failed new HH) → body-close break of
-    the last structural HL → LL. This is a CONFIRMED structural reversal (and triggers on the >=50% retrace)."""
-    sc = _N(direction="short", entry_zone=(50, 100), draw=_N(price=20), tf="1m")
-    objs = [_draw_obj(20, side="low")]
-    # uptrend H1=70,L1=50,H2=105,L2(HL)=60 ; then H3=100 (LH<105) ; break the HL 60 down
-    skel = [("high", 70, 0), ("low", 50, 1), ("high", 105, 2), ("low", 60, 3), ("high", 100, 4)]
-    r = _exec(sc, 80, objs, _confirm_ms_seq("short", skel, 3, manip=100, impulse=60))
-    assert r["state"] == "triggered" and r["entry"] == 80 and r["stop"] == 100
-    w = r["audit"]["when"]
-    assert r["audit"]["conditions"]["C3_confirmed_structural_reversal"] is True
-    assert w["classification"] == "reversal" and w["reversal_state"] == "confirmed"
-    assert w["prior_trend"] == "up (HH/HL)" and w["failed_continuation_pivot"] == "LH 100.0"
-    assert w["last_structural_swing"] == 60 and w["confirmation_break"] == 60
-
-
-def test_seq_long_full_sequence_downtrend_higher_low_break_last_lh_confirms():
-    """(4) Full Lesson-15 long sequence: downtrend LH/LL → a HIGHER LOW (failed new LL) → body-close break of
-    the last structural LH → HH. CONFIRMED structural reversal (triggers on the >=50% retrace)."""
-    sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
-    objs = [_draw_obj(210)]
-    # downtrend L0=130,H1=150,L1=95,H2(LH)=140 ; then L2=100 (HL>95) ; break the LH 140 up
-    skel = [("low", 130, 0), ("high", 150, 1), ("low", 95, 2), ("high", 140, 3), ("low", 100, 4)]
-    r = _exec(sc, 120, objs, _confirm_ms_seq("long", skel, 3, manip=100, impulse=140))
-    assert r["state"] == "triggered" and r["entry"] == 120 and r["stop"] == 100
-    w = r["audit"]["when"]
-    assert r["audit"]["conditions"]["C3_confirmed_structural_reversal"] is True
-    assert w["classification"] == "reversal" and w["reversal_state"] == "confirmed"
-    assert w["prior_trend"] == "down (LH/LL)" and w["failed_continuation_pivot"] == "HL 100.0"
-    assert w["last_structural_swing"] == 140 and w["confirmation_break"] == 140
-
-
-def test_seq_continuation_break_in_prior_trend_is_not_mislabeled_a_reversal():
-    """(5) A break that CONTINUES the prior trend (a low broken while the 15m is already making lower highs
-    AND lower lows) must be classified CONTINUATION, never a reversal — no confirmation, watching."""
-    sc = _N(direction="short", entry_zone=(50, 100), draw=_N(price=20), tf="1m")
-    objs = [_draw_obj(20, side="low")]
-    skel = [("high", 105, 0), ("low", 70, 1), ("high", 100, 2), ("low", 50, 3)]   # downtrend; the low 50 is a LL
-    r = _exec(sc, 80, objs, _confirm_ms_seq("short", skel, 3, manip=100, impulse=50))
-    assert r["state"] == "watching" and r["entry"] is None
-    a = r["audit"]
-    assert a["conditions"]["C3_confirmed_structural_reversal"] is False
-    assert a["when"]["classification"] == "continuation" and a["when"]["reversal_state"] == "none"
-
-
-# ---- Lesson-15 STATEFUL correction (V2_GAP Issue B/A): the potential must remain valid to the break -----
-# A local pivot pattern is not enough — the failed-continuation pivot must form STRICTLY AFTER the swing it
-# breaks (ordering) and the prior trend must NOT resume with a new structural extreme beyond S[k-1] before
-# the break (survival). Same-bar → degenerate; resumed prior trend → invalidated.
-
-def test_seq_valid_reversal_survives_intervening_swings_that_do_not_resume_the_trend():
-    """(1) A valid confirmed short: after the LH, price makes intervening highs that stay BELOW the prior high
-    (S[k-1]=105), so the uptrend never resumes — the potential survives to the break and CONFIRMS."""
-    sc = _N(direction="short", entry_zone=(50, 100), draw=_N(price=20), tf="1m")
-    objs = [_draw_obj(20, side="low")]
-    # HH/HL uptrend → LH 100 (<105) → intervening high 102 (still <105) → break the HL 60
-    skel = [("high", 70, 0), ("low", 50, 1), ("high", 105, 2), ("low", 60, 3), ("high", 100, 4),
-            ("low", 82, 5), ("high", 102, 6)]
-    r = _exec(sc, 80, objs, _confirm_ms_seq("short", skel, 3, manip=100, impulse=60, confirm_index=8))
-    assert r["state"] == "triggered" and r["entry"] == 80
-    w = r["audit"]["when"]
-    assert r["audit"]["conditions"]["C3_confirmed_structural_reversal"] is True
-    assert w["classification"] == "reversal" and w["reversal_state"] == "confirmed"
-
-
-def test_seq_long_potential_invalidated_by_a_new_lower_low_before_the_break():
-    """(2) Case-1 shape: a valid long potential (downtrend → HL 100 > prior low 95), but before the break of
-    the LH 140 the downtrend RESUMES with a new lower low (80 < 95) → INVALIDATED, not confirmed."""
-    sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
-    objs = [_draw_obj(210)]
-    skel = [("low", 130, 0), ("high", 150, 1), ("low", 95, 2), ("high", 140, 3), ("low", 100, 4),
-            ("high", 110, 5), ("low", 80, 6)]                       # low 80 < prior low 95 → prior trend resumed
-    r = _exec(sc, 120, objs, _confirm_ms_seq("long", skel, 3, manip=100, impulse=140, confirm_index=8))
-    assert r["state"] == "watching" and r["entry"] is None
-    w = r["audit"]["when"]
-    assert r["audit"]["conditions"]["C3_confirmed_structural_reversal"] is False
-    assert w["classification"] == "invalidated" and w["reversal_state"] == "cancelled"
-    assert w["resumed_beyond_prior_extreme"] == 80
-
-
-def test_seq_short_potential_invalidated_by_a_new_higher_high_before_the_break():
-    """(3) Mirror: a valid short potential (uptrend → LH 100 < prior high 105), but before the break of the
-    HL 60 the uptrend RESUMES with a new higher high (120 > 105) → INVALIDATED."""
-    sc = _N(direction="short", entry_zone=(50, 100), draw=_N(price=20), tf="1m")
-    objs = [_draw_obj(20, side="low")]
-    skel = [("high", 70, 0), ("low", 50, 1), ("high", 105, 2), ("low", 60, 3), ("high", 100, 4),
-            ("low", 80, 5), ("high", 120, 6)]                       # high 120 > prior high 105 → prior trend resumed
-    r = _exec(sc, 80, objs, _confirm_ms_seq("short", skel, 3, manip=100, impulse=60, confirm_index=8))
-    assert r["state"] == "watching" and r["entry"] is None
-    w = r["audit"]["when"]
-    assert w["classification"] == "invalidated" and w["reversal_state"] == "cancelled"
-    assert w["resumed_beyond_prior_extreme"] == 120
-
-
-def test_seq_same_bar_pivot_and_break_is_degenerate_not_a_reversal():
-    """(4) The failed-continuation pivot and the broken swing share one 15m bar (both index 3): no LH→HL→break
-    ordering exists → DEGENERATE, never a reversal."""
-    sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
-    objs = [_draw_obj(210)]
-    # broken LH high@3=140 and the HL low@3=100 are the SAME bar/index
-    skel = [("low", 130, 0), ("high", 150, 1), ("low", 95, 2), ("high", 140, 3), ("low", 100, 3)]
-    r = _exec(sc, 120, objs, _confirm_ms_seq("long", skel, 3, manip=100, impulse=140))
-    assert r["state"] == "watching" and r["entry"] is None
-    w = r["audit"]["when"]
-    assert r["audit"]["conditions"]["C3_confirmed_structural_reversal"] is False
-    assert w["classification"] == "degenerate" and w["reversal_state"] == "degenerate"
-
-
-def test_seq_failed_continuation_pivot_is_none_when_the_pivot_does_not_qualify():
-    """(5) Issue A: the audit `failed_continuation_pivot` must be None unless the pivot actually satisfies the
-    LH/HL relation. Here the low after the broken LH is a LOWER low (80 < prior low 95) → premature, and the
-    field must be None (not 'HL 80')."""
-    sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
-    objs = [_draw_obj(210)]
-    skel = [("low", 130, 0), ("high", 150, 1), ("low", 95, 2), ("high", 140, 3), ("low", 80, 4)]
-    r = _exec(sc, 120, objs, _confirm_ms_seq("long", skel, 3, manip=100, impulse=140))
-    w = r["audit"]["when"]
-    assert w["classification"] == "premature"
-    assert w["failed_continuation_pivot"] is None
+    # price 180 in the premium at the array, no shift yet → armed
+    assert P.execution_for_scenario(sc, [_shift_cand("short", manip=190, confirmed=False)],
+                                    price=180, objectives=objs)["state"] == "armed"
 
 
 # ---- sticky trigger + outcome tracking: once triggered it stays open until stop/target -----------
@@ -556,13 +345,16 @@ def test_dollar_pnl_per_trade():
 
 
 def test_target_requires_min_2R_and_picks_nearest_qualifying():
-    cm = _confirm_ms("long", 110, 130)                     # leg 110→130, 50% = 120 = entry; stop 110 → risk 10
-    # draw too NEAR (< 2R): draw 135 → dist 15 < 20 → NOT tradeable even with a confirmed 15m reversal
+    from ict_v2 import pipeline as P
+    fvg = _fvg_obj(120, 122, 118)                          # PD array (entry 120); manip extreme 110 → risk 10
+    shift = _shift_cand("long", manip=110)
+    # draw too NEAR (< 2R): draw 135 → dist 15 < 20 → NOT tradeable even with a PD array + shift
     sc = _N(direction="long", entry_zone=(100, 150), draw=_N(price=135), tf="1m")
-    r = _exec(sc, 120, [_draw_obj(135)], cm)
+    r = P.execution_for_scenario(sc, [shift], price=120, objectives=[fvg])
     assert r["state"] == "retracing" and "2R" in r["why"]
     # with liquidity: a 145 (2.5R) and a far 300 → pick the NEAREST that clears 2R = 145 → triggered
-    r2 = _exec(sc, 120, [_draw_obj(145), _draw_obj(300)], cm)
+    objs = [fvg, _draw_obj(145), _draw_obj(300)]
+    r2 = P.execution_for_scenario(sc, [shift], price=120, objectives=objs)
     assert r2["state"] == "triggered" and r2["target"] == 145 and r2["rr"] == 2.5
 
 
@@ -680,12 +472,15 @@ def test_draw_drift_does_not_create_a_duplicate_trade():
 
 
 def test_topstep_order_type_depends_on_price_vs_entry():
-    o = lambda sc, objs, cm, pr: _exec(sc, pr, objs, cm)["order"]
+    from ict_v2 import pipeline as P
+    o = lambda sc, objs, sh, pr: P.execution_for_scenario(sc, [sh], price=pr, objectives=objs)["order"]
     scL = _N(direction="long", entry_zone=(100, 150), draw=_N(price=210), tf="1m")
-    cmL = _confirm_ms("long", 100, 140)                       # entry 120 (leg 50%)
-    assert o(scL, [_draw_obj(210)], cmL, 140) == "BUY LIMIT"   # entry 120 below price 140 → limit
-    assert o(scL, [_draw_obj(210)], cmL, 110) == "BUY STOP"    # entry 120 above price 110 → stop
+    objsL = [_fvg_obj(120, 122, 118), _draw_obj(210)]         # entry PD array at 120
+    shiftL = _shift_cand("long", manip=100)
+    assert o(scL, objsL, shiftL, 140) == "BUY LIMIT"          # entry 120 below price 140 → limit
+    assert o(scL, objsL, shiftL, 110) == "BUY STOP"           # entry 120 above price 110 → stop
     scS = _N(direction="short", entry_zone=(100, 150), draw=_N(price=40), tf="1m")
-    cmS = _confirm_ms("short", 140, 100)                      # leg 100→140, 50% = 120 = entry
-    assert o(scS, [_draw_obj(40, side="low")], cmS, 110) == "SELL LIMIT"   # entry 120 above price 110 → limit
-    assert o(scS, [_draw_obj(40, side="low")], cmS, 130) == "SELL STOP"    # entry 120 below price 130 → stop
+    objsS = [_fvg_obj(120, 122, 118, direction="short"), _draw_obj(40, side="low")]
+    shiftS = _shift_cand("short", manip=160)
+    assert o(scS, objsS, shiftS, 110) == "SELL LIMIT"         # entry 120 above price 110 → limit
+    assert o(scS, objsS, shiftS, 130) == "SELL STOP"          # entry 120 below price 130 → stop

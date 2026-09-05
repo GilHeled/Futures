@@ -1,3 +1,10 @@
+> **ROLLED BACK (2026-09-05).** The Lesson-15 5m-confirmation / persistent-POTENTIAL / locality /
+> displacement-quality methodology documented below over-constrained the engine (1 trade across MNQ+MES,
+> Aug 9-28). Per the owner, the execution engine was restored to the working intraday baseline `9a39694`
+> (PD-array + local-structure-shift model, ~131 MNQ / ~93 MES trades). This file is kept as the RECORD of
+> that investigation only — it does NOT describe the active engine. The execution-correctness fixes
+> (reachability, no back-dated fills, dedup, deterministic stop/target, degenerate-stop) were retained.
+
 # `ict_v2` fidelity-gap register — Lesson-15 sequence
 
 **Measured against `3ecd6a1`** (`fix(ict_v2): enforce Lesson-15 SEQUENCE for a confirmed 15m reversal`).

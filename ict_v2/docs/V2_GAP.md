@@ -303,3 +303,44 @@ born-confirmed cases with local, spanning displacements. Fills 4 → 1. **Locali
 energetic/quality question** — e.g. MNQ 08-13 still confirms on flat chop (its displacement is local but tiny)
 — that remains the deferred HOW work. +4 locality tests (local confirm; stale-earlier reject; ends-before-
 `S[k]` reject; other-regime reject). 127 pass.
+
+---
+
+## Displacement quality — Lesson-12 relative candle expansion (2026-09) — METHODOLOGY BASELINE FROZEN
+
+The v1 displacement detector accepts any `net > 0` move after a sweep; the source requires the energetic move
+to contain *"very large candles relative to the candles that preceded them"* (L12). One concept added — nothing
+else stacked (no speed/overlap/FVG/continuation) — in the v2 confirmation (v1 frozen):
+
+> A confirming displacement qualifies only if `max |close-open| over the confirming displacement leg` is
+> **strictly greater than** `max |close-open| over the candles of the immediately-preceding minor leg`
+> (bounded by v1's own width-1 minor pivots). Applied to BOTH confirmation paths (advance + born-confirmed).
+
+`[RES]` calls (documented): candle size = **body** `abs(close-open)`, not full range (momentum vs rejection);
+comparison set = the **immediately-preceding minor leg** (width-1 pivots, no fixed-N lookback). No ratio,
+multiplier, ATR, percentile, points/ticks, candle-count, FVG, speed, or overlap rule. Locality preserved (the
+qualifying leg must still span `S[k]` and contain the break). Audit: `disp_max_body`, `preceding_leg_max_body`,
+`preceding_leg_from/to`, `expands`, `quality_basis="body max vs preceding minor-leg body max [RES]"`; and
+`quality_reject.reason` when a local leg lacks expansion. +2 tests (expansion confirms; no-expansion rejects).
+
+### Result on Aug 5m data (population UNCHANGED — the ordinal rule is faithful, not aggressive)
+
+The gate rejects a displacement candle no larger than its preceding leg, but the course supplies **no
+magnitude**, so a *marginally* larger candle qualifies. All 3 post-locality confirmations still pass:
+MNQ 08-13 body 7.75 > 5.75 (chop, but larger); MES 08-20 3.75 > 3.0; MES 08-24 2.25 > 0.5. So:
+
+- **Population (book census):** MNQ 11 potentials → 1 confirmed / 10 cancelled; MES 8 → 2 / 6. Total
+  **19 → 3 confirmed**, 16 cancelled, 0 active.
+- **Trades (book.trades, authoritative):** MNQ 1, MES 2 = **3 trades** over Aug 9–28 (~2 instruments × 20d).
+- **P&L checkpoint (diagnostic, tiny n):** MNQ 1 trade −1R (−$50 @ $50-risk); MES 2 trades (+2.31R / −1R) net
+  +1.3R (+$66); combined **+0.3R, ~+$16 @ $50-risk, 1/3 wins.**
+
+The remaining chop concern (a *small* displacement that is nonetheless larger than its preceding leg) is an
+**absolute-magnitude** question the course does not gate — deliberately NOT added.
+
+### FREEZE
+
+The v2 Lesson-15 methodology (5m confirmation · 15m liquidity/context · persistent POTENTIAL lifecycle ·
+locality · relative candle expansion) is the **frozen baseline**. No further methodology tightening unless a
+real implementation bug or a direct course contradiction is found. Remaining open item, unchanged and NOT
+gating: whether a 5m HH/HL can form inside very small chop (structural-scale question).

@@ -14,12 +14,15 @@ def _sw(kind, price, index, cidx):
     return N(kind=kind, price=price, index=index, confirm_index=cidx, time=T0 + timedelta(minutes=5 * index))
 
 
-def _bars(n, last_close):
+def _bars(n, last_close, break_body=8.0, base_body=0.5):
+    """n synthetic 5m bars. Baseline bars have a tiny body (base_body); the LAST bar (the break bar) gets a
+    body of `break_body` so the confirming displacement can show candle expansion vs the preceding candles.
+    Set break_body <= base_body to model a break with NO relative expansion."""
     b = []
     for i in range(n):
-        c = last_close if i == n - 1 else 1000.0
+        o, c = (last_close + break_body, last_close) if i == n - 1 else (1000.0, 1000.0 + base_body)
         b.append(N(open_time=T0 + timedelta(minutes=5 * i), close_time=T0 + timedelta(minutes=5 * i + 5),
-                   open=c, high=c + 1, low=c - 1, close=c))
+                   open=o, high=max(o, c) + 1, low=min(o, c) - 1, close=c, forming=False))
     return b
 
 
@@ -179,3 +182,26 @@ def test_locality_4_unrelated_displacement_other_regime_rejects():
     d_far = _disp("Dfar", "bearish", 200, 190, 1, 8)         # bearish but at a totally different price band
     b.update(_ms(_short_skel(), mss=[], disps=[d_far], sweeps=[sw]), _bars(9, 58.0), "t1")
     assert b.n_confirmed == 0 and len(b.active) == 1 and b.active[0].locality_reject is not None
+
+
+# ---- DISPLACEMENT QUALITY (Lesson 12): candle body expansion vs the immediately-preceding minor leg -------
+def test_quality_expansion_present_confirms_and_audits():
+    b = _make_potential()
+    sw = N(id="SW", extreme=100, pool_price=100, depends_on=None)
+    d = _disp("D", "bearish", 100, 55, 4, 8)                 # local + spans S[k]=60
+    b.update(_ms(_short_skel(), mss=[], disps=[d], sweeps=[sw]), _bars(9, 58.0, break_body=12.0, base_body=0.5), "t1")
+    assert b.n_confirmed == 1
+    q = b.confirmed[0].confirm_chain["quality"]
+    assert q["expands"] is True and q["disp_max_body"] > q["preceding_leg_max_body"]
+    assert q["quality_basis"] == "body max vs preceding minor-leg body max [RES]"
+
+
+def test_quality_no_expansion_rejects_even_when_local():
+    b = _make_potential()
+    sw = N(id="SW", extreme=100, pool_price=100, depends_on=None)
+    d = _disp("D", "bearish", 100, 55, 4, 8)                 # LOCAL + spans S[k], but break-bar body not bigger
+    b.update(_ms(_short_skel(), mss=[], disps=[d], sweeps=[sw]), _bars(9, 58.0, break_body=0.5, base_body=0.5), "t1")
+    assert b.n_confirmed == 0 and len(b.active) == 1
+    rej = b.active[0].quality_reject
+    assert rej is not None and "expansion" in rej["reason"].lower()
+    assert b.active[0].locality_reject is None               # locality PASSED; expansion is the blocker

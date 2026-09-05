@@ -61,6 +61,7 @@ class Potential:
     emitted: bool = False          # a downstream scenario has consumed this CONFIRMED event (consume-once)
     rediscoveries: int = 0         # times the same frozen identity was re-detected on later closes
     locality_reject: Optional[dict] = None   # latest reason a break did NOT confirm for lack of a local breaking leg
+    quality_reject: Optional[dict] = None    # latest reason a LOCAL breaking leg lacked relative candle expansion
 
     @property
     def identity(self):
@@ -87,8 +88,9 @@ class ReversalBook:
     def update(self, confirm_ms, bars5, cursor: str) -> None:
         if confirm_ms is None or not bars5:
             return
-        self._advance(confirm_ms, bars5, cursor)     # advance existing FIRST (terminal-once)
-        self._create(confirm_ms, bars5, cursor)      # then admit newly-valid sequences
+        piv = self._minor_pivots(bars5)              # width-1 minor pivots (v1's own leg segmentation)
+        self._advance(confirm_ms, bars5, cursor, piv)  # advance existing FIRST (terminal-once)
+        self._create(confirm_ms, bars5, cursor, piv)   # then admit newly-valid sequences
         for d in ("long", "short"):
             self._peak_active[d] = max(self._peak_active[d], sum(1 for p in self.active if p.direction == d))
         if len(self.active) > _SANITY_ACTIVE:        # loud guard ONLY — never evict a valid potential
@@ -96,7 +98,7 @@ class ReversalBook:
                         len(self.active), _SANITY_ACTIVE)
 
     # ---- creation: sole validator is pipeline._trend_sequence -----------------------------------
-    def _create(self, confirm_ms, bars5, cursor: str) -> None:
+    def _create(self, confirm_ms, bars5, cursor: str, piv) -> None:
         from ict_v2 import pipeline as P
         S = list(getattr(confirm_ms, "structural", []) or [])
         if not S:
@@ -127,18 +129,21 @@ class ReversalBook:
             self._seen[key] = p
             self.active.append(p)
             self.n_created += 1
-            if getattr(m, "state", "") == "confirmed":   # born already confirmed → confirm with the v1-linked chain
-                chain = self._chain(confirm_ms, m)
+            if getattr(m, "state", "") == "confirmed":   # born already confirmed → v1-linked chain, if it qualifies
                 dd = self._disp_of(confirm_ms, m)        # the v1 MSS's OWN displacement (local by construction)
-                if dd is not None:
+                ok, q = self._body_quality(dd, bars5, piv) if dd is not None else (False, None)
+                if ok:                                    # relative candle expansion present → confirm
+                    chain = self._chain(confirm_ms, m)
                     chain["locality"] = self._disp_audit(dd, bars5, len(bars5) - 1, p, self._spans(dd, p), True, cursor)
                     chain["locality"]["source"] = "born-confirmed (v1 MSS-linked displacement)"
-                self._confirm(p, cursor, chain)
+                    chain["quality"] = q
+                    self._confirm(p, cursor, chain)
+                else:                                     # no expansion → stays POTENTIAL (re-checked each close)
+                    p.quality_reject = q or {"reason": "born-confirmed leg had no displacement to grade"}
 
     # ---- advance existing potentials against FROZEN references -----------------------------------
-    def _advance(self, confirm_ms, bars5, cursor: str) -> None:
+    def _advance(self, confirm_ms, bars5, cursor: str, piv) -> None:
         S = list(getattr(confirm_ms, "structural", []) or [])
-        last = bars5[-1]
         disps = [r.item for r in getattr(confirm_ms, "ranked_displacements", [])]
         for p in list(self.active):
             # CANCEL — a NEW structural swing beyond the frozen S[k-1], pivot after the failed-continuation
@@ -148,8 +153,8 @@ class ReversalBook:
                 self._retire(p)
                 self.n_cancelled += 1
                 continue
-            # CONFIRM — the LOCAL displacement that actually breaks the frozen S[k] (locality correction)
-            chain = self._confirming_chain(confirm_ms, disps, p, bars5)
+            # CONFIRM — the LOCAL displacement that breaks frozen S[k] AND shows relative candle expansion
+            chain = self._confirming_chain(confirm_ms, disps, p, bars5, piv)
             if chain is not None:
                 self._confirm(p, cursor, chain)
 
@@ -182,13 +187,13 @@ class ReversalBook:
                 "disp_start_time": ot(si), "disp_end_time": ct(ei), "disp_start_index": si, "disp_end_index": ei,
                 "s_k": p.s_k.price, "confirm_bar_time": confirm_time, "spans_s_k": spans, "confirm_bar_belongs": belongs}
 
-    def _confirming_chain(self, confirm_ms, disps, p: Potential, bars5):
-        """LOCALITY-correct confirmation (V2_GAP): the confirming displacement must be the leg that actually
-        breaks the frozen S[k] — reversal-direction, spanning S[k] (reaches THROUGH it), and the confirmation
-        bar (the current closed 5m bar body-closing beyond S[k]) must belong to that displacement's span. A
-        stale earlier same-direction displacement, or one that ends before reaching S[k], does NOT qualify.
-        Deterministic/causal; no numeric threshold; never re-anchors S[k]. Returns the chain, or None + a
-        recorded rejection reason on the potential."""
+    def _confirming_chain(self, confirm_ms, disps, p: Potential, bars5, piv):
+        """LOCALITY + DISPLACEMENT-QUALITY confirmation (V2_GAP). The confirming displacement must be the leg
+        that actually breaks the frozen S[k] (locality: reversal-direction, spanning S[k], confirmation bar
+        within its span — a stale/earlier or short-of-S[k] leg does NOT qualify) AND it must show the course's
+        relative candle expansion (Lesson 12: 'very large candles relative to the candles that preceded them',
+        mechanized as body-max vs the preceding minor leg — see _body_quality). Deterministic/causal; no
+        numeric threshold; never re-anchors S[k]. Returns the chain, or None + a recorded rejection reason."""
         last = bars5[-1]
         bi = len(bars5) - 1
         broke = (last.close < p.s_k.price) if p.direction == "short" else (last.close > p.s_k.price)
@@ -209,11 +214,21 @@ class ReversalBook:
                                  "confirm_bar_time": confirm_t,
                                  "stale_spanning": [self._disp_audit(d, bars5, bi, p, True, False, confirm_t) for d in spanning[:3]]}
             return None
-        d = max(local, key=lambda x: getattr(x, "end_index", 0))     # the most-recent local breaking leg
-        chain = self._chain(confirm_ms, d, is_disp=True)
-        chain["locality"] = self._disp_audit(d, bars5, bi, p, True, True, confirm_t)
         p.locality_reject = None
-        return chain
+        # DISPLACEMENT QUALITY — among the local breaking legs, require relative candle expansion (Lesson 12).
+        qualified = []
+        for d in sorted(local, key=lambda x: getattr(x, "end_index", 0), reverse=True):
+            ok, q = self._body_quality(d, bars5, piv)
+            if ok:
+                chain = self._chain(confirm_ms, d, is_disp=True)
+                chain["locality"] = self._disp_audit(d, bars5, bi, p, True, True, confirm_t)
+                chain["quality"] = q
+                p.quality_reject = None
+                return chain
+            qualified.append(q)
+        p.quality_reject = {"reason": "local breaking leg has NO relative candle expansion (Lesson 12: body-max "
+                            "not greater than the preceding minor leg's body-max)", **(qualified[0] or {})}
+        return None
 
     # ---- helpers --------------------------------------------------------------------------------
     def _freeze(self, s, bars5) -> _Swing:
@@ -227,6 +242,42 @@ class ReversalBook:
     def _disp_of(self, confirm_ms, m):
         disp_by = {d.item.id: d.item for d in getattr(confirm_ms, "ranked_displacements", [])}
         return disp_by.get(m.depends_on[0]) if getattr(m, "depends_on", None) else None
+
+    @staticmethod
+    def _minor_pivots(bars5) -> list:
+        """Width-1 minor pivot indices — v1's OWN leg segmentation (SwingDetector(1)), so the 'preceding minor
+        leg' boundary is defined exactly as the displacement detector defines legs (no arbitrary N-bar window)."""
+        from ict_live.structure.swings import SwingDetector
+        det = SwingDetector(1)
+        for b in bars5:
+            det.add(b)
+        return sorted(s.index for s in det.confirmed())
+
+    @staticmethod
+    def _body(b) -> float:
+        return abs(float(b.close) - float(b.open))
+
+    def _body_quality(self, d, bars5, piv):
+        """Lesson-12 relative candle EXPANSION [RES: body vs range → BODY; comparison set → the immediately-
+        preceding minor leg]. Returns (ok, audit). Rule (ordinal, no threshold):
+            max |close-open| over the confirming displacement leg  >  max |close-open| over the candles of the
+            immediately-preceding minor leg (from the last width-1 minor pivot before the sweep, up to it)."""
+        si = getattr(d, "start_index", None)
+        ei = getattr(d, "end_index", None)
+        if si is None or ei is None or not bars5:
+            return (False, {"quality_basis": "body max vs preceding minor-leg body max [RES]", "reason": "no leg indices"})
+        disp = bars5[si:ei + 1]
+        disp_max = max((self._body(b) for b in disp), default=0.0)
+        prev_start = max((i for i in piv if i < si), default=0)          # last minor pivot strictly before the sweep
+        prec = bars5[prev_start:si]                                      # the immediately-preceding minor leg
+        prec_max = max((self._body(b) for b in prec), default=0.0)
+        ok = disp_max > prec_max                                         # strictly greater — the "elephant"
+        ot = lambda ix: bars5[ix].open_time.isoformat() if (ix is not None and 0 <= ix < len(bars5)) else None
+        return (ok, {"quality_basis": "body max vs preceding minor-leg body max [RES]",
+                     "disp_max_body": round(disp_max, 2), "preceding_leg_max_body": round(prec_max, 2),
+                     "preceding_leg_from": ot(prev_start), "preceding_leg_to": ot(max(si - 1, prev_start)),
+                     "preceding_leg_from_index": prev_start, "preceding_leg_to_index": si - 1,
+                     "expands": ok})
 
     def _chain(self, confirm_ms, item, is_disp: bool = False) -> dict:
         """Extract WHERE (sweep manip) + leg + same-leg FVGs from a creating MSS or a confirming displacement,
@@ -296,7 +347,9 @@ class ReversalBook:
                 "seq": seq, "classification": "reversal", "pool": (chain or {}).get("pool", manip),
                 "mss_id": p.identity[0] + ":" + str(p.s_k.price), "fvgs": (chain or {}).get("fvgs", []),
                 "locality": (chain or {}).get("locality"),                 # confirmed: the breaking-leg audit
-                "locality_reject": (p.locality_reject if state == "potential" else None)}   # potential: why not yet confirmed
+                "quality": (chain or {}).get("quality"),                   # confirmed: the candle-expansion audit
+                "locality_reject": (p.locality_reject if state == "potential" else None),
+                "quality_reject": (p.quality_reject if state == "potential" else None)}   # potential: why not yet confirmed
 
     def mark_emitted(self, mss_id: str) -> None:
         for p in self.confirmed:

@@ -1048,6 +1048,7 @@ def execution_for_scenario(scenario, candidates=None, price=None, objectives=Non
                                       "failed_continuation_pivot": seq.get("failed_continuation_pivot"),
                                       "last_structural_swing": seq.get("last_structural_swing"),
                                       "locality_reject": R.get("locality_reject"),   # why the break hasn't confirmed
+                                      "quality_reject": R.get("quality_reject"),     # or: local leg lacked expansion
                                       "confirmation_break": None})}
 
     # C4/C5 — the confirmed 15m reversal's leg + retrace entry (structural leg; 1m only fills it).
@@ -1104,6 +1105,7 @@ def execution_for_scenario(scenario, candidates=None, price=None, objectives=Non
                             "failed_continuation_pivot": (ch.get("seq") or {}).get("failed_continuation_pivot"),
                             "last_structural_swing": (ch.get("seq") or {}).get("last_structural_swing"),
                             "confirmation_break": ch["broken_price"], "locality": ch.get("locality"),
+                            "quality": ch.get("quality"),
                             "rule": "confirmed 15m structural reversal — an established opposite trend, then a "
                                     "failed-continuation pivot (LH/HL), then a body close broke the last "
                                     "opposing 15m STRUCTURAL swing (Lesson-15 sequence, scale Lesson 6); "

@@ -1,11 +1,14 @@
 """ICT v2 — live driver: feed the SAME 1-minute bars the existing feed produces, reuse the existing
 `BarBuilder` to resample them (no new pipeline), and drive `MTFEngine` with per-timeframe cadence:
 
-    context 4H  ->  setup 1H  ->  confirmation 15m  ->  execution 1m
+    context 4H  ->  setup 1H  ->  liquidity 15m  ->  confirmation 5m  ->  execution 1m
 
-`push_1m(bar)` is fed the raw 1m stream. The BarBuilder emits 15m / 1H / 4H closes as they complete;
-each drives its layer only on its own close (context 4H, setup 1H, confirmation 15m), while the 1m
-execution trigger re-evaluates every bar against the current fixed cascade. State is snapshot-able /
+`push_1m(bar)` is fed the raw 1m stream. The BarBuilder emits 5m / 15m / 1H / 4H closes as they complete;
+each drives its layer only on its own close (context 4H, setup 1H, LIQUIDITY 15m, Lesson-15 trend-change
+CONFIRMATION 5m), while the 1m execution trigger re-evaluates every bar against the current fixed cascade.
+The ≥15m liquidity floor (Lesson 6/8) governs the liquidity/context TF; the Lesson-15 trend change is a
+separate responsibility taught on a small interval (canonically 5m) and consumes the ≥15m/4H P-D + draws
+without redefining them. State is snapshot-able /
 persistable for the dashboard. Advisory only; v1 imported READ-ONLY and untouched.
 """
 from __future__ import annotations
@@ -43,27 +46,28 @@ def _px(x):
 
 
 class V2Live:
-    def __init__(self, context_tf: str = "4H", setup_tf: str = "1H", confirm_tf: str = "15m",
+    def __init__(self, context_tf: str = "4H", setup_tf: str = "1H", confirm_tf: str = "5m",
                  trigger_tf: str = "1m", window: int = _WINDOW, exec_window: int = _EXEC_WINDOW,
                  refine_tf: str | None = None, min_stop: float | None = None,
                  anchor_tf: str | None = None, entry_models=None, point_value: float | None = None,
-                 price_dp: int = 2):
+                 price_dp: int = 2, liquidity_tf: str = "15m"):
         self.context_tf, self.setup_tf = context_tf, setup_tf
         self.confirm_tf, self.trigger_tf = confirm_tf, trigger_tf
+        self.liquidity_tf = liquidity_tf                     # 15m: nearer liquidity pools / meaningful swings / ORG
         self.window, self.exec_window = window, exec_window
         self.refine_tf = refine_tf                           # None = MTF entry-refinement OFF (default)
         self.anchor_tf = anchor_tf                           # None = no Daily/Weekly anchor (default); else "D"/"W"
         self.entry_models = entry_models                     # None = FVG only (default execution model)
         self.point_value = point_value                       # $ per point (1 contract) — for $ risk/reward on the card
-        # build every TF we need: intraday (5m/15m/1H/4H) + optional Daily/Weekly anchor (D/W need the
-        # session calendar, which BarBuilder supplies by default)
-        built = tuple(dict.fromkeys(tf for tf in (setup_tf, context_tf, confirm_tf, refine_tf, anchor_tf)
-                                    if tf and tf != "1m"))
+        # build every TF we need: 5m confirmation + 15m liquidity + 1H/4H context (+ optional refine/anchor).
+        # The session calendar (for D/W) is supplied by BarBuilder by default.
+        built = tuple(dict.fromkeys(tf for tf in (setup_tf, context_tf, confirm_tf, liquidity_tf,
+                                                  refine_tf, anchor_tf) if tf and tf != "1m"))
         self.builder = BarBuilder(timeframes=built)
         self.engine = MTFEngine(context_tf, setup_tf, confirm_tf, trigger_tf,
                                 refine_tf=refine_tf, min_stop=min_stop, anchor_tf=anchor_tf,
-                                entry_models=entry_models, point_value=point_value)
-        tfs = tuple(dict.fromkeys(tf for tf in (context_tf, setup_tf, confirm_tf, trigger_tf,
+                                entry_models=entry_models, point_value=point_value, liquidity_tf=liquidity_tf)
+        tfs = tuple(dict.fromkeys(tf for tf in (context_tf, setup_tf, confirm_tf, liquidity_tf, trigger_tf,
                                                 refine_tf, anchor_tf) if tf))
         self.buf = {tf: [] for tf in tfs}
         self.updated = {tf: None for tf in tfs}              # last-update time per timeframe (ISO)
@@ -100,7 +104,13 @@ class V2Live:
                 rb = self.buf.get(self.refine_tf) if self.refine_tf else None
                 self.engine.on_setup_close(self.buf[self.setup_tf], refine_bars=rb)
                 self.updated[self.setup_tf] = _et_iso(cb.close_time)
-        for cb in closed:                                    # confirmation (optionally entry-refined too)
+        if self.liquidity_tf and self.liquidity_tf not in (self.context_tf, self.setup_tf, self.confirm_tf):
+            for cb in closed:                                # 15m liquidity/context — update BEFORE the 5m confirm
+                if cb.timeframe == self.liquidity_tf:
+                    self._append(self.liquidity_tf, cb, self.window)
+                    self.engine.on_liquidity_close(self.buf[self.liquidity_tf])
+                    self.updated[self.liquidity_tf] = _et_iso(cb.close_time)
+        for cb in closed:                                    # 5m Lesson-15 trend-change confirmation (the WHEN)
             if cb.timeframe == self.confirm_tf:
                 self._append(self.confirm_tf, cb, self.window)
                 rb = self.buf.get(self.refine_tf) if self.refine_tf else None
@@ -130,7 +140,7 @@ class V2Live:
             nwog = pdarrays.nwogs(self.buf.get(self.context_tf) or [])   # Lesson 13
             for g in nwog:
                 _role_gap(g, pdarrays.from_nwog)
-            org = pdarrays.org(self.buf.get(self.confirm_tf) or [])      # Lesson 14 (15m has 09:30/16:15)
+            org = pdarrays.org(self.buf.get(self.liquidity_tf) or [])    # Lesson 14 (15m liquidity TF: 09:30/16:15)
             if org:
                 _role_gap(org, pdarrays.from_org)
         return {
@@ -167,8 +177,8 @@ class V2Live:
         return {
             "session": sess, "killzone": kz,
             "timeframes": {"context": self.context_tf, "setup": self.setup_tf,
-                           "confirm": self.confirm_tf, "trigger": self.trigger_tf,
-                           "refine": self.refine_tf, "anchor": self.anchor_tf},
+                           "liquidity": self.liquidity_tf, "confirm": self.confirm_tf,
+                           "trigger": self.trigger_tf, "refine": self.refine_tf, "anchor": self.anchor_tf},
             "entry_models": {"enabled": list(EM.resolve(self.entry_models)), "catalog": EM.catalog()},
             "updated": dict(self.updated),
             "last": None if last is None else {"price": _px(last.close), "dir": last_dir,
@@ -188,8 +198,10 @@ class V2Live:
             "scenario_stats": eng.book.stats(),
             "trades": list(eng.book.trades),
             "objectives": [o.to_dict() for o in getattr(eng, "objectives", [])],   # full liquidity inventory
-            # recent OHLC per execution TF for the per-scenario candlestick chart (15m default; 1H/1m toggle)
+            # recent OHLC per TF for the per-scenario candlestick chart: 5m confirmation (the WHEN) + 15m
+            # liquidity context + 1H context + 1m trigger.
             "bars": {self.confirm_tf: self._bars(self.confirm_tf, 90),
+                     self.liquidity_tf: self._bars(self.liquidity_tf, 90),
                      self.setup_tf: self._bars(self.setup_tf, 54),
                      self.trigger_tf: self._bars(self.trigger_tf, 120)},
             "point_value": self.point_value,        # $ per point (1 contract) → $ risk/reward on the card

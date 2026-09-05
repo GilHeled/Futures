@@ -331,9 +331,11 @@ MNQ 08-13 body 7.75 > 5.75 (chop, but larger); MES 08-20 3.75 > 3.0; MES 08-24 2
 
 - **Population (book census):** MNQ 11 potentials → 1 confirmed / 10 cancelled; MES 8 → 2 / 6. Total
   **19 → 3 confirmed**, 16 cancelled, 0 active.
-- **Trades (book.trades, authoritative):** MNQ 1, MES 2 = **3 trades** over Aug 9–28 (~2 instruments × 20d).
-- **P&L checkpoint (diagnostic, tiny n):** MNQ 1 trade −1R (−$50 @ $50-risk); MES 2 trades (+2.31R / −1R) net
-  +1.3R (+$66); combined **+0.3R, ~+$16 @ $50-risk, 1/3 wins.**
+- **Trades (book.trades, frozen 5m build):** MNQ 0, MES 1 = **1 trade** over Aug 9–28.
+- **P&L checkpoint (diagnostic, tiny n):** the 1 trade (MES 08-20 long) **STOPPED: −1R / −$50 @ $50-risk;
+  MNQ 0 trades.** *(Correction 2026-09-05: an earlier note here said "3 trades / +0.3R"; that came from a
+  stale runner that invoked `V2Live("4H","1H","15m","1m")` — passing 15m as the confirm TF positionally, i.e.
+  the OLD 15m confirmation, not this frozen 5m build. `V2Live()` defaults, and the funnel audit, give 1 trade.)*
 
 The remaining chop concern (a *small* displacement that is nonetheless larger than its preceding leg) is an
 **absolute-magnitude** question the course does not gate — deliberately NOT added.

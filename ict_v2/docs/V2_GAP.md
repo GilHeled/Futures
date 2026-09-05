@@ -276,3 +276,30 @@ trend structurally resumed beyond `S[k-1]`), not lost tracking.
 Fills went from 0 (stateless 5m build) to 1 (MNQ) / 3 (MES) purely by retaining the Lesson-15 state to its
 course-defined terminal event. Reported as population/lifecycle counts; **no P&L, win-rate, or expectancy**,
 and no HOW/displacement evaluation.
+
+---
+
+## Locality correction (2026-09) — the confirming displacement must be the breaking leg
+
+Chart validation of the 7 confirmed 5m reversals exposed a causal bug in `ReversalBook._confirming_chain`
+(the `_advance` path): it confirmed a break using **any** reversal-direction displacement in the 240-bar
+window — including one ~3h stale (MNQ 08-25: leg 29416→29209 while price was ~29220) or one that never
+reached `S[k]` (MES 08-11/08-12). This is deterministic/causal, not a quality/energy question, so it is fixed
+without any invented threshold.
+
+**Rule (from L12/L15/L16 — the energetic move *is* the break):** a confirmation requires a reversal-direction
+displacement that (a) **spans** the frozen `S[k]` (starts on the origin side, ends BEYOND it — a leg ending
+before `S[k]` fails) AND (b) whose span **contains the confirmation bar** (the current closed 5m bar body-
+closing beyond `S[k]`). A stale/earlier same-direction displacement, or one at another price band, no longer
+qualifies. The born-confirmed path (creation with a v1-confirmed MSS) already uses the MSS's own linked
+displacement and is unchanged; its chain is annotated with the same locality audit.
+
+Audit added on confirmation: displacement start/end price+time, frozen `S[k]`, confirmation bar time,
+`spans_s_k`, `confirm_bar_belongs`; and on a blocked break, `locality_reject.reason`.
+
+**Effect on the Aug 5m population (population only — no P&L):** confirmed reversals **7 → 3**
+(MNQ 2→1, MES 5→2); the 4 stale/non-spanning confirmations now resolve as CANCELLED. The 3 survivors are the
+born-confirmed cases with local, spanning displacements. Fills 4 → 1. **Locality does NOT address the
+energetic/quality question** — e.g. MNQ 08-13 still confirms on flat chop (its displacement is local but tiny)
+— that remains the deferred HOW work. +4 locality tests (local confirm; stale-earlier reject; ends-before-
+`S[k]` reject; other-regime reject). 127 pass.

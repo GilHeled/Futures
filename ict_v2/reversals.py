@@ -60,6 +60,7 @@ class Potential:
     confirm_chain: dict = field(default_factory=dict)   # WHERE/leg of the CONFIRMING displacement (entry)
     emitted: bool = False          # a downstream scenario has consumed this CONFIRMED event (consume-once)
     rediscoveries: int = 0         # times the same frozen identity was re-detected on later closes
+    locality_reject: Optional[dict] = None   # latest reason a break did NOT confirm for lack of a local breaking leg
 
     @property
     def identity(self):
@@ -126,8 +127,13 @@ class ReversalBook:
             self._seen[key] = p
             self.active.append(p)
             self.n_created += 1
-            if getattr(m, "state", "") == "confirmed":   # born already confirmed → confirm now with its own chain
-                self._confirm(p, cursor, self._chain(confirm_ms, m))
+            if getattr(m, "state", "") == "confirmed":   # born already confirmed → confirm with the v1-linked chain
+                chain = self._chain(confirm_ms, m)
+                dd = self._disp_of(confirm_ms, m)        # the v1 MSS's OWN displacement (local by construction)
+                if dd is not None:
+                    chain["locality"] = self._disp_audit(dd, bars5, len(bars5) - 1, p, self._spans(dd, p), True, cursor)
+                    chain["locality"]["source"] = "born-confirmed (v1 MSS-linked displacement)"
+                self._confirm(p, cursor, chain)
 
     # ---- advance existing potentials against FROZEN references -----------------------------------
     def _advance(self, confirm_ms, bars5, cursor: str) -> None:
@@ -142,8 +148,8 @@ class ReversalBook:
                 self._retire(p)
                 self.n_cancelled += 1
                 continue
-            # CONFIRM — a valid confirming displacement body-closes beyond the frozen S[k] price
-            chain = self._confirming_chain(confirm_ms, disps, p, last)
+            # CONFIRM — the LOCAL displacement that actually breaks the frozen S[k] (locality correction)
+            chain = self._confirming_chain(confirm_ms, disps, p, bars5)
             if chain is not None:
                 self._confirm(p, cursor, chain)
 
@@ -161,20 +167,53 @@ class ReversalBook:
                 return _round_tick(s.price, self.tick)
         return None
 
-    def _confirming_chain(self, confirm_ms, disps, p: Potential, last):
-        """Confirmation = the latest closed 5m bar body-closes beyond the FROZEN S[k] price (the break) AND a
-        reversal-direction displacement is present (existing displacement/confirmation rule certifies the
-        break is energetic). The body-close is the break; the displacement supplies the entry chain. None if
-        either is absent. Never re-anchors S[k]."""
+    def _spans(self, d, p: Potential) -> bool:
+        """The displacement leg crosses the FROZEN S[k]: it starts on the origin side and ends BEYOND S[k]
+        (short: start >= S[k] > end; long: start <= S[k] < end). A leg that ends before reaching S[k] fails."""
+        sp, ep = float(getattr(d, "start_price", 0.0)), float(getattr(d, "end_price", 0.0))
+        return (sp >= p.s_k.price > ep) if p.direction == "short" else (sp <= p.s_k.price < ep)
+
+    def _disp_audit(self, d, bars5, bi, p, spans, belongs, confirm_time) -> dict:
+        si, ei = getattr(d, "start_index", None), getattr(d, "end_index", None)
+        ot = lambda ix: bars5[ix].open_time.isoformat() if (ix is not None and 0 <= ix < len(bars5)) else None
+        ct = lambda ix: bars5[ix].close_time.isoformat() if (ix is not None and 0 <= ix < len(bars5)) else None
+        return {"disp_start_price": round(float(getattr(d, "start_price", 0.0)), 2),
+                "disp_end_price": round(float(getattr(d, "end_price", 0.0)), 2),
+                "disp_start_time": ot(si), "disp_end_time": ct(ei), "disp_start_index": si, "disp_end_index": ei,
+                "s_k": p.s_k.price, "confirm_bar_time": confirm_time, "spans_s_k": spans, "confirm_bar_belongs": belongs}
+
+    def _confirming_chain(self, confirm_ms, disps, p: Potential, bars5):
+        """LOCALITY-correct confirmation (V2_GAP): the confirming displacement must be the leg that actually
+        breaks the frozen S[k] — reversal-direction, spanning S[k] (reaches THROUGH it), and the confirmation
+        bar (the current closed 5m bar body-closing beyond S[k]) must belong to that displacement's span. A
+        stale earlier same-direction displacement, or one that ends before reaching S[k], does NOT qualify.
+        Deterministic/causal; no numeric threshold; never re-anchors S[k]. Returns the chain, or None + a
+        recorded rejection reason on the potential."""
+        last = bars5[-1]
+        bi = len(bars5) - 1
         broke = (last.close < p.s_k.price) if p.direction == "short" else (last.close > p.s_k.price)
         if not broke:
             return None
         want = "bearish" if p.direction == "short" else "bullish"
-        cands = [d for d in disps if getattr(d, "direction", "") == want]
-        if not cands:
+        confirm_t = last.close_time.isoformat()
+        local = [d for d in disps if getattr(d, "direction", "") == want and self._spans(d, p)
+                 and getattr(d, "start_index", None) is not None and getattr(d, "end_index", None) is not None
+                 and d.start_index <= bi <= d.end_index]
+        if not local:
+            spanning = [d for d in disps if getattr(d, "direction", "") == want and self._spans(d, p)]
+            reason = ("break not produced by a LOCAL displacement — a reversal-direction displacement spans "
+                      "S[k] but ended before the break bar (stale/earlier leg)" if spanning else
+                      "no reversal-direction displacement reaches THROUGH S[k] (break is a drift, not a "
+                      "displacement's breaking leg)")
+            p.locality_reject = {"reason": reason, "s_k": p.s_k.price, "break_close": round(float(last.close), 2),
+                                 "confirm_bar_time": confirm_t,
+                                 "stale_spanning": [self._disp_audit(d, bars5, bi, p, True, False, confirm_t) for d in spanning[:3]]}
             return None
-        cand = max(cands, key=lambda x: getattr(x, "end_index", getattr(x, "start_index", 0)))
-        return self._chain(confirm_ms, cand, is_disp=True)
+        d = max(local, key=lambda x: getattr(x, "end_index", 0))     # the most-recent local breaking leg
+        chain = self._chain(confirm_ms, d, is_disp=True)
+        chain["locality"] = self._disp_audit(d, bars5, bi, p, True, True, confirm_t)
+        p.locality_reject = None
+        return chain
 
     # ---- helpers --------------------------------------------------------------------------------
     def _freeze(self, s, bars5) -> _Swing:
@@ -184,6 +223,10 @@ class ReversalBook:
         return _Swing(price=_round_tick(s.price, self.tick),
                       pivot_time=(pt.isoformat() if pt is not None else None),
                       knowable_time=kn, kind=getattr(s, "kind", ""))
+
+    def _disp_of(self, confirm_ms, m):
+        disp_by = {d.item.id: d.item for d in getattr(confirm_ms, "ranked_displacements", [])}
+        return disp_by.get(m.depends_on[0]) if getattr(m, "depends_on", None) else None
 
     def _chain(self, confirm_ms, item, is_disp: bool = False) -> dict:
         """Extract WHERE (sweep manip) + leg + same-leg FVGs from a creating MSS or a confirming displacement,
@@ -251,7 +294,9 @@ class ReversalBook:
                 "leg_a": (chain or {}).get("leg_a", manip), "leg_b": (chain or {}).get("leg_b", manip),
                 "broken_price": p.s_k.price, "broken_dominant": False, "broken_protected": False,
                 "seq": seq, "classification": "reversal", "pool": (chain or {}).get("pool", manip),
-                "mss_id": p.identity[0] + ":" + str(p.s_k.price), "fvgs": (chain or {}).get("fvgs", [])}
+                "mss_id": p.identity[0] + ":" + str(p.s_k.price), "fvgs": (chain or {}).get("fvgs", []),
+                "locality": (chain or {}).get("locality"),                 # confirmed: the breaking-leg audit
+                "locality_reject": (p.locality_reject if state == "potential" else None)}   # potential: why not yet confirmed
 
     def mark_emitted(self, mss_id: str) -> None:
         for p in self.confirmed:

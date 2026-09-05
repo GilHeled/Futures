@@ -39,11 +39,18 @@ def _short_skel():
 
 
 def _short_chain(state="candidate", broken=60, confirm_index=9):
+    # the confirming displacement SPANS S[k]=60 (start 100 >= 60 > end 55) and is LOCAL to the break bar
+    # (_bars(9) → break index 8, which is within the displacement span 4..8)
     sw = N(id="SW", extreme=100, pool_price=100, depends_on=None)
-    d = N(id="D", direction="bearish", start_price=100, end_price=60, start_index=4, end_index=7, depends_on=("SW",))
+    d = N(id="D", direction="bearish", start_price=100, end_price=55, start_index=4, end_index=8, depends_on=("SW",))
     m = N(id="MSS", direction="bearish", state=state, broken_price=broken, broken_index=3,
           confirm_index=confirm_index, depends_on=("D",))
     return m, d, sw
+
+
+def _disp(id_, direction, start_price, end_price, start_index, end_index):
+    return N(id=id_, direction=direction, start_price=start_price, end_price=end_price,
+             start_index=start_index, end_index=end_index, depends_on=("SW",))
 
 
 def test_creation_from_valid_sequence():
@@ -126,3 +133,49 @@ def test_separate_potential_when_s_k_differs():
     b.update(_ms(skel2, mss=[m2], disps=[d2], sweeps=[sw2]), _bars(9, 80.0), "t1")
     assert b.n_created == 2 and len(b.active) == 2          # genuinely separate; no one-per-direction cap
     assert b.census()["peak_simultaneous_active"]["short"] == 2
+
+
+# ---- LOCALITY correction: the confirming displacement must be the leg that actually breaks frozen S[k] ----
+def _make_potential():
+    b = ReversalBook()
+    m, d, sw = _short_chain()
+    b.update(_ms(_short_skel(), mss=[m], disps=[d], sweeps=[sw]), _bars(9, 80.0), "t0")   # active POTENTIAL, S[k]=60
+    return b
+
+
+def test_locality_1_local_displacement_breaks_s_k_confirms():
+    b = _make_potential()
+    sw = N(id="SW", extreme=100, pool_price=100, depends_on=None)
+    d = _disp("D", "bearish", 100, 55, 4, 8)                 # spans 60 and end_index 8 == break index → local
+    b.update(_ms(_short_skel(), mss=[], disps=[d], sweeps=[sw]), _bars(9, 58.0), "t1")
+    assert b.n_confirmed == 1
+    loc = b.confirmed[0].confirm_chain["locality"]
+    assert loc["spans_s_k"] is True and loc["confirm_bar_belongs"] is True and loc["s_k"] == 60
+
+
+def test_locality_2_stale_earlier_displacement_plus_marginal_break_rejects():
+    b = _make_potential()
+    sw = N(id="SW", extreme=100, pool_price=100, depends_on=None)
+    d_stale = _disp("Dstale", "bearish", 100, 55, 1, 3)      # SPANS 60 but ended at idx 3 (break bar is 8) → stale
+    b.update(_ms(_short_skel(), mss=[], disps=[d_stale], sweeps=[sw]), _bars(9, 59.75), "t1")
+    assert b.n_confirmed == 0 and len(b.active) == 1
+    rej = b.active[0].locality_reject
+    assert rej is not None and "stale" in rej["reason"].lower()
+
+
+def test_locality_3_displacement_ending_before_s_k_rejects():
+    b = _make_potential()
+    sw = N(id="SW", extreme=100, pool_price=100, depends_on=None)
+    d_short = _disp("Dshort", "bearish", 100, 65, 4, 8)      # bearish + local, but ends at 65 (never reaches 60)
+    b.update(_ms(_short_skel(), mss=[], disps=[d_short], sweeps=[sw]), _bars(9, 58.0), "t1")
+    assert b.n_confirmed == 0 and len(b.active) == 1
+    rej = b.active[0].locality_reject
+    assert rej is not None and "through" in rej["reason"].lower()
+
+
+def test_locality_4_unrelated_displacement_other_regime_rejects():
+    b = _make_potential()
+    sw = N(id="SW", extreme=100, pool_price=100, depends_on=None)
+    d_far = _disp("Dfar", "bearish", 200, 190, 1, 8)         # bearish but at a totally different price band
+    b.update(_ms(_short_skel(), mss=[], disps=[d_far], sweeps=[sw]), _bars(9, 58.0), "t1")
+    assert b.n_confirmed == 0 and len(b.active) == 1 and b.active[0].locality_reject is not None

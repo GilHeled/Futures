@@ -196,3 +196,40 @@ confirms. `_structural_reversal` routes `invalidated` / `degenerate` through its
 
 **Unchanged:** v1 (frozen); 15m scale; WHERE; ≥50% retrace; P/D side; FVG optional; stop beyond manipulation;
 target ≥2R; reachability; no STALE_PROGRESS; no displacement/energy. No new thresholds/ATR/buffers.
+
+---
+
+## Implemented + behaviorally validated (2026-09, `7b3d768`)
+
+`fix(ict_v2): Lesson-15 potential must survive to the break (stateful sequence)`. Full suite 114 pass;
+v2 + dashboard rebuilt. **Status: IMPLEMENTED and behaviorally validated for the observed real-data cases**,
+with one explicit remaining validation limitation (below).
+
+Chart-validation set drawn blindly by chronology from the corrected build (MNQ Aug 9–28):
+
+- **Case 2** (confirmed short, Aug 25): a genuine Lesson-15 reversal — **remained `confirmed`** (potential
+  survived to the break). ✓
+- **Case 1** (long, Aug 19): the previous false confirmation is now **rejected as `degenerate`** (its
+  failed-continuation pivot and broken swing share the 15:45 bar; ordering fails before the survival scan). ✓
+- **Premature** (long, Aug 10): **Issue A fixed** — `failed_continuation_pivot=None` where no valid LH/HL
+  exists (was mislabeled `"HL 29666"`). ✓
+- **No look-ahead** was found in the inspected structural sequences: every pivot the classifier reads is
+  knowable (its `confirm_index` bar close) at/before the confirmation break and the decision cursor.
+- The **`invalidated`** long and short paths are covered by unit tests
+  (`test_seq_long_potential_invalidated_*`, `test_seq_short_potential_invalidated_*`).
+
+### Remaining validation limitation (NOT a blocker)
+
+No **naturally occurring `invalidated`** example was found in MNQ **or** MES Aug: the only real trend
+resumption (Case 1) was *also* same-bar, so the ordering check classifies it `degenerate` before the survival
+scan applies. The `invalidated` transition is therefore **unit-test-covered but not yet behaviorally validated
+on real market data**. Preserved here as an explicit limitation to close later with a wider dataset — it does
+not block the fix.
+
+### WHAT status
+
+`scale + trend sequence + potential ordering + cancellation logic + confirmation` are implemented; observed
+real-data sequence cases pass current chart validation.
+
+**This is NOT a statement that overall methodology fidelity is complete** — HOW / displacement quality
+(Lesson 12 energetic-move character, displacement grading) has intentionally **not** been evaluated yet.

@@ -171,7 +171,7 @@ def test_when_is_the_15m_structural_reversal_not_a_1m_pivot():
     assert _exec(sc, 120, objs, _confirm_ms("long", 160, 200)) is None
     # AUDITABLE: structural_tf=15m, the confirmed reversal, the leg + its 50%
     a = r["audit"]
-    assert a["structural_tf"] == "15m" and a["conditions"]["C3_confirmed_structural_reversal"] \
+    assert a["structural_tf"] == "5m" and a["conditions"]["C3_confirmed_structural_reversal"] \
         and a["conditions"]["C4_retrace_50_and_pd"]
     assert a["where"]["manip"] == 100 and a["reversal_leg"]["mid_50pct"] == 120
 

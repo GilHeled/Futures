@@ -233,3 +233,46 @@ real-data sequence cases pass current chart validation.
 
 **This is NOT a statement that overall methodology fidelity is complete** — HOW / displacement quality
 (Lesson 12 energetic-move character, displacement grading) has intentionally **not** been evaluated yet.
+
+---
+
+## Lifecycle fix IMPLEMENTED (2026-09) — persistent POTENTIAL state (`ReversalBook`)
+
+The diagnostic proved the `POTENTIAL→CONFIRMED` collapse was largely a **state-retention artifact**, not genuine
+Lesson-15 behavior: on the stateless 5m build, a valid POTENTIAL flickered out of the re-derived skeleton after
+a **median of one 5m close** (max 25 min) while the 20h/240-bar window was nowhere near exhausted, and the
+market went on to resolve **every** one of the 11 "unresolved" cases. Fix: `ict_v2/reversals.py` carries the
+POTENTIAL as first-class structural state.
+
+- Creation is still validated ONLY by `pipeline._trend_sequence` (rules unchanged, byte-for-byte).
+- Identity frozen at creation = `direction + prior-trend structure + S[k] + S[k-1] + failed-continuation pivot`
+  (prices tick-normalized); `created_at` is metadata, NOT identity — a rediscovery of the same identity on a
+  later close is absorbed, never duplicated, never resurrected after a terminal event.
+- Transitions run only on CLOSED 5m bars against the FROZEN references (never re-anchored): CANCELLED = a new
+  structural swing beyond frozen `S[k-1]` (decision #2, no body-close rule); CONFIRMED = a reversal-direction
+  displacement + body-close beyond the frozen `S[k]` price (evaluated against the immutable target — no
+  price-match tolerance, decision #3); else remain POTENTIAL. M1 never mutates the book.
+- Active POTENTIALs are NEVER evicted (decision #1) — a very high sanity limit only logs; terminal history is
+  capped for memory/UI only. The lifecycle is independent of scenarios/P-D/WHERE/target/≥2R/entry; a CONFIRMED
+  reversal is consumed once (marked emitted when a position opens) and never re-emitted.
+
+### Lifecycle census (same Aug 5m data, build after this fix)
+
+| | created | CONFIRMED | CANCELLED | active@end | rediscoveries absorbed | peak simultaneous |
+|---|--:|--:|--:|--:|--:|---|
+| MNQ | 11 | 2 | 9 | 0 | 32 | long 2 / short 1 |
+| MES | 8 | 5 | 3 | 0 | 234 | long 1 / short 1 |
+
+`created = confirmed + cancelled + active` reconciles exactly. **All 11 previously-"unresolved" potentials now
+reach a real terminal event** (MNQ: 1 confirmed + 7 cancelled; MES: 2 confirmed + 1 cancelled) — none silently
+dropped mid-life. The residual `POTENTIAL→CANCELLED` (12/19) is now **genuine Lesson-15 behavior** (the prior
+trend structurally resumed beyond `S[k-1]`), not lost tracking.
+
+### Downstream funnel under persistence (population only — no P&L)
+
+- MNQ: 11 potentials → 2 confirmed → 1 ARMED → 1 filled (1 not in a compatible in-half scenario).
+- MES: 8 potentials → 5 confirmed → 4 ARMED → 3 filled (1 not in a compatible in-half scenario).
+
+Fills went from 0 (stateless 5m build) to 1 (MNQ) / 3 (MES) purely by retaining the Lesson-15 state to its
+course-defined terminal event. Reported as population/lifecycle counts; **no P&L, win-rate, or expectancy**,
+and no HOW/displacement evaluation.

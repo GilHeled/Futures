@@ -37,6 +37,7 @@ from ict_v2 import liquidity as LQ
 from ict_v2 import pdarrays as PDA
 from ict_v2 import pipeline as P
 from ict_v2 import scenarios as SC
+from ict_v2.reversals import ReversalBook   # persistent Lesson-15 POTENTIAL lifecycle (V2_GAP fix)
 
 _SCENARIO_TARGET = 2       # user: keep the top 2 theses …
 _SCENARIO_MAX = 3          # … at most 3
@@ -74,6 +75,7 @@ class MTFEngine:
         self._trigger_bars = None      # last 1m bars (execution trigger)
         self.confirm_ms = None         # last CLOSED 5m market structure — the STRUCTURAL scale the Lesson-15
         #                                WHEN (trend change) is read from; the 1m only TIMES the fill (no look-ahead)
+        self.reversals = ReversalBook(price_dp=price_dp)   # persistent Lesson-15 POTENTIAL state across 5m closes
 
     # ---- context stages (produce context; NEVER require an FVG) --------------------------------
     def on_context_close(self, bars, anchor_bars=None):
@@ -174,8 +176,11 @@ class MTFEngine:
             self.book.monitor(lambda s: None, bar=None)
             return
         ms = v1.analyze(bars, tf, min_stop=self.min_stop)
-        if tf == self.confirm_tf:                # store the 15m structural read (the WHEN's scale, Lesson 6)
+        if tf == self.confirm_tf:                # 5m structural read (the Lesson-15 WHEN scale)
             self.confirm_ms = ms
+            # PERSIST the Lesson-15 POTENTIAL lifecycle: create/advance/terminate on this CLOSED 5m bar,
+            # BEFORE the scenario monitor consumes it. (M1 never reaches here → M1 cannot mutate this state.)
+            self.reversals.update(ms, bars, _et_iso(bars[-1].close_time) if bars else "")
         cands = P.generate_candidates(ms, self.strategic, tf=tf, min_stop=self.min_stop, bars=bars,
                                       entry_models=self.entry_models)   # honour the configured model set
         price = bars[-1].close
@@ -194,8 +199,16 @@ class MTFEngine:
         ts = _et_iso(bars[-1].close_time) if bars else None      # ET cursor time → scenario-timeline stamps
         self.book.monitor(lambda s: P.execution_for_scenario(s, cands, price, objectives=self.objectives,
                                                              ms=ms, confirm_ms=self.confirm_ms,
-                                                             min_stop=self.min_stop, price_dp=self.price_dp),
+                                                             min_stop=self.min_stop, price_dp=self.price_dp,
+                                                             reversals=self.reversals),
                           bar=bar, day=day, ts=ts)
+        # CONSUME-ONCE: a CONFIRMED reversal a scenario has opened a position on is marked emitted, so the
+        # book never re-offers it as a fresh reversal for a new setup (the ScenarioBook owns the live trade).
+        for s in self.book.active:
+            if getattr(s, "state", "") in ("triggered", "target", "stop", "eod"):
+                mid = ((getattr(s, "execution", None) or {}).get("audit") or {}).get("when", {}).get("mss_id")
+                if mid:
+                    self.reversals.mark_emitted(mid)
         self.exec_tf = tf
 
     # ---- accessors ----------------------------------------------------------------------------

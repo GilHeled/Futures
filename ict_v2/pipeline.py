@@ -943,7 +943,7 @@ def _confluence_in(objectives, direction, lo, hi, price_dp):
 
 def execution_for_scenario(scenario, candidates=None, price=None, objectives=None, ms=None,
                            confirm_ms=None, min_stop: float | None = None,
-                           min_rr: float = MIN_TARGET_RR, price_dp: int = 2) -> dict | None:
+                           min_rr: float = MIN_TARGET_RR, price_dp: int = 2, reversals=None) -> dict | None:
     """FAITHFUL execution decision for one active SCENARIO. WHAT-corrected model (2026-09): the WHEN is a
     STRUCTURAL trend change on the HIGHER structural timeframe (the 15m `confirm_ms`), NOT a 1m-local MSS.
       C2 WHERE — a 15m manipulation/sweep in the correct premium/discount half.
@@ -965,12 +965,23 @@ def execution_for_scenario(scenario, candidates=None, price=None, objectives=Non
     pd_zone = "discount" if dirn == "long" else "premium"
     new_struct = "HH/HL" if dirn == "long" else "LH/LL"
 
-    # C2/C3 — the STRUCTURAL reversal on the 15m (the WHEN, at the meaningful scale; 1m does not define it).
-    R = _structural_reversal(confirm_ms, dirn, (lo, hi), price_dp)
+    # C2/C3 — the STRUCTURAL reversal on the 5m (the WHEN, at the Lesson-15 scale; 1m does not define it).
+    # PERSISTENT source of truth: the ReversalBook (Lesson-15 POTENTIAL carried across 5m closes). The
+    # stateless per-close `_structural_reversal(confirm_ms, ...)` is retained only as a fallback for the
+    # non-reversal audit (continuation/premature/invalidated/degenerate) and for unit fixtures that pass a
+    # confirm_ms with no book. The book NEVER re-anchors S[k]/S[k-1]; downstream never gates its existence.
+    if reversals is not None:
+        R = reversals.for_scenario(dirn, lo, hi)
+        if R is None:
+            R = _structural_reversal(confirm_ms, dirn, (lo, hi), price_dp)   # non-reversal audit only
+            if R is not None and R.get("state") == "confirmed":
+                R = None                                                    # confirmed is owned by the book
+    else:
+        R = _structural_reversal(confirm_ms, dirn, (lo, hi), price_dp)
 
     def _audit(state, **extra):
         a = {"pd_zone": pd_zone, "pd_zone_range": [round(lo, price_dp), round(hi, price_dp)],
-             "structural_tf": "15m",
+             "structural_tf": "5m",
              "conditions": {"C2_where_sweep": bool(R),
                             "C3_confirmed_structural_reversal": bool(R and R["state"] == "confirmed"),
                             "C4_retrace_50_and_pd": None, "C5_geometry": None}, "state": state}

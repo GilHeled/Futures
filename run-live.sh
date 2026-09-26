@@ -17,6 +17,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Telegram OFF (per request) — blank the tokens so the live service sends no alerts.
+export TELEGRAM_BOT_TOKEN=""
+export TELEGRAM_CHAT_ID=""
+
 # Default STREAMING set: Micro S&P, Micro Nasdaq, Micro Gold. Pass your own to override,
 # e.g.  ./run-live.sh CME_MINI:MNQ1! COMEX:GC1!
 if [ "$#" -gt 0 ]; then
@@ -55,12 +59,12 @@ if [ "${RESET:-0}" = "1" ]; then
   $COMPOSE down -v >/dev/null 2>&1 || true
 fi
 
-echo "==> building + starting live service and dashboard (Docker)…"
-$COMPOSE up -d --build live dashboard v2
+echo "==> building + starting live service and v2 (Docker; dashboards off)…"
+$COMPOSE up -d --build live v2
 
 echo "==> waiting for the live service to be healthy…"
 until curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1; do sleep 2; done
-echo "    dashboard: http://127.0.0.1:8010   ·   monitor: http://127.0.0.1:8000/report.html"
+echo "    scenario chart: http://localhost:8020/scenario"
 
 cleanup() { echo; echo "==> stopping feed and tearing down Docker…"; $COMPOSE down; }
 trap cleanup EXIT INT TERM

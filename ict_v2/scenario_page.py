@@ -75,6 +75,23 @@ async function load(){
   }
   renderShell();
   loadCandles();
+  loadAnalyst();
+}
+
+async function loadAnalyst(){
+  try{ CUR.analyst=await (await fetch('/analyst?sym='+encodeURIComponent(CUR.sym),{cache:'no-store'})).json(); }
+  catch(e){ return; }
+  renderAnalyst();
+}
+function renderAnalyst(){
+  const box=document.getElementById('analystbody'); if(!box||!CUR.analyst)return;
+  const a=CUR.analyst, v=a.verdict||'';
+  const col=v.indexOf('🟢')>=0?'var(--green)':(v.indexOf('🟡')>=0?'var(--amber)':'var(--red)');
+  let html='<div style="font-size:15px;font-weight:700;color:'+col+';margin-bottom:7px">'+v+'</div>';
+  html+='<div style="font-size:12px;line-height:1.65;color:var(--text)">';
+  (a.lines||[]).slice(1).forEach(l=>{html+='<div style="margin-bottom:3px">'+String(l).replace(/</g,'&lt;')+'</div>';});
+  html+='</div>';
+  box.innerHTML=html;
 }
 
 function renderShell(){
@@ -87,7 +104,7 @@ function renderShell(){
   // symbol selector
   const sel=el('select');sel.style.cssText='background:var(--panel2);color:var(--text);border:1px solid var(--line2);border-radius:4px;font-family:var(--mono);font-size:12px;padding:3px 7px;cursor:pointer';
   (CUR.symsList||[]).forEach(o=>{const op=el('option');op.value=o.sym;op.textContent=o.sym.split(':').pop();if(o.sym===sym)op.selected=true;sel.appendChild(op);});
-  sel.onchange=()=>{CUR.sym=sel.value;CUR.data=null;renderShell();loadCandles();};
+  sel.onchange=()=>{CUR.sym=sel.value;CUR.data=null;CUR.analyst=null;renderShell();loadCandles();loadAnalyst();};
   top.appendChild(sel);
   if(P!=null)top.appendChild(el('span','price',F2(P)));
   top.appendChild(el('span','sub','HRLR / LRLR liquidity runs'));
@@ -122,8 +139,14 @@ function renderShell(){
   cc.appendChild(lg);
   grid.appendChild(cc);
 
-  // rail (engine read-only analysis) — only when the engine has ingested this symbol
+  // rail (engine read-only analysis)
   const rail=el('div','rail');
+  // analyst recommendation card (decision-support; Hebrew) — always on top
+  const anaCard=el('div','card');anaCard.appendChild(el('h3',null,'Analyst · MNQ · decision-support (not advice)'));
+  const anaBody=el('div');anaBody.id='analystbody';anaBody.style.cssText='padding:11px 13px';
+  anaBody.innerHTML='<div style="color:var(--muted)">loading recommendation…</div>';
+  anaCard.appendChild(anaBody);rail.appendChild(anaCard);
+  if(CUR.analyst) renderAnalyst();
   if(A){
   const ctxCard=el('div','card');ctxCard.appendChild(el('h3',null,'Market context — nested P/D'));const ctx=el('div','ctx');
   [['Parent range',par],['Internal range',intr]].forEach(([role,r])=>{const rw=el('div','rng');

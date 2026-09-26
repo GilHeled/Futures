@@ -255,10 +255,8 @@ class V2Service:
         out.sort(key=lambda x: x["sym"])
         return {"symbols": out}
 
-    def candles(self, sym: str, tf: str, n: int = 180) -> dict:
-        """Read-only candle series for ANY chart timeframe (4H/1H/30m/15m/5m/1m) plus its HRLR/LRLR
-        liquidity runs. Resamples the raw 1m store through the engine's BarBuilder (session-aware for
-        5m/15m/1H/4H) and buckets 30m from 1m. Never touches the engine or trade generation."""
+    def _build_series(self, sym: str) -> dict:
+        """Resample the raw 1m store into all chart timeframes (Bar objects). Read-only."""
         from ict_live.market.bar_builder import BarBuilder
         from ict_live.market.bar import Bar
         from zoneinfo import ZoneInfo
@@ -272,8 +270,7 @@ class V2Service:
                 if cb.timeframe in series:
                     series[cb.timeframe].append(cb)
         # 30m: bucket the 1m stream to wall-clock :00/:30 (30m is not a BarBuilder timeframe)
-        cur, key = None, None
-        m30 = []
+        cur, key, m30 = None, None, []
         for b in b1:
             et = b.open_time.astimezone(ET)
             k = (et.year, et.month, et.day, et.hour, et.minute // 30)
@@ -288,7 +285,20 @@ class V2Service:
         if cur is not None:
             m30.append(cur)
         series["30m"] = m30
+        return series
 
+    def analyst(self, sym: str) -> dict:
+        """Read-only MNQ analyst read (decision-support) across 30m/15m/5m/1m. Not advice/orders."""
+        from ict_v2 import analyst as AN
+        series = self._build_series(sym)
+        as_dicts = {tf: [{"t": x.open_time.isoformat(), "o": x.open, "h": x.high, "l": x.low, "c": x.close}
+                         for x in (series.get(tf) or [])[-250:]] for tf in ("30m", "15m", "5m", "1m")}
+        return AN.analyze(as_dicts, sym)
+
+    def candles(self, sym: str, tf: str, n: int = 180) -> dict:
+        """Read-only candle series for ANY chart timeframe (4H/1H/30m/15m/5m/1m) plus its HRLR/LRLR
+        liquidity runs, order blocks and market structure. Never touches the engine or trade generation."""
+        series = self._build_series(sym)
         ser = (series.get(tf) or [])[-max(10, min(n, 500)):]
         runs = LR.detect_liquidity_runs(ser, tick=0.25)
         obs = OB.detect_order_blocks(ser, swing_len=3, max_bars=100)
@@ -383,6 +393,20 @@ def _make_handler(svc: V2Service):
             p = urlparse(self.path).path.rstrip("/")
             if p in ("/report", "/v2", ""):
                 body = json.dumps(svc.report(), default=str).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            elif p == "/analyst":
+                from urllib.parse import urlparse, parse_qs
+                sym = (parse_qs(urlparse(self.path).query).get("sym") or [""])[0]
+                try:
+                    payload = svc.analyst(sym)
+                except Exception as e:                       # pragma: no cover - defensive
+                    payload = {"verdict": "🔴 No Trade", "symbol": sym,
+                               "he": ["🔴 No Trade", f"שגיאה: {type(e).__name__}"], "error": str(e)}
+                body = json.dumps(payload, default=str).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Cache-Control", "no-store")

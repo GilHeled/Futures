@@ -130,6 +130,8 @@ INSTRUMENTS = {
     "CME_MINI:NQ1!": Instrument("CME_MINI:NQ1!", "NQ", 0.25, 20.0, "E-mini Nasdaq-100"),
     "CME_MINI:ES1!": Instrument("CME_MINI:ES1!", "ES", 0.25, 50.0, "E-mini S&P 500"),
     "CME_MINI:MNQ1!": Instrument("CME_MINI:MNQ1!", "MNQ", 0.25, 2.0, "Micro E-mini Nasdaq-100"),
+    # explicit front-month contract (Dec 2026) so the real-time feed accepts it; same params as MNQ
+    "CME_MINI:MNQZ2026": Instrument("CME_MINI:MNQZ2026", "MNQ", 0.25, 2.0, "Micro E-mini Nasdaq-100 Dec 2026"),
     "CME_MINI:MES1!": Instrument("CME_MINI:MES1!", "MES", 0.25, 5.0, "Micro E-mini S&P 500"),
     # major commodities (UNVALIDATED for this strategy — monitoring / paper)
     "COMEX:GC1!": Instrument("COMEX:GC1!", "GC", 0.10, 100.0, "Gold"),

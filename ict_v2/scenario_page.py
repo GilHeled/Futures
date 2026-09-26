@@ -57,6 +57,12 @@ td.n{font-family:var(--mono);text-align:right}.tf-badge{font-family:var(--mono);
 </style></head><body><div class="wrap" id="root"><div class="err">Loading /report…</div></div>
 <script>
 const F=(x,d)=>x==null?'—':Number(x).toLocaleString(undefined,{minimumFractionDigits:d||0,maximumFractionDigits:d||0});
+function niceStep(range, target){ // round axis increment: 1/2/5 × 10^n nearest to range/target
+  const raw=range/Math.max(1,target); if(!isFinite(raw)||raw<=0)return 1;
+  const mag=Math.pow(10,Math.floor(Math.log10(raw))), norm=raw/mag;
+  const n = norm<=1?1 : norm<=2?2 : norm<=5?5 : 10;
+  return n*mag;
+}
 const F2=x=>F(x,2), el=(t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
 const TFS=['4H','1H','30m','15m','5m','1m'];
 let CUR={sym:null, tf:'15m', data:null, showRuns:true, showOB:true, showMS:true, showPivots:true, lastDay:true};
@@ -125,7 +131,8 @@ function renderAnalyst(){
     h+=row('Stop', '<span class="num">'+F(a.stop)+'</span> <span style="color:var(--dim)">('+(rs.stop_pts!=null?rs.stop_pts+'pt':'—')+')</span>');
     h+=row('Size', (rs.contracts||0)+' MNQ · <span class="num">$'+(rs.risk_per_account!=null?rs.risk_per_account:'—')+'</span>/acct');
     const rl=rs.R_to_targets||[];
-    h+=row('Targets','TP1 <span class="num">'+F(a.tp1)+'</span>'+(rl[0]!=null?' <span style="color:var(--green)">('+rl[0]+'R)</span>':'')+' · TP2 <span class="num">'+F(a.tp2)+'</span>'+(rl[1]!=null?' <span style="color:var(--green)">('+rl[1]+'R)</span>':''));
+    h+=row('TP1','<span class="num">'+F(a.tp1)+'</span>'+(rl[0]!=null?' <span style="color:var(--green)">('+rl[0]+'R)</span>':''));
+    h+=row('TP2','<span class="num">'+F(a.tp2)+'</span>'+(rl[1]!=null?' <span style="color:var(--green)">('+rl[1]+'R)</span>':''));
     if(rs.available===false&&rs.reason)h+='<div style="color:var(--amber);font-size:11px;margin-top:3px">⚠ '+esc(rs.reason)+'</div>';
   }else{h+=row('Plan','no valid location in context direction');}
   // action + disclaimer
@@ -280,8 +287,9 @@ function drawChart(){
   const CW0=chart.clientWidth||900, AXIS=70, PW=CW0-AXIS, BW=bars.length?PW/bars.length:0;
   const rightPct=(PW/CW0)*100, xpct=i=>((i*BW+BW/2)/CW0)*100;
   // gridlines
-  const step=Math.max(1,Math.round((pmax-pmin)/8));
-  for(let g=Math.ceil(pmin/step)*step; g<=pmax; g+=step){const l=el('div','lvl');l.style.top=y(g)+'px';l.style.borderTop='1px solid var(--line)';l.style.opacity='.4';const a=el('div','axis',F(g));a.style.top=(y(g)-8)+'px';l.appendChild(a);chart.appendChild(l);}
+  const step=niceStep(pmax-pmin, 8);
+  const dp=step<1?2:0;
+  for(let g=Math.ceil(pmin/step)*step; g<=pmax; g+=step){const l=el('div','lvl');l.style.top=y(g)+'px';l.style.borderTop='1px solid var(--line)';l.style.opacity='.4';const a=el('div','axis',F(g,dp));a.style.top='-8px';l.appendChild(a);chart.appendChild(l);}
   // Order Block zones (drawn BEHIND candles) — box + 50% midline + OB+/OB- label, extended right
   if(CUR.showOB) obs.forEach(o=>{if(o.top<pmin||o.bottom>pmax)return;
     const col=o.is_bull?'var(--green)':'var(--red)';
@@ -322,5 +330,12 @@ function drawChart(){
   // current price
   const now=el('div','now');now.style.top=y(P)+'px';now.appendChild(el('div','nt',F2(P)));chart.appendChild(now);
 }
-load(); setInterval(load, 20000);
+// periodic LIVE refresh — update only the chart + analyst card IN PLACE (no full-page rebuild, no flicker)
+async function refresh(){
+  if(!document.getElementById('chart')){ return load(); }        // page not built yet
+  try{ const rep=await (await fetch('/report',{cache:'no-store'})).json(); if(rep&&rep.symbols)CUR.report=rep.symbols; }catch(e){}
+  loadAnalyst();
+  loadCandles();
+}
+load(); setInterval(refresh, 20000);
 </script></body></html>"""

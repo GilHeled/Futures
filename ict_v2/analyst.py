@@ -132,6 +132,26 @@ def trigger(b1):
             "note": "retest is discretionary — verify on the 1m chart; not auto-confirmed"}
 
 
+# ── invalidation / stop placement ────────────────────────────────────────────
+def stop_level(direction, nd, sweep, buffer=2.0):
+    """Stop BEYOND the actual setup structure: the farther of {order-block boundary, swept liquidity}
+    on the invalidation side, plus a buffer. A sweep-based stop therefore always sits past the raided
+    high (short) / low (long) — never inside it."""
+    if nd is None:
+        return None
+    if direction == "SHORT":
+        inval = nd["top"]
+        if sweep and sweep.get("side") == "BSL" and sweep.get("price", inval) > inval:
+            inval = sweep["price"]
+        return round(inval + buffer, 2)
+    if direction == "LONG":
+        inval = nd["bottom"]
+        if sweep and sweep.get("side") == "SSL" and sweep.get("price", inval) < inval:
+            inval = sweep["price"]
+        return round(inval - buffer, 2)
+    return None
+
+
 # ── sub-model: risk / sizing / targets under the account rules ───────────────
 def risk_size(entry, stop, targets):
     if entry is None or stop is None:
@@ -195,19 +215,23 @@ def analyze(series_by_tf, symbol, *, price=None):
     st = structure(b5, b1)
     tr = trigger(b1)
 
-    # a CONSERVATIVE conditional entry proposal from the nearest 5m location (never a live fill)
+    # a CONSERVATIVE conditional entry proposal from the nearest 5m location (never a live fill).
+    # Invalidation is placed BEYOND the actual setup structure — the FARTHER of {order-block boundary,
+    # the swept liquidity level} — so a sweep-based stop always sits past the raided high/low, plus a
+    # buffer. (Bug fix: previously the stop used only the OB boundary and could land inside the sweep.)
     entry = stop = tp1 = tp2 = None
     direction = None
+    sw = (ev or {}).get("sweep")
     if loc["nearest"]:
         nd = loc["nearest"]
         if nd["dir"] == "demand" and ctx["bias30"] in ("long", "neutral"):
             direction = "LONG"
-            entry = nd["ref"]; stop = round(nd["bottom"] - 2.0, 2)
+            entry = nd["ref"]; stop = stop_level("LONG", nd, sw)
             tp1 = ctx["external_bsl"][0] if ctx["external_bsl"] else None
             tp2 = ctx["external_bsl"][1] if len(ctx["external_bsl"]) > 1 else None
         elif nd["dir"] == "supply" and ctx["bias30"] in ("short", "neutral"):
             direction = "SHORT"
-            entry = nd["ref"]; stop = round(nd["top"] + 2.0, 2)
+            entry = nd["ref"]; stop = stop_level("SHORT", nd, sw)
             tp1 = ctx["external_ssl"][0] if ctx["external_ssl"] else None
             tp2 = ctx["external_ssl"][1] if len(ctx["external_ssl"]) > 1 else None
 

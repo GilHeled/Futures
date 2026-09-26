@@ -30,6 +30,27 @@ def test_sizing_conditional_when_no_levels():
     assert not r["available"] and "conditional" in r["reason"]
 
 
+def test_short_stop_sits_above_swept_high():
+    # supply OB with a BSL sweep ABOVE the OB top -> stop must be above the sweep, not the OB top
+    nd = {"type": "OB", "dir": "supply", "top": 30930.75, "bottom": 30918.0, "ref": 30924.0}
+    sweep = {"side": "BSL", "price": 30935.25, "mitigated": False}
+    stop = AN.stop_level("SHORT", nd, sweep, buffer=2.0)
+    assert stop == 30937.25 and stop > sweep["price"]
+
+
+def test_long_stop_sits_below_swept_low():
+    nd = {"type": "OB", "dir": "demand", "top": 30918.0, "bottom": 30905.0, "ref": 30911.0}
+    sweep = {"side": "SSL", "price": 30900.0, "mitigated": False}
+    stop = AN.stop_level("LONG", nd, sweep, buffer=2.0)
+    assert stop == 30898.0 and stop < sweep["price"]
+
+
+def test_stop_falls_back_to_ob_when_no_relevant_sweep():
+    nd = {"type": "OB", "dir": "supply", "top": 30930.75, "bottom": 30918.0, "ref": 30924.0}
+    # a sweep on the wrong side (SSL) must not pull a short's stop
+    assert AN.stop_level("SHORT", nd, {"side": "SSL", "price": 30800.0}) == 30932.75
+
+
 def test_grade_none_without_location():
     g = AN.grade({"nearest": None}, {"sweep": None}, {}, {"stages": {"second_break": False}}, None)
     assert g["grade"] is None

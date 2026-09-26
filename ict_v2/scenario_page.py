@@ -87,11 +87,52 @@ function renderAnalyst(){
   const box=document.getElementById('analystbody'); if(!box||!CUR.analyst)return;
   const a=CUR.analyst, v=a.verdict||'';
   const col=v.indexOf('🟢')>=0?'var(--green)':(v.indexOf('🟡')>=0?'var(--amber)':'var(--red)');
-  let html='<div style="font-size:15px;font-weight:700;color:'+col+';margin-bottom:7px">'+v+'</div>';
-  html+='<div style="font-size:12px;line-height:1.65;color:var(--text)">';
-  (a.lines||[]).slice(1).forEach(l=>{html+='<div style="margin-bottom:3px">'+String(l).replace(/</g,'&lt;')+'</div>';});
-  html+='</div>';
-  box.innerHTML=html;
+  const F=x=>x==null?'—':Number(x).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  const arr=xs=>(xs&&xs.length)?[...new Set(xs)].map(x=>Number(x).toLocaleString(undefined,{maximumFractionDigits:2})).join(' · '):'—';
+  const ms=o=>{if(!o)return '—';const up=o.dir==='bull';return '<span style="color:'+(up?'var(--lrlr)':'var(--red)')+'">'+o.kind+(up?'↑':'↓')+' '+F(o.level)+'</span>';};
+  const HH=t=>'<div style="font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin:10px 0 3px;border-top:1px solid var(--line);padding-top:7px">'+t+'</div>';
+  const row=(k,val)=>'<div style="display:flex;gap:8px;font-size:12px;line-height:1.55"><span style="color:var(--muted);min-width:74px;flex:none">'+k+'</span><span style="color:var(--text)">'+val+'</span></div>';
+  const esc=s=>String(s).replace(/</g,'&lt;');
+  let h='';
+  // header: verdict + direction + grade chips
+  h+='<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:3px">';
+  h+='<span style="font-size:15px;font-weight:700;color:'+col+'">'+v+'</span>';
+  if(a.direction)h+='<span class="pill" style="color:'+col+';border-color:'+col+'">'+a.direction+'</span>';
+  if(a.grade)h+='<span class="pill">grade '+a.grade+'</span>';
+  h+='<span style="color:var(--dim);font-size:10px">heuristic · verify on chart</span></div>';
+  // warning banners (stale / conflict / sizing)
+  (a.flags||[]).forEach(f=>{h+='<div style="background:var(--amber-soft);border:1px solid rgba(240,180,41,.4);color:var(--amber);font-size:11px;padding:4px 7px;border-radius:4px;margin:5px 0">⚠ '+esc(f)+'</div>';});
+  // context
+  const c=a.context||{};
+  h+=HH('Context');
+  h+=row('30m bias', (c.bias30||'—')+(c.impulse?(' · '+esc(c.impulse)):''));
+  h+=row('15m obst.', ms(c.obstacle15));
+  h+=row('BSL ↑', '<span class="num">'+arr(c.external_bsl)+'</span>');
+  h+=row('SSL ↓', '<span class="num">'+arr(c.external_ssl)+'</span>');
+  if((c.eqh&&c.eqh.length)||(c.eql&&c.eql.length))h+=row('EQH/EQL','<span class="num">'+arr(c.eqh)+' / '+arr(c.eql)+'</span>');
+  // setup
+  const loc=a.location||{}, nd=loc.nearest, ev=(a.liquidity_event||{}).sweep, st=a.structure||{}, tr=a.trigger||{};
+  h+=HH('Setup · 5m / 1m');
+  h+=row('Location', nd?(nd.type+' '+nd.dir+' @ '+F(nd.ref)+' <span style="color:var(--dim)">(conf '+loc.confluence+')</span>'):'—');
+  h+=row('Liquidity', ev?(ev.side+' sweep '+F(ev.price)+' <span style="color:var(--dim)">('+(ev.mitigated?'mitigated':'open')+')</span>'):'no recent sweep');
+  h+=row('Structure', ms(st.m5)+' <span style="color:var(--dim)">5m</span> · '+ms(st.m1)+' <span style="color:var(--dim)">1m</span>');
+  h+=row('1m trig', (tr.stages&&tr.stages.second_break)?'two-break present <span style="color:var(--dim)">— verify retest</span>':'not complete');
+  // plan
+  const rs=a.risk||{};
+  h+=HH('Plan · conditional');
+  if(a.entry!=null){
+    h+=row('Entry', '<span class="num">'+F(a.entry)+'</span>');
+    h+=row('Stop', '<span class="num">'+F(a.stop)+'</span> <span style="color:var(--dim)">('+(rs.stop_pts!=null?rs.stop_pts+'pt':'—')+')</span>');
+    h+=row('Size', (rs.contracts||0)+' MNQ · <span class="num">$'+(rs.risk_per_account!=null?rs.risk_per_account:'—')+'</span>/acct');
+    const rl=rs.R_to_targets||[];
+    h+=row('Targets','TP1 <span class="num">'+F(a.tp1)+'</span>'+(rl[0]!=null?' <span style="color:var(--green)">('+rl[0]+'R)</span>':'')+' · TP2 <span class="num">'+F(a.tp2)+'</span>'+(rl[1]!=null?' <span style="color:var(--green)">('+rl[1]+'R)</span>':''));
+    if(rs.available===false&&rs.reason)h+='<div style="color:var(--amber);font-size:11px;margin-top:3px">⚠ '+esc(rs.reason)+'</div>';
+  }else{h+=row('Plan','no valid location in context direction');}
+  // action + disclaimer
+  const act=(a.lines||[]).find(l=>String(l).indexOf('Action:')===0);
+  if(act)h+='<div style="margin-top:9px;font-size:12px;font-weight:600;color:'+col+'">'+esc(act)+'</div>';
+  h+='<div style="margin-top:6px;color:var(--dim);font-size:10px">'+esc(a.disclaimer||'Tool only — not advice.')+'</div>';
+  box.innerHTML=h;
 }
 
 function renderShell(){

@@ -256,6 +256,7 @@ def analyze(series_by_tf, symbol, *, price=None):
             "grade": gr.get("grade"), "context": ctx, "location": loc, "liquidity_event": ev,
             "structure": st, "trigger": tr, "risk": rs,
             "entry": entry, "stop": stop, "tp1": tp1, "tp2": tp2, "best_R": best_R,
+            "flags": flags, "stale": stale, "age_min": age_min, "conflict": conflict,
             "conditional": verdict != "🟢 Entry", "lines": lines,
             "disclaimer": "Decision-support tool only — not advice, not a forecast, not a profit guarantee."}
 

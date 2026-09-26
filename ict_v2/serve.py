@@ -23,6 +23,9 @@ from datetime import datetime, timezone
 from ict_live.live.notify import TelegramNotifier
 from ict_live.storage.market_store import MarketStore
 from ict_v2.live import V2Live
+from ict_v2 import scenario_analysis as SA          # read-only analysis layer (never mutates the engine)
+from ict_v2 import liquidity_runs as LR             # standalone HRLR/LRLR model (read-only)
+from ict_v2.scenario_page import PAGE as SCENARIO_PAGE
 
 
 class V2Service:
@@ -90,7 +93,14 @@ class V2Service:
             store = MarketStore(path=self.store_path)        # re-read the append-only jsonl
             n = 0
             now = datetime.now(timezone.utc)
-            for sym in list(store._bars.keys()):
+            # PRIORITY ORDER: ingest listed symbols first so their read-only rail (P/D · FVG ·
+            # scenarios) populates quickly after a restart, before the slower long tail. Override with
+            # ICT_V2_PRIORITY (comma-separated); default puts the active MNQ contract(s) first.
+            _prio = [s.strip() for s in os.environ.get(
+                "ICT_V2_PRIORITY", "CME_MINI:MNQZ2026,CME_MINI:MNQ1!").split(",") if s.strip()]
+            _all = list(store._bars.keys())
+            _ordered = [s for s in _prio if s in store._bars] + [s for s in _all if s not in _prio]
+            for sym in _ordered:
                 live = self.lives.get(sym)
                 if live is None:
                     # degenerate-stop floor per instrument: rejects tiny-stop setups so the execution
@@ -215,7 +225,74 @@ class V2Service:
         return "\n".join(lines)
 
     def report(self) -> dict:
-        return {"v2": True, "experimental": True, "updated_ms": self.updated_ms, "symbols": self.state}
+        # additive, read-only: attach the scenario-analysis picture per symbol from the live buffers.
+        # A failure here never affects the engine or the base snapshot — it is caught and surfaced.
+        syms = {}
+        for sym, snap in self.state.items():
+            out = dict(snap)
+            live = self.lives.get(sym)
+            if live is not None:
+                try:
+                    out["scenario_analysis"] = SA.analyze(live)
+                except Exception as e:                       # pragma: no cover - defensive only
+                    out["scenario_analysis"] = {"error": f"{type(e).__name__}: {e}"}
+            syms[sym] = out
+        return {"v2": True, "experimental": True, "updated_ms": self.updated_ms, "symbols": syms}
+
+    def symbols(self) -> dict:
+        """Read-only list of symbols in the store (for the chart's symbol selector), with last bar
+        time + close, independent of the slow engine ingest that populates /report."""
+        store = MarketStore(path=self.store_path)
+        out = []
+        for sym in store._bars:
+            b = store.bars(sym)
+            if not b:
+                continue
+            out.append({"sym": sym, "last": b[-1].open_time.isoformat(),
+                        "bars": len(b), "last_close": b[-1].close})
+        out.sort(key=lambda x: x["sym"])
+        return {"symbols": out}
+
+    def candles(self, sym: str, tf: str, n: int = 180) -> dict:
+        """Read-only candle series for ANY chart timeframe (4H/1H/30m/15m/5m/1m) plus its HRLR/LRLR
+        liquidity runs. Resamples the raw 1m store through the engine's BarBuilder (session-aware for
+        5m/15m/1H/4H) and buckets 30m from 1m. Never touches the engine or trade generation."""
+        from ict_live.market.bar_builder import BarBuilder
+        from ict_live.market.bar import Bar
+        from zoneinfo import ZoneInfo
+        ET = ZoneInfo("America/New_York")
+        store = MarketStore(path=self.store_path)
+        b1 = store.bars(sym) if sym in store._bars else []
+        series = {"1m": list(b1), "5m": [], "15m": [], "1H": [], "4H": []}
+        builder = BarBuilder(timeframes=("5m", "15m", "1H", "4H"))
+        for b in b1:
+            for cb in builder.add_1m(b):
+                if cb.timeframe in series:
+                    series[cb.timeframe].append(cb)
+        # 30m: bucket the 1m stream to wall-clock :00/:30 (30m is not a BarBuilder timeframe)
+        cur, key = None, None
+        m30 = []
+        for b in b1:
+            et = b.open_time.astimezone(ET)
+            k = (et.year, et.month, et.day, et.hour, et.minute // 30)
+            if k != key:
+                if cur is not None:
+                    m30.append(cur)
+                key = k
+                cur = Bar("30m", b.open_time, b.close_time, b.open, b.high, b.low, b.close, b.volume)
+            else:
+                cur = Bar("30m", cur.open_time, b.close_time, cur.open, max(cur.high, b.high),
+                          min(cur.low, b.low), b.close, cur.volume + b.volume)
+        if cur is not None:
+            m30.append(cur)
+        series["30m"] = m30
+
+        ser = (series.get(tf) or [])[-max(10, min(n, 500)):]
+        runs = LR.detect_liquidity_runs(ser, tick=0.25)
+        return {"symbol": sym, "tf": tf, "tick": 0.25,
+                "bars": [{"t": x.open_time.isoformat(), "o": x.open, "h": x.high,
+                          "l": x.low, "c": x.close} for x in ser],
+                "liquidity_runs": LR.summary(runs)}
 
 
 def _start_watchdog(svc: V2Service, dirty: threading.Event):
@@ -295,11 +372,45 @@ def _make_handler(svc: V2Service):
             pass
 
         def do_GET(self):
-            p = self.path.rstrip("/")
+            from urllib.parse import urlparse
+            p = urlparse(self.path).path.rstrip("/")
             if p in ("/report", "/v2", ""):
                 body = json.dumps(svc.report(), default=str).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            elif p == "/symbols":
+                body = json.dumps(svc.symbols(), default=str).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            elif p == "/candles":
+                from urllib.parse import urlparse, parse_qs
+                q = parse_qs(urlparse(self.path).query)
+                sym = (q.get("sym") or [""])[0]
+                tf = (q.get("tf") or ["15m"])[0]
+                try:
+                    n = int((q.get("n") or ["180"])[0])
+                except ValueError:
+                    n = 180
+                try:
+                    payload = svc.candles(sym, tf, n)
+                except Exception as e:                       # pragma: no cover - defensive
+                    payload = {"symbol": sym, "tf": tf, "bars": [], "error": f"{type(e).__name__}: {e}"}
+                body = json.dumps(payload, default=str).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            elif p == "/scenario":
+                body = SCENARIO_PAGE.encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 self.wfile.write(body)

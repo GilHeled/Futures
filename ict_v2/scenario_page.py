@@ -59,7 +59,7 @@ td.n{font-family:var(--mono);text-align:right}.tf-badge{font-family:var(--mono);
 const F=(x,d)=>x==null?'—':Number(x).toLocaleString(undefined,{minimumFractionDigits:d||0,maximumFractionDigits:d||0});
 const F2=x=>F(x,2), el=(t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
 const TFS=['4H','1H','30m','15m','5m','1m'];
-let CUR={sym:null, tf:'15m', data:null, showRuns:true, showOB:true, lastDay:true};
+let CUR={sym:null, tf:'15m', data:null, showRuns:true, showOB:true, showMS:true, showPivots:true, lastDay:true};
 
 async function load(){
   let rep={symbols:{}}, list=[];
@@ -107,7 +107,7 @@ function renderShell(){
   const ctrls=el('div','tfbar');ctrls.style.marginLeft='0';
   const tbtn=(key,lab)=>{const b=el('button','tfbtn'+(CUR[key]?' on':''),lab);
     b.onclick=()=>{CUR[key]=!CUR[key];b.classList.toggle('on',CUR[key]);drawChart();};return b;};
-  ctrls.appendChild(tbtn('showRuns','HRLR/LRLR'));ctrls.appendChild(tbtn('showOB','Order Blocks'));ctrls.appendChild(tbtn('lastDay','Last day'));
+  ctrls.appendChild(tbtn('showRuns','HRLR/LRLR'));ctrls.appendChild(tbtn('showOB','Order Blocks'));ctrls.appendChild(tbtn('showMS','Market Structure'));ctrls.appendChild(tbtn('showPivots','Pivots'));ctrls.appendChild(tbtn('lastDay','Last day'));
   hd.appendChild(ctrls); cc.appendChild(hd);
   const chart=el('div','chart');chart.id='chart';chart.innerHTML='<div class="err">Loading candles…</div>';cc.appendChild(chart);
   cc.appendChild(el('div','caption','Standalone HRLR/LRLR indicator (pivots 5/2, EQ tolerance 10 ticks). LRLR = EQH/EQL · HRLR = sweep. Mitigated runs stop at their mitigation bar and dim.'));
@@ -117,6 +117,7 @@ function renderShell(){
    '<span><i class="sw" style="border-top:2px dotted var(--green);height:0"></i>HRLR↓ swept low (bullish)</span>'+
    '<span><i class="sw" style="background:rgba(38,166,154,.10);border:1px solid var(--green)"></i>bull OB+</span>'+
    '<span><i class="sw" style="background:rgba(239,83,80,.10);border:1px solid var(--red)"></i>bear OB-</span>'+
+   '<span><i class="sw" style="border-top:1px dashed var(--lrlr);height:0"></i>BOS/MSS (bull blue · bear red)</span>'+
    '<span style="color:var(--dim)">dim = mitigated</span>';
   cc.appendChild(lg);
   grid.appendChild(cc);
@@ -202,6 +203,11 @@ function drawChart(){
     acc.push(Object.assign({},r,{pivot_index:pi,mitigation_index:mi}));return acc;},[]);
   let obs=(data.order_blocks&&data.order_blocks.visible)||[];
   obs=obs.map(o=>{let li=o.left_index-offset; if(li<0)li=0; return Object.assign({},o,{left_index:li});});
+  let ms=(data.market_structure&&data.market_structure.events)||[];
+  ms=ms.reduce((acc,e)=>{let f=e.from_index-offset, br=e.break_index-offset;
+    if(br<0)return acc; if(f<0)f=0; acc.push(Object.assign({},e,{from_index:f,break_index:br}));return acc;},[]);
+  let piv=(data.market_structure&&data.market_structure.pivots)||[];
+  piv=piv.reduce((acc,p)=>{let i=p.index-offset; if(i<0)return acc; acc.push(Object.assign({},p,{index:i}));return acc;},[]);
   const P=bars[bars.length-1].c;
   let hi=Math.max(...bars.map(b=>b.h)), lo=Math.min(...bars.map(b=>b.l));
   const pad=(hi-lo)*0.06||10; const pmax=hi+pad, pmin=lo-pad;
@@ -236,6 +242,19 @@ function drawChart(){
     d.style.borderTop=(isL?'2px solid ':'2px dotted ')+col;d.style.opacity=r.mitigated?'.32':'.97';
     if(!r.mitigated){const t=el('div','lab',(isL?(r.is_high?'LRLR·EQH':'LRLR·EQL'):(r.is_high?'HRLR↑':'HRLR↓'))+' '+F2(r.price));t.style.color=col;d.appendChild(t);}
     chart.appendChild(d);});
+  // Market Structure BOS/MSS (line from the broken swing to the break bar + label; bull blue / bear red)
+  if(CUR.showMS) ms.forEach(e=>{if(!inWin(e.level))return;
+    const col=e.direction==='bull'?'var(--lrlr)':'var(--red)';
+    const x0=xpct(e.from_index), x1=xpct(e.break_index);
+    const d=el('div','lvl');d.style.top=y(e.level)+'px';d.style.left=Math.min(x0,x1)+'%';d.style.right='auto';d.style.width=Math.max(0.3,Math.abs(x1-x0))+'%';d.style.borderTop='1px dashed '+col;d.style.opacity='.85';
+    const t=el('div');t.style.cssText='position:absolute;top:-9px;left:50%;transform:translateX(-50%);font-family:var(--mono);font-size:9px;background:var(--bg);padding:0 2px;color:'+col;t.textContent=e.kind;d.appendChild(t);
+    chart.appendChild(d);});
+  // swing pivots — ▼ (blue) above swing highs, ▲ (red) below swing lows
+  if(CUR.showPivots) piv.forEach(pv=>{if(!inWin(pv.price))return;
+    const hi=pv.kind==='high', col=hi?'var(--lrlr)':'var(--red)';
+    const m=el('div');m.style.cssText='position:absolute;font-size:9px;line-height:1;transform:translateX(-50%);color:'+col;
+    m.style.left=xpct(pv.index)+'%';m.style.top=(y(pv.price)+(hi?-11:3))+'px';m.textContent=hi?'▼':'▲';
+    chart.appendChild(m);});
   // current price
   const now=el('div','now');now.style.top=y(P)+'px';now.appendChild(el('div','nt',F2(P)));chart.appendChild(now);
 }

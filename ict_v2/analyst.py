@@ -54,10 +54,11 @@ def context(b30, b15, price):
     # external liquidity from 30m/15m unmitigated swing pools (HRLR sweeps + LRLR EQ levels)
     runs = LR.detect_liquidity_runs(b30, tick=0.25) + LR.detect_liquidity_runs(b15, tick=0.25)
     unmit = [r for r in runs if not r.mitigated]
-    bsl = sorted([r.price for r in unmit if r.is_high and r.price > price])
-    ssl = sorted([r.price for r in unmit if (not r.is_high) and r.price < price], reverse=True)
-    eqh = [round(r.price, 2) for r in unmit if r.is_high and r.kind == "LRLR"]
-    eql = [round(r.price, 2) for r in unmit if (not r.is_high) and r.kind == "LRLR"]
+    # distinct levels only (30m + 15m can surface the same swing) so TP1/TP2 are different targets
+    bsl = sorted({round(r.price, 2) for r in unmit if r.is_high and r.price > price})
+    ssl = sorted({round(r.price, 2) for r in unmit if (not r.is_high) and r.price < price}, reverse=True)
+    eqh = sorted({round(r.price, 2) for r in unmit if r.is_high and r.kind == "LRLR"})
+    eql = sorted({round(r.price, 2) for r in unmit if (not r.is_high) and r.kind == "LRLR"})
     # HTF order blocks (30m) that could obstruct a proposed trade
     obs30 = [o for o in OB.detect_order_blocks(b30, swing_len=3, max_bars=100) if o.state == "active"]
     htf_ob = [{"dir": "bull" if o.is_bull else "bear", "top": round(o.top, 2), "bottom": round(o.bottom, 2)}
@@ -121,15 +122,19 @@ def structure(b5, b1):
 
 
 # ── sub-model: 1m trigger sequence (reports stages, predicts none) ───────────
-def trigger(b1):
+def trigger(b1, trade_dir=None):
+    """1m trigger, DIRECTION-AWARE. `completed` requires the most recent CONFIRMED 1m structure shift
+    to be in the trade direction (a bearish shift for a short, bullish for a long) — the minimal proof
+    the 1m is actually breaking our way. Merely counting structure events (any direction, anywhere in
+    the window) is NOT a trigger; the retest stays discretionary and is never auto-confirmed."""
     e1 = MS.detect_market_structure(b1, pivot_strength=2)
-    n = len(e1)
-    # break -> retest -> second break, described only from completed events
-    stages = {"initial_break": n >= 1, "second_break": n >= 2}
+    want = {"LONG": "bull", "SHORT": "bear"}.get(trade_dir)
+    in_dir = [e for e in e1 if e.direction == want] if want else []
     last = e1[-1] if e1 else None
-    return {"stages": stages, "events": n,
+    completed = bool(want and last and last.direction == want)   # latest 1m shift is in OUR direction
+    return {"completed": completed, "in_dir_events": len(in_dir), "events": len(e1),
             "last": None if not last else {"kind": last.kind, "dir": last.direction, "level": round(last.level, 2)},
-            "note": "retest is discretionary — verify on the 1m chart; not auto-confirmed"}
+            "note": "1m must be shifting in the trade direction; retest is discretionary (verify on chart)"}
 
 
 # ── invalidation / stop placement ────────────────────────────────────────────
@@ -175,22 +180,25 @@ def risk_size(entry, stop, targets):
 
 
 # ── sub-model: grade ─────────────────────────────────────────────────────────
-def grade(loc, ev, struct, trig, best_R):
+def grade(loc, sweep_side_ok, trigger_ok, room_R):
+    """Grade the EXECUTABLE setup. A/A+/B require a COMPLETED in-direction trigger; without it the
+    location may be valid but the state is WATCH, never a graded entry. `room_R` is R to the FIRST
+    opposing obstacle (not the far target)."""
     if not loc.get("nearest"):
-        return {"grade": None, "why": "no preplanned 5m location"}
-    if best_R is not None and best_R < 1.5:
-        return {"grade": None, "why": f"insufficient room ({best_R}R)"}
-    trigger_done = bool(trig["stages"]["second_break"])
-    swept = ev.get("sweep") is not None
-    if swept and trigger_done and best_R and best_R >= MIN_R_APLUS and loc.get("confluence", 0) >= 1:
+        return {"grade": None, "trigger_completed": False, "why": "no preplanned location"}
+    if not trigger_ok:
+        return {"grade": None, "trigger_completed": False, "why": "location present, trigger pending (WATCH)"}
+    if room_R is not None and room_R < 1.5:
+        return {"grade": None, "trigger_completed": True, "why": f"first-obstacle room {room_R}R < 1.5"}
+    if sweep_side_ok and room_R and room_R >= MIN_R_APLUS and loc.get("confluence", 0) >= 1:
         g = "A+"
-    elif trigger_done and best_R and best_R >= MIN_R_A:
+    elif room_R and room_R >= MIN_R_A:
         g = "A"
-    elif best_R and best_R >= 1.5:
+    elif room_R and room_R >= 1.5:
         g = "B"
     else:
         g = None
-    return {"grade": g, "trigger_completed": trigger_done, "why": "location+room+trigger composite"}
+    return {"grade": g, "trigger_completed": True, "why": "location+trigger+first-obstacle-room"}
 
 
 # ── report assembly ──────────────────────────────────────────────────────────
@@ -213,12 +221,9 @@ def analyze(series_by_tf, symbol, *, price=None):
     loc = location(b5, price)
     ev = liquidity_event(b5, price)
     st = structure(b5, b1)
-    tr = trigger(b1)
 
-    # a CONSERVATIVE conditional entry proposal from the nearest 5m location (never a live fill).
-    # Invalidation is placed BEYOND the actual setup structure — the FARTHER of {order-block boundary,
-    # the swept liquidity level} — so a sweep-based stop always sits past the raided high/low, plus a
-    # buffer. (Bug fix: previously the stop used only the OB boundary and could land inside the sweep.)
+    # PROVISIONAL entry proposal from the nearest 5m location (never a live fill). Numbers are only
+    # presented as an executable plan in the READY state; in WATCH they are pending estimates.
     entry = stop = tp1 = tp2 = None
     direction = None
     sw = (ev or {}).get("sweep")
@@ -235,9 +240,28 @@ def analyze(series_by_tf, symbol, *, price=None):
             tp1 = ctx["external_ssl"][0] if ctx["external_ssl"] else None
             tp2 = ctx["external_ssl"][1] if len(ctx["external_ssl"]) > 1 else None
 
+    tr = trigger(b1, direction)                          # direction-aware trigger
     rs = risk_size(entry, stop, [tp1, tp2])
     best_R = max(rs.get("R_to_targets") or [0]) if rs.get("R_to_targets") else None
-    gr = grade(loc, ev, st, tr, best_R)
+
+    # first OPPOSING obstacle between entry and target — R is measured to it, not the far target
+    first_obst = None
+    if entry is not None:
+        obs5 = [o for o in OB.detect_order_blocks(b5, swing_len=3, max_bars=100) if o.state == "active"]
+        if direction == "SHORT":
+            below = [o.top for o in obs5 if o.is_bull and o.top < entry]      # demand below caps a short
+            first_obst = max(below) if below else None
+        elif direction == "LONG":
+            above = [o.bottom for o in obs5 if (not o.is_bull) and o.bottom > entry]   # supply above caps a long
+            first_obst = min(above) if above else None
+    obstacle_R = None
+    sp = rs.get("stop_pts")
+    if first_obst is not None and sp:
+        obstacle_R = round(abs(entry - first_obst) / sp, 2)
+    effective_R = obstacle_R if obstacle_R is not None else best_R
+
+    gr = grade(loc, sw is not None and sw.get("side") == ("BSL" if direction == "SHORT" else "SSL"),
+               tr["completed"], effective_R)
 
     # data freshness — never issue a live verdict on stale bars
     last_t = (b1[-1].get("t") if b1 else None) or (b5[-1].get("t") if b5 else None)
@@ -249,39 +273,51 @@ def analyze(series_by_tf, symbol, *, price=None):
                 t = t.replace(tzinfo=timezone.utc)
             age = (datetime.now(timezone.utc) - t).total_seconds()
             age_min = round(age / 60, 1)
-            stale = age > 300                    # > 5 min = not a live feed
+            stale = age > 300
         except Exception:
             pass
 
-    # direction conflict — proposed side vs the most recent 1m structure
     m1 = st.get("m1")
     conflict = bool(direction and m1 and (
         (direction == "LONG" and m1["dir"] == "bear") or (direction == "SHORT" and m1["dir"] == "bull")))
+    sweep_side_ok = bool(sw and sw.get("side") == ("BSL" if direction == "SHORT" else "SSL"))
+    trigger_ok = bool(tr["completed"])
 
-    flags = []
-    verdict = "🔴 No Trade"
+    # ── STATE MACHINE: NO TRADE / WATCH / READY ──────────────────────────────
+    # A condition that is open / unverified / conf-0 / opposite-structure counts as PENDING, never done.
+    pending = []
+    verdict = "🔴 No Trade"; state = "NO_TRADE"
     if stale:
-        flags.append(f"Data not live (last update {age_min} min ago) — no entry; run run-live.sh during market hours")
-    elif loc["nearest"] and direction and rs.get("available"):
+        pending.append(f"Data not live (last update {age_min} min ago) — run run-live.sh during market hours")
+    elif not (loc["nearest"] and direction and rs.get("available")):
+        pending.append("No valid location / sizeable stop in the context direction")
+    elif effective_R is not None and effective_R < 1.5:
+        pending.append(f"Inadequate room — first obstacle {first_obst} is only {effective_R}R away")
+    else:
         if conflict:
-            verdict = "🟡 Hold"
-            flags.append("Direction conflict: 1m structure opposes the proposed side — don't fade structure without confirmation")
-        elif gr["grade"] in ("A", "A+") and tr["stages"]["second_break"] and (best_R or 0) >= MIN_R_A:
-            verdict = "🟢 Entry"
-            flags.append("Sequence appears complete — this is a prompt to verify the retest + brackets yourself, not an order")
-        elif gr["grade"] in ("A", "A+", "B"):
-            verdict = "🟡 Hold"
-    elif loc["nearest"] and direction:
-        verdict = "🟡 Hold"
+            pending.append("1m structure still opposes the proposed side (anticipated reversal, not confirmed)")
+        if not sweep_side_ok:
+            pending.append("No confirmed liquidity raid on the correct side (sweep absent / wrong side)")
+        elif sw and not sw.get("mitigated"):
+            pending.append(f"Sweep {sw['price']} is OPEN (not reclaimed) — pending, not a completed event")
+        if not trigger_ok:
+            pending.append("1m trigger not completed in the trade direction (break→retest→break pending)")
+        if effective_R is not None and effective_R < MIN_R_A:
+            pending.append(f"First-obstacle room only {effective_R}R (< {MIN_R_A}R)")
+        if not pending:
+            verdict, state = "🟢 Ready", "READY"
+        else:
+            verdict, state = "🟡 Watch", "WATCH"
 
-    lines = _report_lines(verdict, symbol, price, direction, gr, ctx, loc, ev, st, tr, entry, stop, rs,
-                          tp1, tp2, best_R, flags)
-    return {"verdict": verdict, "symbol": symbol, "price": round(price, 2), "direction": direction,
+    lines = _report_lines(verdict, state, symbol, price, direction, gr, ctx, loc, ev, st, tr, entry, stop, rs,
+                          tp1, tp2, best_R, effective_R, first_obst, pending)
+    return {"verdict": verdict, "state": state, "symbol": symbol, "price": round(price, 2), "direction": direction,
             "grade": gr.get("grade"), "context": ctx, "location": loc, "liquidity_event": ev,
-            "structure": st, "trigger": tr, "risk": rs,
+            "structure": st, "trigger": tr, "risk": rs, "conflict": conflict, "pending": pending,
             "entry": entry, "stop": stop, "tp1": tp1, "tp2": tp2, "best_R": best_R,
-            "flags": flags, "stale": stale, "age_min": age_min, "conflict": conflict,
-            "conditional": verdict != "🟢 Entry", "lines": lines,
+            "first_obstacle": first_obst, "obstacle_R": obstacle_R, "effective_R": effective_R,
+            "stale": stale, "age_min": age_min, "flags": pending,
+            "conditional": state != "READY", "lines": lines,
             "disclaimer": "Decision-support tool only — not advice, not a forecast, not a profit guarantee."}
 
 
@@ -289,14 +325,15 @@ def _f(x):
     return "—" if x is None else f"{x:,.2f}"
 
 
-def _report_lines(verdict, sym, price, direction, gr, ctx, loc, ev, st, tr, entry, stop, rs, tp1, tp2, best_R, flags=None):
-    g = gr.get("grade") or "—"
+def _report_lines(verdict, state, sym, price, direction, gr, ctx, loc, ev, st, tr, entry, stop, rs,
+                  tp1, tp2, best_R, effective_R, first_obst, pending=None):
+    g = gr.get("grade") or ("pending" if state == "WATCH" else "—")
     nd = loc.get("nearest")
     locdesc = "—" if not nd else f"{nd['type']} {nd['dir']} @ {_f(nd['ref'])} (confluence {loc['confluence']})"
     sweep = ev.get("sweep")
-    swdesc = "no recent sweep" if not sweep else f"sweep {sweep['side']} @ {_f(sweep['price'])} ({'mitigated' if sweep['mitigated'] else 'open'})"
+    swdesc = "no recent sweep" if not sweep else f"sweep {sweep['side']} @ {_f(sweep['price'])} ({'reclaimed' if sweep['mitigated'] else 'OPEN — pending'})"
     m5 = st.get("m5"); m1 = st.get("m1")
-    trg = "not complete" if not tr["stages"]["second_break"] else "two-break sequence present (verify retest on chart)"
+    trg = "completed in trade direction" if tr.get("completed") else "PENDING (1m not shifted our way)"
     lines = [
         verdict,
         f"{sym} @ {_f(price)} · dir {direction or '—'} · grade {g} · (heuristic; verify on chart)",
@@ -305,23 +342,26 @@ def _report_lines(verdict, sym, price, direction, gr, ctx, loc, ev, st, tr, entr
         f"5m location: {locdesc} · liquidity event: {swdesc}",
         f"Structure 5m: {m5 or '—'} · 1m: {m1 or '—'} · 1m trigger: {trg}",
     ]
-    for fl in reversed(flags or []):
+    for fl in reversed(pending or []):
         lines.insert(2, "⚠ " + fl)
+    # plan — only an executable plan in READY; otherwise a pending sketch
+    plan_label = "PLAN" if state == "READY" else "Plan (pending trigger — provisional)"
     if entry is not None:
         contracts = rs.get("contracts", 0)
-        lines.append(f"Conditional: entry ~{_f(entry)} · invalidation/stop ~{_f(stop)} · {rs.get('stop_pts','—')}pt · "
+        lines.append(f"{plan_label}: entry ~{_f(entry)} · stop ~{_f(stop)} · {rs.get('stop_pts','—')}pt · "
                      f"{contracts} MNQ · risk ${rs.get('risk_per_account','—')}/account")
-        lines.append(f"TP1 {_f(tp1)} · TP2 {_f(tp2)} · R {rs.get('R_to_targets') or '—'}")
+        obs = "" if first_obst is None else f" · first obstacle {_f(first_obst)} ({effective_R}R)"
+        lines.append(f"TP1 {_f(tp1)} · TP2 {_f(tp2)} · R-to-target {rs.get('R_to_targets') or '—'}{obs}")
         if not rs.get("available"):
             lines.append(f"⚠ {rs.get('reason','')}")
     else:
-        lines.append("Conditional: no valid location in the context direction — size/R unavailable.")
-    # action
-    if verdict.startswith("🟢"):
-        lines.append("Action: deterministic sequence complete at a valid location — verify the 1m retest + brackets before executing.")
-    elif verdict.startswith("🟡"):
-        lines.append("Action: wait — location present, but trigger/room don't yet meet the A threshold. Don't enter on a touch/wick.")
+        lines.append("No valid location in the context direction — size/R unavailable.")
+    # action per state
+    if state == "READY":
+        lines.append("Action: READY — required events completed at a valid location; verify brackets and execute per your plan.")
+    elif state == "WATCH":
+        lines.append("Action: WATCH — location exists but the conditions above are still pending. Do not enter until they complete.")
     else:
-        lines.append("Action: no trade — no preplanned location / sufficient room in the context direction.")
+        lines.append("Action: NO TRADE — invalidated, stale, or inadequate room.")
     lines.append("Tool only — not advice, not a forecast, not a profit guarantee.")
     return lines

@@ -88,6 +88,7 @@ async function loadAnalyst(){
   try{ CUR.analyst=await (await fetch('/analyst?sym='+encodeURIComponent(CUR.sym),{cache:'no-store'})).json(); }
   catch(e){ return; }
   renderAnalyst();
+  if(CUR.data) drawChart();          // redraw so the plan levels (entry/SL/TP) appear on the chart
 }
 function renderAnalyst(){
   const box=document.getElementById('analystbody'); if(!box||!CUR.analyst)return;
@@ -122,10 +123,12 @@ function renderAnalyst(){
   h+=row('Location', nd?(nd.type+' '+nd.dir+' @ '+F(nd.ref)+' <span style="color:var(--dim)">(conf '+loc.confluence+')</span>'):'—');
   h+=row('Liquidity', ev?(ev.side+' sweep '+F(ev.price)+' <span style="color:var(--dim)">('+(ev.mitigated?'mitigated':'open')+')</span>'):'no recent sweep');
   h+=row('Structure', ms(st.m5)+' <span style="color:var(--dim)">5m</span> · '+ms(st.m1)+' <span style="color:var(--dim)">1m</span>');
-  h+=row('1m trig', (tr.stages&&tr.stages.second_break)?'two-break present <span style="color:var(--dim)">— verify retest</span>':'not complete');
+  h+=row('1m trig', tr.completed?'<span style="color:var(--green)">completed in direction</span> <span style="color:var(--dim)">— verify retest</span>':'<span style="color:var(--amber)">pending</span> <span style="color:var(--dim)">(1m not shifted our way)</span>');
   // plan
   const rs=a.risk||{};
-  h+=HH('Plan · conditional');
+  const ready=a.state==='READY';
+  h+=HH(ready?'Plan · READY':'Plan · pending trigger (provisional)');
+  if(!ready)h+='<div style="color:var(--amber);font-size:10.5px;margin:2px 0 4px">not executable yet — finalizes only when the trigger completes</div>';
   if(a.entry!=null){
     h+=row('Entry', '<span class="num">'+F(a.entry)+'</span>');
     h+=row('Stop', '<span class="num">'+F(a.stop)+'</span> <span style="color:var(--dim)">('+(rs.stop_pts!=null?rs.stop_pts+'pt':'—')+')</span>');
@@ -327,6 +330,17 @@ function drawChart(){
     const m=el('div');m.style.cssText='position:absolute;font-size:9px;line-height:1;transform:translateX(-50%);color:'+col;
     m.style.left=xpct(pv.index)+'%';m.style.top=(y(pv.price)+(hi?-11:3))+'px';m.textContent=hi?'▼':'▲';
     chart.appendChild(m);});
+  // analyst trade plan — Entry (dashed) / SL (red) / TP1·TP2 (green), conditional levels from /analyst
+  const AP=CUR.analyst;
+  if(AP&&AP.entry!=null){
+    const rdy=AP.state==='READY';                     // pending levels render dashed + dim, labeled (pending)
+    const plan=[['Entry',AP.entry,'#c9d1d9'],['SL',AP.stop,'var(--red)'],
+                ['TP1',AP.tp1,'var(--green)'],['TP2',AP.tp2,'var(--green)']];
+    plan.forEach(p=>{const lab=p[0],px=p[1],c=p[2]; if(px==null||!inWin(px))return;
+      const d=el('div','lvl');d.style.top=y(px)+'px';d.style.borderTop=(rdy?'1.4px solid ':'1px dashed ')+c;d.style.opacity=rdy?'.95':'.5';
+      const t=el('div','lab',lab+(rdy?'':'?')+' '+F2(px));t.style.color=c;t.style.left='2%';t.style.right='auto';t.style.fontWeight='600';if(!rdy)t.style.opacity='.8';d.appendChild(t);
+      chart.appendChild(d);});
+  }
   // current price
   const now=el('div','now');now.style.top=y(P)+'px';now.appendChild(el('div','nt',F2(P)));chart.appendChild(now);
 }

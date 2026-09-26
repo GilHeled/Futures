@@ -52,8 +52,18 @@ def test_stop_falls_back_to_ob_when_no_relevant_sweep():
 
 
 def test_grade_none_without_location():
-    g = AN.grade({"nearest": None}, {"sweep": None}, {}, {"stages": {"second_break": False}}, None)
-    assert g["grade"] is None
+    assert AN.grade({"nearest": None}, False, False, None)["grade"] is None
+
+
+def test_grade_none_when_trigger_pending():
+    # location present + good room, but trigger NOT completed -> no grade, WATCH
+    g = AN.grade({"nearest": {"x": 1}, "confluence": 1}, True, False, 3.0)
+    assert g["grade"] is None and g["trigger_completed"] is False
+
+
+def test_grade_A_needs_completed_trigger_and_room():
+    g = AN.grade({"nearest": {"x": 1}, "confluence": 0}, False, True, 2.5)
+    assert g["grade"] == "A" and g["trigger_completed"] is True
 
 
 def test_analyze_shape_and_verdict_is_valid():
@@ -64,6 +74,7 @@ def test_analyze_shape_and_verdict_is_valid():
         return [bar(100 + i, 101 + i, 99 + i, 100.5 + i) for i in range(n)]
     series = {"30m": ramp(40), "15m": ramp(60), "5m": ramp(80), "1m": ramp(120)}
     out = AN.analyze(series, "CME_MINI:MNQZ2026")
-    assert out["verdict"] in ("🟢 Entry", "🟡 Hold", "🔴 No Trade")
+    assert out["verdict"] in ("🟢 Ready", "🟡 Watch", "🔴 No Trade")
+    assert out["state"] in ("READY", "WATCH", "NO_TRADE")
     assert out["lines"][0] == out["verdict"] and isinstance(out["lines"], list) and len(out["lines"]) >= 4
     assert "disclaimer" in out

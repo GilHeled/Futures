@@ -25,6 +25,7 @@ from ict_live.storage.market_store import MarketStore
 from ict_v2.live import V2Live
 from ict_v2 import scenario_analysis as SA          # read-only analysis layer (never mutates the engine)
 from ict_v2 import liquidity_runs as LR             # standalone HRLR/LRLR model (read-only)
+from ict_v2 import order_blocks as OB               # standalone Order Blocks model (read-only)
 from ict_v2.scenario_page import PAGE as SCENARIO_PAGE
 
 
@@ -289,10 +290,12 @@ class V2Service:
 
         ser = (series.get(tf) or [])[-max(10, min(n, 500)):]
         runs = LR.detect_liquidity_runs(ser, tick=0.25)
+        obs = OB.detect_order_blocks(ser, swing_len=3, max_bars=100)
         return {"symbol": sym, "tf": tf, "tick": 0.25,
                 "bars": [{"t": x.open_time.isoformat(), "o": x.open, "h": x.high,
                           "l": x.low, "c": x.close} for x in ser],
-                "liquidity_runs": LR.summary(runs)}
+                "liquidity_runs": LR.summary(runs),
+                "order_blocks": OB.summary(obs, max_bull=3, max_bear=3)}
 
 
 def _start_watchdog(svc: V2Service, dirty: threading.Event):

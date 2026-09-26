@@ -59,7 +59,7 @@ td.n{font-family:var(--mono);text-align:right}.tf-badge{font-family:var(--mono);
 const F=(x,d)=>x==null?'—':Number(x).toLocaleString(undefined,{minimumFractionDigits:d||0,maximumFractionDigits:d||0});
 const F2=x=>F(x,2), el=(t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
 const TFS=['4H','1H','30m','15m','5m','1m'];
-let CUR={sym:null, tf:'15m', data:null, showRuns:true, lastDay:true};
+let CUR={sym:null, tf:'15m', data:null, showRuns:true, showOB:true, lastDay:true};
 
 async function load(){
   let rep={symbols:{}}, list=[];
@@ -107,7 +107,7 @@ function renderShell(){
   const ctrls=el('div','tfbar');ctrls.style.marginLeft='0';
   const tbtn=(key,lab)=>{const b=el('button','tfbtn'+(CUR[key]?' on':''),lab);
     b.onclick=()=>{CUR[key]=!CUR[key];b.classList.toggle('on',CUR[key]);drawChart();};return b;};
-  ctrls.appendChild(tbtn('showRuns','HRLR/LRLR'));ctrls.appendChild(tbtn('lastDay','Last day'));
+  ctrls.appendChild(tbtn('showRuns','HRLR/LRLR'));ctrls.appendChild(tbtn('showOB','Order Blocks'));ctrls.appendChild(tbtn('lastDay','Last day'));
   hd.appendChild(ctrls); cc.appendChild(hd);
   const chart=el('div','chart');chart.id='chart';chart.innerHTML='<div class="err">Loading candles…</div>';cc.appendChild(chart);
   cc.appendChild(el('div','caption','Standalone HRLR/LRLR indicator (pivots 5/2, EQ tolerance 10 ticks). LRLR = EQH/EQL · HRLR = sweep. Mitigated runs stop at their mitigation bar and dim.'));
@@ -115,6 +115,8 @@ function renderShell(){
   lg.innerHTML='<span><i class="sw" style="border-top:2px solid var(--lrlr);height:0"></i>LRLR (EQH/EQL)</span>'+
    '<span><i class="sw" style="border-top:2px dotted var(--red);height:0"></i>HRLR↑ swept high (bearish)</span>'+
    '<span><i class="sw" style="border-top:2px dotted var(--green);height:0"></i>HRLR↓ swept low (bullish)</span>'+
+   '<span><i class="sw" style="background:rgba(38,166,154,.10);border:1px solid var(--green)"></i>bull OB+</span>'+
+   '<span><i class="sw" style="background:rgba(239,83,80,.10);border:1px solid var(--red)"></i>bear OB-</span>'+
    '<span style="color:var(--dim)">dim = mitigated</span>';
   cc.appendChild(lg);
   grid.appendChild(cc);
@@ -198,6 +200,8 @@ function drawChart(){
     if(r.mitigated&&mi<0)return acc;                 // mitigated before the window
     if(pi<0)pi=0;                                     // level carried in from before → left edge
     acc.push(Object.assign({},r,{pivot_index:pi,mitigation_index:mi}));return acc;},[]);
+  let obs=(data.order_blocks&&data.order_blocks.visible)||[];
+  obs=obs.map(o=>{let li=o.left_index-offset; if(li<0)li=0; return Object.assign({},o,{left_index:li});});
   const P=bars[bars.length-1].c;
   let hi=Math.max(...bars.map(b=>b.h)), lo=Math.min(...bars.map(b=>b.l));
   const pad=(hi-lo)*0.06||10; const pmax=hi+pad, pmin=lo-pad;
@@ -208,6 +212,14 @@ function drawChart(){
   // gridlines
   const step=Math.max(1,Math.round((pmax-pmin)/8));
   for(let g=Math.ceil(pmin/step)*step; g<=pmax; g+=step){const l=el('div','lvl');l.style.top=y(g)+'px';l.style.borderTop='1px solid var(--line)';l.style.opacity='.4';const a=el('div','axis',F(g));a.style.top=(y(g)-8)+'px';l.appendChild(a);chart.appendChild(l);}
+  // Order Block zones (drawn BEHIND candles) — box + 50% midline + OB+/OB- label, extended right
+  if(CUR.showOB) obs.forEach(o=>{if(o.top<pmin||o.bottom>pmax)return;
+    const col=o.is_bull?'var(--green)':'var(--red)';
+    const bx=el('div');bx.style.cssText='position:absolute;border:1px solid '+col+';background:'+(o.is_bull?'rgba(38,166,154,.10)':'rgba(239,83,80,.10)')+';border-radius:2px';
+    bx.style.left=xpct(o.left_index)+'%';bx.style.right='70px';bx.style.top=y(o.top)+'px';bx.style.height=Math.max(3,(y(o.bottom)-y(o.top)))+'px';
+    const md=el('div');md.style.cssText='position:absolute;left:0;right:0;border-top:1px dashed '+col+';opacity:.7';md.style.top=(y(o.mid)-y(o.top))+'px';bx.appendChild(md);
+    const lb=el('div');lb.style.cssText='position:absolute;right:3px;top:1px;font-family:var(--mono);font-size:9px;color:'+col;lb.textContent=o.label;bx.appendChild(lb);
+    chart.appendChild(bx);});
   // candles
   const NS='http://www.w3.org/2000/svg';const svg=document.createElementNS(NS,'svg');
   svg.setAttribute('width',PW);svg.setAttribute('height',H);svg.style.cssText='position:absolute;left:0;top:0;pointer-events:none';

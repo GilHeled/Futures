@@ -70,6 +70,8 @@ CONFIG = {
                     "rationale": "stop before the $300 PDLL to leave room for fees/slippage; provisional"},
     "INTERMEDIATE_R": {"value": 1.0, "unit": "R", "range": [0.5, 1.5],
                        "rationale": "a draw closer than this is a partial/intermediate, not the principal target; provisional"},
+    "FVG_MIN_MULT": {"value": 0.5, "unit": "x median bar range", "range": [0.1, 2.0],
+                     "rationale": "min FVG size to be a MEANINGFUL zone (not every tiny 3-candle gap); provisional"},
 }
 
 
@@ -153,6 +155,35 @@ def _has_fvg(bars, idx, is_bull, window=6):
         if (not is_bull) and _h(bars[k + 1]) < _l(bars[k - 1]):
             return True
     return False
+
+
+def detect_fvgs(bars, kind, *, min_size=None):
+    """MEANINGFUL, still-ACTIVE fair-value gaps (spec §1). `kind`='bull' (demand imbalance) / 'bear' (supply).
+    A gap is the 3-candle imbalance [bottom, top]; only gaps >= min_size (PROVISIONAL, default 0.5×median bar
+    range) count — not every tiny gap. Status is ACTIVE until a later completed candle CLOSES back through the
+    gap (fills it), then MITIGATED. Returns zones with top/bottom/near edges + formation candle + status,
+    all causal (only bars at/after formation are used)."""
+    n = len(bars)
+    if n < 3:
+        return []
+    if min_size is None:
+        min_size = (_vol_unit(bars) or 1.0) * cfg("FVG_MIN_MULT")
+    out = []
+    for k in range(1, n - 1):
+        if kind == "bull" and _l(bars[k + 1]) > _h(bars[k - 1]):
+            bottom, top = _h(bars[k - 1]), _l(bars[k + 1])
+        elif kind == "bear" and _h(bars[k + 1]) < _l(bars[k - 1]):
+            bottom, top = _h(bars[k + 1]), _l(bars[k - 1])
+        else:
+            continue
+        if (top - bottom) < min_size:
+            continue
+        # mitigation: a later completed candle closes back into/through the gap
+        filled = any((_c(b) <= bottom) if kind == "bull" else (_c(b) >= top) for b in bars[k + 2:])
+        out.append({"top": round(top, 2), "bottom": round(bottom, 2), "mid": round((top + bottom) / 2, 2),
+                    "kind": kind, "idx": k, "time": _t(bars[k]), "size": round(top - bottom, 2),
+                    "status": "MITIGATED" if filled else "ACTIVE"})
+    return out
 
 
 # ── sub-model: higher-timeframe context (30m + 15m) ──────────────────────────
@@ -573,6 +604,8 @@ def _meaningful_obstacle(kind, tf):
         return True
     if "ssl" in k or "bsl" in k or "lrlr" in k or "hrlr" in k:
         return True
+    if "fvg" in k:                                    # a meaningful (size-filtered) imbalance is a real zone
+        return True
     if "swing" in k and tf in ("5m", "15m"):
         return True
     return False
@@ -628,6 +661,19 @@ def obstacle_scan(series_by_tf, direction, entry, stop_pts, threshold_level=None
                 add(tf, r.price, None, f"{r.kind} SSL", "liquidity shelf", r.pivot_index, r.price)
             elif (not short) and r.is_high:
                 add(tf, r.price, None, f"{r.kind} BSL", "liquidity shelf", r.pivot_index, r.price)
+        # opposing FVG/imbalance on the path (spec §1): demand FVG below a short / supply FVG above a long.
+        # Uses the FVG's OWN active/mitigated status (a meaningful, size-filtered zone), near edge encountered first.
+        for z in detect_fvgs(bars, "bull" if short else "bear"):
+            near = z["top"] if short else z["bottom"]
+            if (near < entry) != short:
+                continue
+            st = "CLEARED" if z["status"] == "MITIGATED" else "ACTIVE"
+            rows.append({"tf": tf, "price": round(near, 2), "zone": f"{z['bottom']}–{z['top']}",
+                         "kind": f"FVG ({z['kind']})", "opposes": "imbalance zone", "status": st,
+                         "evidence": f"3-candle FVG size {z['size']} @ {z['time']} ({z['status']})",
+                         "ev_from": z["time"], "ev_to": None,
+                         "meaningful": tf in ("5m", "15m"),   # a 1m FVG is context, not a hard barrier (like a 1m swing)
+                         "dist_pts": round(abs(entry - near), 2), "R": round(abs(entry - near) / stop_pts, 2)})
 
     # dedupe by rounded price; keep the strongest label (prefer still-obstructing, prefer OB/zone), merge TFs
     order = {"ACTIVE": 0, "WEAKENED": 1, "UNKNOWN": 2, "TRIGGER_THRESHOLD": 3, "CLEARED": 4}
@@ -739,6 +785,11 @@ def target_candidates(series_by_tf, ctx, direction, entry, stop_pts):
                 add(o.top, "opposing OB (demand)", tf=tf, near_edge=o.top)
             elif (not short) and (not o.is_bull) and o.bottom > entry:
                 add(o.bottom, "opposing OB (supply)", tf=tf, near_edge=o.bottom)
+        # FVG / imbalance as a draw-to-fill (spec §1): demand FVG below a short / supply FVG above a long
+        for z in detect_fvgs(bars, "bull" if short else "bear"):
+            near = z["top"] if short else z["bottom"]
+            if (near < entry) == short:
+                add(z["mid"], f"FVG imbalance ({z['status']})", tf=tf, near_edge=near, status=z["status"])
         # range boundary (session extreme in the trade direction)
         if bars:
             edge = min(_l(b) for b in bars) if short else max(_h(b) for b in bars)
@@ -753,13 +804,22 @@ def account_gate(account, planned_risk_per_acct, planned_contracts):
          copier_ok, protection_ok}
     Checks, per account and combined: remaining PDLL headroom (after realized loss + open risk + fees +
     slippage reserve, minus a buffer) covers the planned risk; the one-trade-per-day rule; copier +
-    protection health. The WEAKER account limits size. Returns a structured gate with reason codes."""
+    protection health; and copier SYNC (a fill in one account but not the other is a fault, not a trade).
+    The WEAKER account limits size. `trades_today` counts EXECUTED entries only — a candidate, confirmed
+    trigger, validated plan, cancelled/unfilled order, or a partial exit of the SAME position never
+    increments it (spec §4). Returns a structured gate with reason codes."""
     if not account:
         return {"known": False, "ok": None, "execution_component": False, "reason_code": "ACCOUNT_UNKNOWN",
                 "detail": "live balances/PDLL/copier/trades-today unavailable — CONDITIONAL size only",
                 "max_contracts_by_budget": None}
     reasons, per = [], {}
     ok = True
+    # copier SYNC fault: a position is open in one account but not the other (spec §4)
+    opens = {name: bool(a.get("position_open")) for name, a in account.items() if "position_open" in a}
+    if opens and len(set(opens.values())) > 1:
+        return {"known": True, "ok": False, "execution_component": False, "reason_code": "COPIER_MISMATCH",
+                "detail": f"copier fill mismatch — accounts NOT synchronized ({opens}); flatten & investigate",
+                "per_account": {n: {"position_open": v} for n, v in opens.items()}, "max_contracts_by_budget": 0}
     slip = cfg("FEE_SLIPPAGE_PER_CONTRACT") * max(1, planned_contracts)
     buf = cfg("PDLL_BUFFER")
     max_by_budget = planned_contracts
@@ -906,6 +966,7 @@ def analyze(series_by_tf, symbol, *, price=None, now=None, account=None, news=No
     degenerate_stop = False
     targets_ordered = []
     partial_exit = None
+    full_2R_present = None
     if triggered and direction:
         entry = _tick(trg["entry"], "near")
         # BOTH stop theses; choose LOCAL_1M_TRIGGER (this is a 1m-trigger entry) and store what it invalidates.
@@ -920,8 +981,12 @@ def analyze(series_by_tf, symbol, *, price=None, now=None, account=None, news=No
         stop_pts_prelim = abs(entry - stop) or 1.0
         tcands = target_candidates(series_by_tf, ctx, direction, entry, stop_pts_prelim)
         real_targets = [c for c in tcands if c["role"] == "target"]
-        principal = next((c for c in real_targets if c["R"] >= MIN_R_A), None) or \
-            (real_targets[-1] if real_targets else (tcands[-1] if tcands else None))
+        full_2R_present = any(c["R"] >= MIN_R_A for c in real_targets)
+        # principal = nearest credible objective: prefer >=2R, else the nearest >=1.5R (B first objective),
+        # else the nearest real target. Never invent a farther target to manufacture >=2R.
+        principal = (next((c for c in real_targets if c["R"] >= MIN_R_A), None)
+                     or next((c for c in real_targets if c["R"] >= MIN_R_B), None)
+                     or (real_targets[0] if real_targets else (tcands[0] if tcands else None)))
         principal_price = principal["price"] if principal else None
         partial = next((c for c in real_targets if principal_price is not None
                         and MIN_R_B <= c["R"] < MIN_R_A
@@ -946,18 +1011,28 @@ def analyze(series_by_tf, symbol, *, price=None, now=None, account=None, news=No
         degenerate_stop = bool(sp is not None and stop_floor and sp < stop_floor)
         if degenerate_stop:
             stop_notes.append(f"PROVISIONAL floor {stop_floor}pt REJECTED the structural stop ({sp}pt) — logged for review")
-        # TWO ENTRY METHODS (spec §2/§4) with DEFINED, CAUSAL fill models.
+        # TWO ENTRY METHODS (spec §2/§3/§4) with an UNAMBIGUOUS, causal fill sequence.
         slip = cfg("SLIPPAGE_TICKS") * TICK
-        cont_px = _tick(price + slip, "up") if direction == "SHORT" else _tick(price - slip, "down")  # conservative
+        sb = trg.get("second_break") or {}
+        ref_close = sb.get("c", price)                 # ORDER-CREATION REFERENCE = the second-break CANDLE CLOSE
+        confirmed_at = sb.get("t")                     # earliest time the strategy can know the trigger completed
+        cont_modeled = _tick(ref_close + slip, "up") if direction == "SHORT" else _tick(ref_close - slip, "down")
         entry_options = [
-            {"method": "confirmed_continuation", "price": cont_px,
-             "fill_model": (f"next completed 1m bar at/through the level; conservative = current close {_f(price)} "
-                            f"±{cfg('SLIPPAGE_TICKS')} ticks slippage; fees per CONFIG. Order-creation time = as_of; "
-                            f"NEVER fills within the trigger candle."),
-             "order_created": None, "state": "fillable_next_bar"},
+            {"method": "confirmed_continuation",
+             "order_created_at": confirmed_at,          # order is created AFTER this close, not before
+             "reference_close": round(ref_close, 2),    # the second-break candle close — NOT a fill
+             "earliest_fill": "OPEN of the first COMPLETED 1m bar AFTER the second-break close (bar sb+1)",
+             "modeled_fill_price": cont_modeled, "fill_is_modeled": True,
+             "fill_model": (f"1) trigger confirmed at second-break close {_f(ref_close)} @ {confirmed_at}; "
+                            f"2) order created AFTER that close; 3) earliest legal fill = next completed 1m bar's "
+                            f"open (sb+1); 4) apply {cfg('SLIPPAGE_TICKS')}-tick slippage + fees; the trigger "
+                            f"candle close is the ORDER REFERENCE, never a fill that predates the order; "
+                            f"5) recompute stop/size/both-accounts-budget/obstacles/R at the fill (revalidate_at_fill)."),
+             "state": "AWAITING_NEXT_BAR_FILL"},
             {"method": "retest_limit", "price": entry,
-             "fill_model": ("limit at the broken 1m level; requires a FURTHER retest AFTER order creation — may "
-                            "never fill; a historical touch before the order existed is NOT a fill; revalidate at fill."),
+             "order_created_at": confirmed_at, "earliest_fill": "a FURTHER retest to the level AFTER order creation",
+             "fill_model": ("limit at the broken 1m level; a touch BEFORE order creation is NOT a fill; may never "
+                            f"fill; expires after {cfg('ORDER_TTL_BARS')} bars; revalidate at the actual fill."),
              "state": "WAITING_FOR_FILL", "ttl_bars": cfg("ORDER_TTL_BARS")},
         ]
         scan = obstacle_scan(series_by_tf, direction, entry, sp,   # from the ACTUAL post-trigger entry
@@ -1150,6 +1225,7 @@ def analyze(series_by_tf, symbol, *, price=None, now=None, account=None, news=No
             "stop_options": stop_opts, "stop_thesis_id": stop_thesis_id, "stop_invalidates": stop_invalidates,
             "stop_notes": stop_notes, "entry_options": entry_options, "target_candidates": tcands,
             "principal_R": principal_R, "partial_exit": partial_exit, "entry_type": entry_type,
+            "full_objective_2R_absent": (None if not triggered else (not full_2R_present)),
             "account_gate": acct, "news_gate": {"known": news_known, "clear": news_ok},
             "reason": reason, "symbol": symbol, "price": round(price, 2), "as_of": last_t,
             "direction": direction, "grade": gr.get("grade"), "context": ctx, "location": loc,
@@ -1275,7 +1351,7 @@ def _report_lines(verdict, state, reason, sym, price, direction, gr, ctx, loc, e
         eo = extra.get("entry_options") or []
         if eo:
             lines.append("Entry options: " + " | ".join(
-                f"{e['method']} @ {_f(e['price'])} ({e.get('state')})" for e in eo))
+                f"{e['method']} @ {_f(e.get('price') or e.get('modeled_fill_price'))} ({e.get('state')})" for e in eo))
         if extra.get("stop_thesis_id"):
             lines.append(f"Stop thesis: {extra['stop_thesis_id']} — {extra.get('stop_invalidates')}")
         so = extra.get("stop_options") or {}

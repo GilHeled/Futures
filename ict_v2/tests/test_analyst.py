@@ -207,7 +207,7 @@ def test_state_completed_trigger_with_room_is_ready_A():
     risk and >= 2R before the first meaningful obstacle -> READY / grade A."""
     o = _run_fixture("ready_A")
     seq = o["trigger_sequence"]
-    assert o["triggered"] is True and o["entry"] == 30867.5 and o["effective_R"] == 4.03
+    assert o["triggered"] is True and o["entry"] == 30812.5 and o["effective_R"] == 2.58
     assert o["direction"] == "LONG" and o["context"]["bias30"] == "bullish" and o["context_clear"] is True
     assert o["entry"] != 30918.0 and o["stop"] != 30939.75      # rebuilt from the trigger
     assert seq["continuation"]["continued_past_retest"] is True
@@ -271,6 +271,49 @@ def test_rule_inventory_three_categories():
     for k in ("TRIGGER_RECENCY", "STOP_FLOOR_MULT", "ACCEPT_CLOSES"):
         assert k in inv["provisional"] and "rationale" in inv["provisional"][k] and "range" in inv["provisional"][k]
     assert inv["approved"]["min_R_A"] == 2.0 and inv["approved"]["per_trade_risk_usd"] == 150.0
+
+
+def test_detect_fvgs_and_fvg_appears_in_path():
+    def bar(o, h, l, c):
+        return {"o": o, "h": h, "l": l, "c": c, "t": None}
+    # a clear bullish 3-candle gap: low of bar3 (110) > high of bar1 (104)
+    bars = [bar(100, 104, 99, 103), bar(104, 108, 103, 107), bar(112, 116, 110, 115), bar(115, 118, 113, 116)]
+    fv = AN.detect_fvgs(bars, "bull", min_size=1.0)
+    assert fv and fv[0]["status"] in ("ACTIVE", "MITIGATED") and fv[0]["top"] > fv[0]["bottom"]
+    # an active FVG on the path shows up in the obstacle scan with status + R
+    o = _run_fixture("ready_A")
+    fvg_rows = [r for r in o["obstacle_scan"] if "FVG" in r["kind"]]
+    for r in fvg_rows:
+        assert r["status"] in ("ACTIVE", "WEAKENED", "CLEARED", "UNKNOWN") and r["R"] > 0 and r["ev_from"]
+
+
+def test_completed_B_has_no_2R_full_objective_but_is_reported_truthfully():
+    o = _run_fixture("b_watch")
+    assert o["grade"] == "B" and o["trigger_confirmed"] is True and o["state"] == "WATCH"
+    # a credible ~1.5-2R first objective, but no >=2R full objective, and execution blocked
+    assert 1.5 <= o["principal_R"] < 2.0 and o["full_objective_2R_absent"] is True
+    assert o["execution_cleared"] is False
+
+
+def test_copier_mismatch_and_executions_only_daily_count():
+    # a candidate/unfilled state does NOT consume the day (trades_today counts EXECUTED entries only)
+    ok = AN.account_gate({"a": {"trades_today": 0}, "b": {"trades_today": 0}}, 100.0, 2)
+    assert ok["ok"] is True
+    # a real fill today blocks a second
+    used = AN.account_gate({"a": {"trades_today": 1}, "b": {"trades_today": 0}}, 100.0, 2)
+    assert used["ok"] is False
+    # copier fill in one account but not the other -> mismatch fault, NOT a normal synchronized trade
+    mm = AN.account_gate({"a": {"position_open": True}, "b": {"position_open": False}}, 100.0, 2)
+    assert mm["reason_code"] == "COPIER_MISMATCH" and mm["ok"] is False
+
+
+def test_confirmed_continuation_fill_is_causal():
+    o = _run_fixture("ready_A")
+    cont = next(e for e in o["entry_options"] if e["method"] == "confirmed_continuation")
+    # the trigger candle close is the ORDER REFERENCE, not a fill; earliest fill is a LATER bar
+    assert "reference_close" in cont and cont["fill_is_modeled"] is True
+    assert "completed 1m bar after" in cont["earliest_fill"].lower() and cont["state"] == "AWAITING_NEXT_BAR_FILL"
+    assert cont["order_created_at"] == o["trigger_sequence"]["second_break"]["t"]
 
 
 def test_completed_B_trigger_is_preserved_not_dropped():

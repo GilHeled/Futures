@@ -64,6 +64,12 @@ CONFIG = {
                        "rationale": "prospective-limit time-to-live before cancel; provisional"},
     "BACKTEST_MAX_HOLD_BARS": {"value": 240, "unit": "1m bars", "range": [30, 1440],
                                "rationale": "backtest timeout only; NOT a trade-management rule"},
+    "SLIPPAGE_TICKS": {"value": 2, "unit": "ticks", "range": [0, 8],
+                       "rationale": "conservative continuation-fill slippage vs current close; provisional"},
+    "PDLL_BUFFER": {"value": 60.0, "unit": "$/account", "range": [0.0, 150.0],
+                    "rationale": "stop before the $300 PDLL to leave room for fees/slippage; provisional"},
+    "INTERMEDIATE_R": {"value": 1.0, "unit": "R", "range": [0.5, 1.5],
+                       "rationale": "a draw closer than this is a partial/intermediate, not the principal target; provisional"},
 }
 
 
@@ -689,15 +695,18 @@ def stop_options(direction, trg, nd, sweep, buffer):
 
 
 def target_candidates(series_by_tf, ctx, direction, entry, stop_pts):
-    """Ordered TARGET candidates (spec §4) — opposing liquidity / HRLR / EQ pools in the trade direction,
-    each with source, price, distance and R from `entry`. Distinct from obstacles. A candidate too close to
-    be a sensible exit (< 1R) is flagged `intermediate` (it is an obstacle to pass, not TP1)."""
+    """Ordered TARGET candidates in the trade direction (spec §1/§4): opposing liquidity, HRLR/LRLR pools,
+    opposing order blocks (near edge), range boundary, EQ levels and HTF (30m/15m) draws — each with source,
+    timeframe, near edge (for zones), status, distance and R from `entry`. Distinct from the obstacle scan.
+    A draw closer than INTERMEDIATE_R (PROVISIONAL) is tagged `intermediate` — a partial/obstacle, not the
+    principal objective; it never hides a significant obstacle (those are the separate obstacle scan)."""
     if entry is None or not direction or not stop_pts:
         return []
     short = direction == "SHORT"
     out, seen = [], set()
+    inter_R = cfg("INTERMEDIATE_R")
 
-    def add(price, source):
+    def add(price, source, tf="—", near_edge=None, status="ACTIVE"):
         if price is None or ((price < entry) != short):
             return
         p = round(price, 2)
@@ -705,21 +714,83 @@ def target_candidates(series_by_tf, ctx, direction, entry, stop_pts):
             return
         seen.add(p)
         R = round(abs(entry - p) / stop_pts, 2)
-        out.append({"source": source, "price": p, "dist_pts": round(abs(entry - p), 2), "R": R,
-                    "role": "intermediate (too close for TP1)" if R < 1.0 else "target"})
+        out.append({"source": source, "tf": tf, "near_edge": (round(near_edge, 2) if near_edge is not None else None),
+                    "status": status, "price": p, "dist_pts": round(abs(entry - p), 2), "R": R,
+                    "role": "intermediate (partial/obstacle, < %.1fR)" % inter_R if R < inter_R else "target"})
     for x in (ctx["external_ssl"] if short else ctx["external_bsl"]):
-        add(x, "30m/15m liquidity pool")
+        add(x, "HTF liquidity pool", tf="30m/15m")
     for x in (ctx["eql"] if short else ctx["eqh"]):
-        add(x, "EQ level")
-    for tf in ("5m", "1m"):
-        for r in LR.detect_liquidity_runs(series_by_tf.get(tf) or [], tick=0.25):
+        add(x, "EQ level (LRLR)", tf="30m/15m")
+    for tf in ("15m", "5m", "1m"):
+        bars = series_by_tf.get(tf) or []
+        for r in LR.detect_liquidity_runs(bars, tick=0.25):
             if r.mitigated:
                 continue
             if short and (not r.is_high) and r.price < entry:
-                add(r.price, f"{tf} {r.kind} pool")
+                add(r.price, f"{r.kind} pool", tf=tf)
             elif (not short) and r.is_high and r.price > entry:
-                add(r.price, f"{tf} {r.kind} pool")
+                add(r.price, f"{r.kind} pool", tf=tf)
+        # opposing OB as a draw (near edge encountered first): for a short, a bull OB below (its TOP);
+        # for a long, a bear OB above (its BOTTOM)
+        for o in OB.detect_order_blocks(bars, swing_len=3, max_bars=100):
+            if o.state != "active":
+                continue
+            if short and o.is_bull and o.top < entry:
+                add(o.top, "opposing OB (demand)", tf=tf, near_edge=o.top)
+            elif (not short) and (not o.is_bull) and o.bottom > entry:
+                add(o.bottom, "opposing OB (supply)", tf=tf, near_edge=o.bottom)
+        # range boundary (session extreme in the trade direction)
+        if bars:
+            edge = min(_l(b) for b in bars) if short else max(_h(b) for b in bars)
+            add(edge, "range boundary", tf=tf)
     return sorted(out, key=lambda c: c["dist_pts"])
+
+
+def account_gate(account, planned_risk_per_acct, planned_contracts):
+    """Executable daily-rule gate (spec §3). `account` is either None (data unavailable -> UNKNOWN, execution
+    blocked, size is a CONDITIONAL maximum) or a dict of BOTH XFAs:
+        {"xfa1": {...}, "xfa2": {...}} each with realized_loss_today, open_risk, fees, trades_today,
+         copier_ok, protection_ok}
+    Checks, per account and combined: remaining PDLL headroom (after realized loss + open risk + fees +
+    slippage reserve, minus a buffer) covers the planned risk; the one-trade-per-day rule; copier +
+    protection health. The WEAKER account limits size. Returns a structured gate with reason codes."""
+    if not account:
+        return {"known": False, "ok": None, "execution_component": False, "reason_code": "ACCOUNT_UNKNOWN",
+                "detail": "live balances/PDLL/copier/trades-today unavailable — CONDITIONAL size only",
+                "max_contracts_by_budget": None}
+    reasons, per = [], {}
+    ok = True
+    slip = cfg("FEE_SLIPPAGE_PER_CONTRACT") * max(1, planned_contracts)
+    buf = cfg("PDLL_BUFFER")
+    max_by_budget = planned_contracts
+    for name, a in account.items():
+        realized = float(a.get("realized_loss_today", 0.0))     # positive number = loss taken today
+        openr = float(a.get("open_risk", 0.0))
+        fees = float(a.get("fees", 0.0))
+        headroom = DAILY_PDLL - buf - realized - openr - fees - slip     # $ still riskable before PDLL+buffer
+        trades = int(a.get("trades_today", 0))
+        copier_ok = bool(a.get("copier_ok", True))
+        protection_ok = bool(a.get("protection_ok", True))
+        acc_ok = True
+        if headroom < planned_risk_per_acct:
+            acc_ok = False; reasons.append(f"{name}: PDLL headroom ${round(headroom,2)} < planned ${planned_risk_per_acct}")
+        if trades >= 1:
+            acc_ok = False; reasons.append(f"{name}: one-trade-per-day already used (trades_today={trades})")
+        if not copier_ok:
+            acc_ok = False; reasons.append(f"{name}: copier invalid")
+        if not protection_ok:
+            acc_ok = False; reasons.append(f"{name}: protective bracket invalid")
+        # contracts this account's headroom alone could carry (weaker account will bind)
+        acc_max = 0
+        if planned_contracts and planned_risk_per_acct:
+            per_contract = planned_risk_per_acct / planned_contracts
+            acc_max = max(0, int(headroom // per_contract)) if per_contract else 0
+        max_by_budget = min(max_by_budget, acc_max)
+        per[name] = {"headroom": round(headroom, 2), "ok": acc_ok, "max_contracts": acc_max}
+        ok = ok and acc_ok
+    return {"known": True, "ok": ok, "execution_component": ok, "per_account": per,
+            "max_contracts_by_budget": max_by_budget,
+            "reason_code": None if ok else "ACCOUNT_RISK_BLOCK", "detail": "; ".join(reasons) or "both accounts OK"}
 
 
 def revalidate_at_fill(analysis, fill_price, *, now=None, account_ok=False, news_ok=False):
@@ -747,9 +818,11 @@ def revalidate_at_fill(analysis, fill_price, *, now=None, account_ok=False, news
 
 
 # ── report assembly ──────────────────────────────────────────────────────────
-def analyze(series_by_tf, symbol, *, price=None, now=None):
+def analyze(series_by_tf, symbol, *, price=None, now=None, account=None, news=None):
     """`now` (tz-aware datetime) overrides the freshness clock — pass the cursor time in a backtest so
-    the freshness gate measures against the replayed moment, not wall-clock now."""
+    the freshness gate measures against the replayed moment, not wall-clock now. `account` (both XFAs) and
+    `news` ({"clear": bool, "window": ...}) are OPTIONAL: when supplied the daily-rule and news gates become
+    executable; when omitted they stay UNKNOWN and execution is blocked (spec §3)."""
     b30 = series_by_tf.get("30m") or []
     b15 = series_by_tf.get("15m") or []
     b5 = series_by_tf.get("5m") or []
@@ -832,6 +905,7 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
     rs = risk_size(None, None, None)
     degenerate_stop = False
     targets_ordered = []
+    partial_exit = None
     if triggered and direction:
         entry = _tick(trg["entry"], "near")
         # BOTH stop theses; choose LOCAL_1M_TRIGGER (this is a 1m-trigger entry) and store what it invalidates.
@@ -841,35 +915,49 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
         stop = chosen["price"] if chosen else trg["stop"]
         stop_invalidates = chosen["invalidates"] if chosen else None
         stop_thesis = stop_thesis_id
-        # TARGET candidates (ordered, with source/dist/R) — separate from obstacles (spec §4). The PRINCIPAL
-        # target is the nearest draw that is a sensible >=2R exit; nearer <2R draws are intermediate, NOT TP1.
+        # TARGETS (spec §1/§4): PRINCIPAL objective = nearest draw >= MIN_R_A (the graded objective). An
+        # optional first-contract PARTIAL exit (~1.5–2R) may precede it, only with 2 MNQ and only if nearer.
         stop_pts_prelim = abs(entry - stop) or 1.0
         tcands = target_candidates(series_by_tf, ctx, direction, entry, stop_pts_prelim)
         real_targets = [c for c in tcands if c["role"] == "target"]
         principal = next((c for c in real_targets if c["R"] >= MIN_R_A), None) or \
             (real_targets[-1] if real_targets else (tcands[-1] if tcands else None))
-        tp1 = principal["price"] if principal else None
+        principal_price = principal["price"] if principal else None
+        partial = next((c for c in real_targets if principal_price is not None
+                        and MIN_R_B <= c["R"] < MIN_R_A
+                        and abs(c["price"] - entry) < abs(principal_price - entry)), None)
+        tp1 = principal_price                                # TP1 = the graded principal objective
         tp2 = next((c["price"] for c in real_targets
-                    if principal and abs(c["price"] - entry) > abs(principal["price"] - entry)), None)
+                    if principal_price is not None and abs(c["price"] - entry) > abs(principal_price - entry)), None)
         targets_ordered = [c["price"] for c in real_targets]
         if direction == "SHORT":
             stop = _tick(stop, "up"); tp1 = _tick(tp1, "up"); tp2 = _tick(tp2, "up")
         else:
             stop = _tick(stop, "down"); tp1 = _tick(tp1, "down"); tp2 = _tick(tp2, "down")
         rs = risk_size(entry, stop, [tp1, tp2])
-        best_R = max(rs.get("R_to_targets") or [0]) if rs.get("R_to_targets") else None
-        principal_R = (rs.get("R_to_targets") or [None])[0]             # R to TP1 = principal target
         sp = rs.get("stop_pts")
+        best_R = max(rs.get("R_to_targets") or [0]) if rs.get("R_to_targets") else None
+        principal_R = (rs.get("R_to_targets") or [None])[0]             # R to the principal objective
+        # optional first-contract partial exit (2 MNQ only) — informational, never the graded objective
+        partial_exit = None
+        if partial and rs.get("contracts", 0) >= 2:
+            partial_exit = {"price": partial["price"], "R": partial["R"], "source": partial["source"],
+                            "note": "optional first-contract exit (~1.5–2R); 2 MNQ only; principal objective unchanged"}
         degenerate_stop = bool(sp is not None and stop_floor and sp < stop_floor)
         if degenerate_stop:
             stop_notes.append(f"PROVISIONAL floor {stop_floor}pt REJECTED the structural stop ({sp}pt) — logged for review")
-        # TWO ENTRY METHODS (spec §2): a confirmed-continuation entry (available now) AND a prospective
-        # retest limit at the broken level (WAITING_FOR_FILL; may never fill).
+        # TWO ENTRY METHODS (spec §2/§4) with DEFINED, CAUSAL fill models.
+        slip = cfg("SLIPPAGE_TICKS") * TICK
+        cont_px = _tick(price + slip, "up") if direction == "SHORT" else _tick(price - slip, "down")  # conservative
         entry_options = [
-            {"method": "confirmed_continuation", "price": _tick(price, "near"),
-             "fill_assumption": "market/next-bar at ~current price; conservative", "state": "fillable_now"},
+            {"method": "confirmed_continuation", "price": cont_px,
+             "fill_model": (f"next completed 1m bar at/through the level; conservative = current close {_f(price)} "
+                            f"±{cfg('SLIPPAGE_TICKS')} ticks slippage; fees per CONFIG. Order-creation time = as_of; "
+                            f"NEVER fills within the trigger candle."),
+             "order_created": None, "state": "fillable_next_bar"},
             {"method": "retest_limit", "price": entry,
-             "fill_assumption": "limit at the broken 1m level; requires a FURTHER retest — may never fill",
+             "fill_model": ("limit at the broken 1m level; requires a FURTHER retest AFTER order creation — may "
+                            "never fill; a historical touch before the order existed is NOT a fill; revalidate at fill."),
              "state": "WAITING_FOR_FILL", "ttl_bars": cfg("ORDER_TTL_BARS")},
         ]
         scan = obstacle_scan(series_by_tf, direction, entry, sp,   # from the ACTUAL post-trigger entry
@@ -912,19 +1000,34 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
     # location confidence: a standalone conf-0 OB is a CANDIDATE, not confirmed 5m confluence. A timely
     # in-direction trigger at the location resolves it; otherwise the engine notes if another 5m location exists.
     loc_conf_ok = bool(nd and (conf >= 1 or triggered))
-    room_ok = bool(triggered and effective_R is not None and effective_R >= MIN_R_A)
-    target_ok = bool(triggered and principal_R is not None and principal_R >= MIN_R_A)   # principal target >=2R
+    # A needs >=2R (MIN_R_A) room AND principal target; below MIN_R_B is a hard NO-TRADE; the band in
+    # between supports a B (watch-only). Two thresholds so a completed B is preserved, not dropped.
+    room_A = bool(triggered and effective_R is not None and effective_R >= MIN_R_A)
+    room_B = bool(triggered and effective_R is not None and effective_R >= MIN_R_B)
+    target_A = bool(triggered and principal_R is not None and principal_R >= MIN_R_A)
+    target_B = bool(triggered and principal_R is not None and principal_R >= MIN_R_B)
+    room_ok, target_ok = room_A, target_A
     sizeable = bool(triggered and rs.get("available"))
     loc_ok = bool(nd and direction)                         # a valid 5m location in the context direction
-    # invalidation already breached BEFORE entry: price has traded to/through the proposed stop -> the
-    # short/long premise is void (price accepted beyond invalidation). Only meaningful post-trigger.
     inval_breached = bool(triggered and stop is not None and (
         (direction == "SHORT" and price >= stop) or (direction == "LONG" and price <= stop)))
-    account_known = news_known = False                      # not available in this environment (spec §2/§8)
+
+    # ── DAILY-RULE / NEWS gates (executable when data is supplied; UNKNOWN otherwise) — spec §3 ──
+    planned_risk = rs.get("risk_per_account") if (triggered and sizeable) else None
+    acct = account_gate(account, planned_risk or 0.0, rs.get("contracts", 0)) if (triggered and sizeable) else \
+        {"known": bool(account), "ok": None, "execution_component": False, "reason_code": "ACCOUNT_UNKNOWN",
+         "detail": "n/a until a sizeable triggered plan exists", "max_contracts_by_budget": None}
+    news_known = news is not None
+    news_ok = bool(news and news.get("clear"))
     if triggered and sizeable:
-        rs["conditional"] = True                            # account/PDLL unknown -> CONDITIONAL maximum size
-        rs["conditional_note"] = ("CONDITIONAL max size — both XFAs' remaining budget/PDLL/copier unknown; "
-                                  "not 'approved'. The weaker account limits the copier; verify before any order.")
+        rs["conditional"] = not (acct.get("known") and acct.get("ok"))
+        if rs["conditional"]:
+            rs["conditional_note"] = ("CONDITIONAL max size — account/PDLL/copier state not confirmed OK; the weaker "
+                                      "account limits the copier; verify before any order.")
+        elif acct.get("max_contracts_by_budget") is not None:
+            rs["max_contracts_by_budget"] = acct["max_contracts_by_budget"]
+    account_ok = bool(acct.get("known") and acct.get("ok"))
+    daily_ok = account_ok                                    # one-trade-per-day + PDLL + copier all inside account_gate
 
     # ── GATES — reported SEPARATELY; ok=None means "n/a until the trigger" (never hides a real failure) ──
     thr = f"{_f(threshold['level'])}" if threshold else "—"
@@ -960,16 +1063,18 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
            else (f"{effective_R}R clear to target" if room_ok else "room unverified")))),
         (f"principal target ≥ {MIN_R_A}R", (None if not triggered else target_ok),
          ("deferred — set at trigger" if not triggered else
-          (f"TP1 only {principal_R}R (< {MIN_R_A}R) — a remote TP does not compensate" if not target_ok
-           else f"TP1 {principal_R}R"))),
-        # EXECUTION-clearance gates: UNKNOWN in this environment -> a READY setup is NOT execution-cleared.
-        ("news window verified (Asia/Jerusalem)", None,
-         "UNVERIFIED — no live macro calendar in this environment; verify the no-entry window before any order"),
-        ("account/copier/PDLL state known (both XFAs)", None,
-         "UNKNOWN — live balances/DLL/PDLL/copier not available here; cannot clear execution or size vs remaining budget"),
+          (f"principal only {principal_R}R (< {MIN_R_A}R) — a remote TP does not compensate" if not target_ok
+           else f"principal {principal_R}R"))),
+        # EXECUTION-clearance gates (executable when data supplied; UNKNOWN otherwise) — spec §2/§3/§8
+        ("news window clear (Asia/Jerusalem)", (news_ok if news_known else None),
+         ("UNKNOWN — no macro calendar supplied; verify the no-entry window before any order" if not news_known
+          else ("clear" if news_ok else "inside a no-entry news window"))),
+        ("both XFAs: PDLL headroom + 1-trade/day + copier/protection", (acct.get("ok") if acct.get("known") else None),
+         (acct.get("detail") if acct.get("known") else
+          "UNKNOWN — live balances/PDLL/copier/trades-today not supplied; execution blocked, size CONDITIONAL")),
     ]
-    # a READY *setup* is never an execution clearance while account + news are unknown (spec §2/§8)
-    execution_cleared = False
+    # execution is cleared ONLY when account AND news are both supplied and pass (spec §2/§3/§8)
+    execution_cleared = bool(account_ok and news_ok)
 
     # ── STATE MACHINE ─────────────────────────────────────────────────────────
     # WATCH is a PRE-trigger state only. Once the trigger completes the decision is binary: READY or
@@ -989,37 +1094,43 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
         reason = (f"Armed — awaiting the trigger (sweep+reclaim OR rejection+displacement) at 5m "
                   f"{nd['type']} {nd['dir']} @ {_f(nd['ref'])}; price must break {thr} first. "
                   f"Entry, stop, size and R are computed at the trigger — not now.")
-    elif degenerate_stop or (not sizeable) or inval_breached or (not room_ok) or (not target_ok):
-        verdict, state = "🔴 No Trade", "NO_TRADE"     # trigger completed but a post-trigger gate failed
+    elif degenerate_stop or (not sizeable) or inval_breached or (not room_B) or (not target_B):
+        verdict, state = "🔴 No Trade", "NO_TRADE"     # hard failure of structure / risk / room / target
         reason_code = ("INVALIDATION_BREACHED" if inval_breached else "DEGENERATE_STOP" if degenerate_stop
-                       else "RISK_NOT_PERMITTED" if not sizeable else "INADEQUATE_ROOM" if not room_ok
+                       else "RISK_NOT_PERMITTED" if not sizeable else "INADEQUATE_ROOM" if not room_B
                        else "INADEQUATE_TARGET")
         reason = next(f"{name} — {detail}" for name, ok, detail in gates
                       if ok is False and name not in ("stale data", "valid 5m location in context direction"))
+    elif acct.get("known") and not daily_ok:
+        # account data SUPPLIED and a daily rule fails (PDLL / one-trade-per-day / copier) -> execution blocked
+        verdict, state, reason_code = "🔴 No Trade", "NO_TRADE", acct.get("reason_code") or "ACCOUNT_RISK_BLOCK"
+        reason = f"Technically valid, but blocked by account rules — {acct.get('detail')}"
     elif gr.get("grade") not in ("A", "A+"):
-        # all mechanical gates pass, but only A/A+ are eligible this phase — a B setup is WATCH-ONLY
+        # completed trigger + valid technical plan but a QUALITY deficiency -> grade B, TRIGGER CONFIRMED,
+        # watch-only / execution prohibited this phase. Preserved accurately (NOT reported as pending/invalid).
         verdict, state, reason_code = "🟡 Watch", "WATCH", "B_WATCH_ONLY"
-        reason = (f"Grade {gr.get('grade') or '—'} — watch-only this phase ({gr.get('why')}). "
-                  f"Only A/A+ are eligible; not an order.")
+        reason = (f"Grade B, trigger CONFIRMED — watch-only / execution prohibited this phase. "
+                  f"Deficiency: {gr.get('why')}. Only A/A+ are eligible.")
     else:
-        verdict, state, reason_code = "🟢 Ready", "READY", "READY_ORDER"
+        verdict, state = "🟢 Ready", "READY"
+        reason_code = "READY_ORDER" if execution_cleared else "READY_SETUP_EXECUTION_BLOCKED"
         reason = (f"Setup PLAN_VALIDATED (route: {route}); grade {gr.get('grade')}. "
-                  f"EXECUTION NOT CLEARED — verify news window + both accounts' remaining budget first.")
+                  + ("EXECUTION CLEARED (account + news verified)." if execution_cleared
+                     else "EXECUTION NOT CLEARED — news/account not both verified; do not place an order."))
 
     # setup_qualified is the TECHNICAL verdict; execution_cleared is the separate account/news verdict.
     setup_qualified = bool(state == "READY")
+    trigger_confirmed = bool(triggered and (state == "READY" or reason_code == "B_WATCH_ONLY"
+                                            or (state == "NO_TRADE" and reason_code not in ("STALE_DATA", "NO_VALID_5M_LOCATION"))))
     # FULL internal state machine (spec §1); UI collapses to the 🟢/🟡/🔴 verdict above.
-    #   pre-trigger:  no location -> WATCH_LOCATION; location, trigger pending -> WATCH_TRIGGER
-    #   post-trigger: gate fail -> NO_TRADE; B -> WATCH_B_SETUP(TRIGGER_CONFIRMED); A/A+ -> PLAN_VALIDATED
-    #   an unfilled retest limit is WAITING_FOR_FILL; IN_POSITION/CLOSED/CANCELLED need an execution layer
-    #   (revalidate_at_fill()) — never produced from a single snapshot.
     if state == "NO_TRADE":
         detailed_state = "NO_TRADE" if reason_code in ("STALE_DATA", "NO_VALID_5M_LOCATION") else "TRIGGER_CONFIRMED->NO_TRADE"
     elif state == "WATCH":
-        detailed_state = ("TRIGGER_CONFIRMED" if reason_code == "B_WATCH_ONLY"
+        detailed_state = ("TRIGGER_CONFIRMED(B,watch-only)" if reason_code == "B_WATCH_ONLY"
                           else ("WATCH_TRIGGER" if loc_ok else "WATCH_LOCATION"))
+    elif execution_cleared:
+        detailed_state = "PLAN_VALIDATED->IN_POSITION_ELIGIBLE"   # cleared; entry method decides fill (execution layer)
     else:
-        # A/A+ setup validated. The default entry method is a prospective retest limit -> WAITING_FOR_FILL.
         detailed_state = "PLAN_VALIDATED->WAITING_FOR_FILL"
     entry_type = None
     if triggered and entry is not None:
@@ -1035,10 +1146,11 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
                           entry, stop, rs, tp1, tp2, best_R, effective_R, first_obst, stop_thesis, pending, fo,
                           gates, scan, threshold, trg, route, triggered, loc_audit, extra)
     return {"verdict": verdict, "state": state, "detailed_state": detailed_state, "reason_code": reason_code,
-            "setup_qualified": setup_qualified, "states": list(STATES),
+            "setup_qualified": setup_qualified, "trigger_confirmed": trigger_confirmed, "states": list(STATES),
             "stop_options": stop_opts, "stop_thesis_id": stop_thesis_id, "stop_invalidates": stop_invalidates,
             "stop_notes": stop_notes, "entry_options": entry_options, "target_candidates": tcands,
-            "principal_R": principal_R, "entry_type": entry_type,
+            "principal_R": principal_R, "partial_exit": partial_exit, "entry_type": entry_type,
+            "account_gate": acct, "news_gate": {"known": news_known, "clear": news_ok},
             "reason": reason, "symbol": symbol, "price": round(price, 2), "as_of": last_t,
             "direction": direction, "grade": gr.get("grade"), "context": ctx, "location": loc,
             "location_audit": loc_audit, "execution_cleared": execution_cleared,

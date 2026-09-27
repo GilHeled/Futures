@@ -273,6 +273,27 @@ def test_rule_inventory_three_categories():
     assert inv["approved"]["min_R_A"] == 2.0 and inv["approved"]["per_trade_risk_usd"] == 150.0
 
 
+def test_completed_B_trigger_is_preserved_not_dropped():
+    """A completed-trigger B-quality plan is recorded as grade B, trigger CONFIRMED, watch-only /
+    execution prohibited — NOT reported as pending/invalid and never execution_cleared (spec §2)."""
+    o = _run_fixture("b_watch")
+    assert o["grade"] == "B" and o["trigger_confirmed"] is True
+    assert o["state"] == "WATCH" and o["detailed_state"].startswith("TRIGGER_CONFIRMED")
+    assert o["setup_qualified"] is False and o["execution_cleared"] is False
+    assert "watch-only" in o["reason"] and "Deficiency" in o["reason"]
+
+
+def test_target_candidates_have_source_tf_and_edges():
+    o = _run_fixture("ready_A")
+    tc = o["target_candidates"]
+    assert tc and all({"source", "tf", "price", "dist_pts", "R", "role"} <= set(c) for c in tc)
+    sources = {c["source"] for c in tc}
+    assert any("pool" in s or "OB" in s or "range" in s or "EQ" in s for s in sources)
+    # an optional partial exit only ever exists with 2 MNQ and only in the 1.5–2R band
+    pe = o["partial_exit"]
+    assert pe is None or (1.5 <= pe["R"] < 2.0 and o["risk"]["contracts"] >= 2)
+
+
 def test_targets_from_structure_not_only_external():
     o = _run_fixture("ready_A")
     # targets are an ORDERED list of price-dependent draws in the trade direction
@@ -284,13 +305,52 @@ def test_targets_from_structure_not_only_external():
 
 
 def test_execution_gates_unknown_and_ready_is_not_cleared():
-    o = _run_fixture("ready_A")
+    o = _run_fixture("ready_A")           # no account/news supplied -> UNKNOWN, execution blocked
     names = [g["name"] for g in o["gates"]]
-    assert any("news window" in n for n in names) and any("account" in n for n in names)
+    assert any("news window" in n for n in names) and any("XFAs" in n for n in names)
     for g in o["gates"]:
-        if "news window" in g["name"] or "account" in g["name"]:
-            assert g["ok"] is None                 # UNKNOWN in this environment
-    assert o["execution_cleared"] is False and o["reason_code"] == "READY_ORDER"
+        if "news window" in g["name"] or "XFAs" in g["name"]:
+            assert g["ok"] is None                 # UNKNOWN when data not supplied
+    assert o["setup_qualified"] is True and o["execution_cleared"] is False
+    assert o["reason_code"] == "READY_SETUP_EXECUTION_BLOCKED"
+
+
+def test_execution_cleared_when_account_and_news_supplied():
+    import json, datetime as _dt
+    d = _load_fixture("ready_A")
+    good = {"xfa1": {"realized_loss_today": 0, "open_risk": 0, "fees": 0, "trades_today": 0,
+                     "copier_ok": True, "protection_ok": True},
+            "xfa2": {"realized_loss_today": 0, "open_risk": 0, "fees": 0, "trades_today": 0,
+                     "copier_ok": True, "protection_ok": True}}
+    o = AN.analyze(d["series"], d["symbol"], now=_dt.datetime.fromisoformat(d["now"]),
+                   account=good, news={"clear": True})
+    assert o["state"] == "READY" and o["execution_cleared"] is True and o["reason_code"] == "READY_ORDER"
+
+
+def test_daily_rules_block_when_account_fails():
+    import datetime as _dt
+    d = _load_fixture("ready_A")
+    # xfa2 already used its one trade today -> the copied trade is blocked
+    acct = {"xfa1": {"trades_today": 0, "copier_ok": True, "protection_ok": True},
+            "xfa2": {"trades_today": 1, "copier_ok": True, "protection_ok": True}}
+    o = AN.analyze(d["series"], d["symbol"], now=_dt.datetime.fromisoformat(d["now"]),
+                   account=acct, news={"clear": True})
+    assert o["state"] == "NO_TRADE" and o["execution_cleared"] is False
+    # a PDLL-exhausted account also blocks (headroom < planned risk)
+    acct2 = {"xfa1": {"realized_loss_today": 290.0, "trades_today": 0, "copier_ok": True, "protection_ok": True},
+             "xfa2": {"realized_loss_today": 0, "trades_today": 0, "copier_ok": True, "protection_ok": True}}
+    o2 = AN.analyze(d["series"], d["symbol"], now=_dt.datetime.fromisoformat(d["now"]),
+                    account=acct2, news={"clear": True})
+    assert o2["state"] == "NO_TRADE" and "PDLL" in (o2["account_gate"].get("detail") or "")
+
+
+def test_account_gate_headroom_and_weaker_account():
+    g = AN.account_gate({"a": {"realized_loss_today": 0, "trades_today": 0},
+                         "b": {"realized_loss_today": 200.0, "trades_today": 0}},
+                        planned_risk_per_acct=100.0, planned_contracts=2)
+    assert g["known"] is True and g["ok"] is False        # weaker account 'b' lacks headroom
+    assert g["max_contracts_by_budget"] < 2               # weaker account binds size down
+    assert AN.account_gate(None, 100.0, 2)["ok"] is None   # unknown -> UNKNOWN
 
 
 def test_stop_options_offers_both_theses_distinctly():

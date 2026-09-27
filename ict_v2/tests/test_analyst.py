@@ -148,44 +148,53 @@ def _load_frozen():
     return json.load(open(fx))
 
 
-def test_frozen_snapshot_two_phase_lifecycle_is_reproducible():
-    """ACCEPTANCE TEST — replay the exact frozen MNQZ2026 snapshot (future candles unavailable). The trigger
-    completes here, so the plan is REBUILT from the break→retest→second-break (not the pre-trigger 5m OB
-    midpoint), obstacles are scanned from the ACTUAL entry, and the outcome is pinned so a later revision
-    cannot silently change entry/obstacle/grade without updating this fixture on purpose."""
+def test_frozen_snapshot_trigger_is_rejected_no_continuation():
+    """ACCEPTANCE TEST — replay the exact frozen MNQZ2026 snapshot (future candles unavailable). The
+    candidate break→retest→'second break' does NOT continue past the first low (30,889.75): the market
+    rallied and an opposing break occurred between the two. The trigger must therefore be REJECTED
+    (PENDING), publish NO executable entry/stop, and expose timestamped candle evidence for why."""
     import datetime as _dt
     data = _load_frozen()
     out = AN.analyze(data["series"], data["symbol"], now=_dt.datetime.fromisoformat(data["now"]))
     seq = out["trigger_sequence"]
-    # the plan is REBUILT from the trigger (entry = broken 1m level; stop beyond the retest), NEVER the
-    # old provisional 30,918 / 30,939.75 pre-trigger levels
-    assert out["triggered"] is True and out["route"] == "rejection+displacement (structural)"
-    assert out["entry"] == seq["second_break"]["level"] == 30914.25 and out["stop"] == 30923.75
-    assert out["stop"] != 30939.75 and out["entry"] != 30918.0
-    assert out["degenerate_stop"] is False and out["risk"]["stop_pts"] == 9.5   # a real structural stop
-    # obstacle scan is measured from the ACTUAL entry; rows ordered nearest-first
-    rows = out["obstacle_scan"]
-    assert [r["price"] for r in rows] == sorted((r["price"] for r in rows), reverse=True)
-    # the gating obstacle is the first non-invalidated MEANINGFUL level, never a minor bare 1m swing
-    fa = next((r for r in rows if r["status"] != "invalidated" and r["meaningful"]), None)
-    assert fa is not None and out["first_obstacle"] == fa["price"] == 30903.75 and out["effective_R"] == 1.11
-    assert out["first_obstacle_detail"]["meaningful"] is True
-    # excluded levels carry acceptance evidence + timestamp
-    for r in rows:
-        if r["status"] == "invalidated":
-            assert "consecutive closes" in r["evidence"] and r["ev_from"]
-    # outcome: triggered but only 1.11R room before the first meaningful obstacle -> WATCH, no A/B grade
-    assert out["grade"] is None and out["state"] == "WATCH"
+    # NOT a completed trigger -> no executable plan carried forward
+    assert out["triggered"] is False and seq["completed"] is False
+    assert out["entry"] is None and out["stop"] is None and out["grade"] is None
+    assert seq["rejected_reason"]
+    # the candidate evidence is preserved for audit: exact broken levels + candle closes
+    assert seq["break"]["level"] == 30889.75 and seq["break"]["broke"] == "close"
+    assert seq["retest"]["price"] == 30921.75
+    assert seq["second_break"]["level"] == 30914.25
+    # the second 'break' is ABOVE the first low and never closed below it -> not continuation
+    cont = seq["continuation"]
+    assert cont["closed_beyond_first"] is False and cont["made_new_beyond_first"] is False
+    assert cont["extreme_after_retest"] == 30913.5 and cont["extreme_after_retest"] > cont["first_level"]
+    # fresh snapshot -> pre-trigger WATCH (armed) with a trigger threshold, not an executable plan
+    assert out["state"] == "WATCH" and out["trigger_threshold"] is not None
+    # same snapshot but STALE -> NO TRADE (staleness is a separate, top-line reason)
+    stale = AN.analyze(data["series"], data["symbol"], now=_dt.datetime.fromisoformat(data["now"]) + _dt.timedelta(days=1))
+    assert stale["state"] == "NO_TRADE" and stale["triggered"] is False
 
 
-def test_frozen_snapshot_trigger_sequence_levels():
-    """Pin the break→retest→second-break the engine identifies on the frozen 1m (deterministic)."""
-    import datetime as _dt
-    data = _load_frozen()
-    out = AN.analyze(data["series"], data["symbol"], now=_dt.datetime.fromisoformat(data["now"]))
-    seq = out["trigger_sequence"]
-    assert seq["break"]["level"] == 30889.75 and seq["second_break"]["level"] == 30914.25
-    assert seq["retest"]["level"] == 30921.75
+def test_trigger_sequence_completes_only_on_real_continuation():
+    def bar(o, h, l, c):
+        return {"o": o, "h": h, "l": l, "c": c, "t": None}
+    # VALID short continuation: break L1, lower-high retest, then a LOWER LOW that CLOSES below L1
+    vals = [104, 106, 108, 107, 105, 103, 101, 100, 102, 104, 98, 101, 103, 102, 99, 96, 94]
+    good = [bar(v, v + 1, v - 1, v) for v in vals]
+    tr = AN.trigger_sequence(good, "SHORT", buffer=2.0, recency=20)
+    assert tr["completed"] is True and tr["continuation"]["closed_beyond_first"] is True
+    assert tr["entry"] is not None and tr["stop"] > tr["entry"]        # short stop sits ABOVE entry
+
+
+def test_trigger_sequence_rejects_when_no_close_below_first_low():
+    def bar(o, h, l, c):
+        return {"o": o, "h": h, "l": l, "c": c, "t": None}
+    # break L1=100, retest, then a shallow dip that never closes below 100 (no continuation)
+    vals = [104, 106, 108, 107, 105, 103, 101, 100, 102, 104, 98, 102, 106, 104, 103, 102, 101]
+    bad = [bar(v, v + 1, v - 1, v) for v in vals]
+    tr = AN.trigger_sequence(bad, "SHORT", buffer=2.0, recency=20)
+    assert tr["completed"] is False and tr["rejected_reason"]
 
 
 def test_trigger_threshold_is_nearest_swing_low_below_for_short():

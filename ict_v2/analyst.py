@@ -38,6 +38,7 @@ MIN_R_A = 2.0                   # A needs >= 2R room
 MIN_R_APLUS = 2.5              # A+ prefers >= 2.5R
 
 
+def _o(b): return float(b["o"])
 def _c(b): return float(b["c"])
 def _h(b): return float(b["h"])
 def _l(b): return float(b["l"])
@@ -196,48 +197,98 @@ def trigger_threshold(b1, direction, price):
 TRIGGER_RECENCY = 8   # the second break must be within the last N 1m bars to count as a LIVE trigger.
 
 
+def _cev(bars, idx, level, want):
+    """Full completed-candle evidence for one event: OHLC, timestamp, the structure level tested, and
+    whether the break was by CLOSE (body) or only a WICK. `want`='bear' tests a close/low below `level`."""
+    if idx is None or not (0 <= idx < len(bars)):
+        return None
+    b = bars[idx]
+    below = want == "bear"
+    broke = ("close" if ((_c(b) < level) if below else (_c(b) > level))
+             else ("wick" if ((_l(b) < level) if below else (_h(b) > level)) else "—"))
+    return {"idx": idx, "t": _t(b), "o": _o(b), "h": _h(b), "l": _l(b), "c": _c(b),
+            "level": round(level, 2), "broke": broke}
+
+
 def trigger_sequence(b1, direction, buffer=2.0, recency=TRIGGER_RECENCY):
-    """POST-TRIGGER: identify a COMPLETED, RECENT break → retest → second-break on finished 1m candles and
-    build the plan FROM that event (never a pre-trigger provisional level):
-      break         — an in-direction 1m structural break (MSS/BOS)
-      retest        — the pullback pivot just before the second break (the lower-high for a short /
-                      higher-low for a long)
-      second break  — a fresh in-direction break AFTER the retest (continuation confirmation)
-    `completed` requires the second break to be within the last `recency` bars — an old sequence deep in
-    the window is NOT a live trigger (that state is pre-trigger / setup passed). Entry = the broken swing
-    level (a limit on the retest of the broken structure); invalidation = BEYOND the retest extreme
-    (a real structural stop spanning the retest leg). All from completed candles only."""
+    """POST-TRIGGER: identify a COMPLETED, RECENT, GENUINE-continuation break → retest → second-break on
+    finished 1m candles and build the plan FROM that event. `completed` requires ALL of:
+      • a first in-direction structural break (close beyond the first swing level L1),
+      • a RECENT second in-direction break (within `recency` bars — an old one is not a live trigger),
+      • a retest pivot BETWEEN them (a pullback: lower-high for a short / higher-low for a long),
+      • PROVEN CONTINUATION past L1 — after the retest the market makes a NEW extreme beyond L1 AND a
+        completed candle CLOSES beyond L1 (for a short: a lower low below, and a close below, L1),
+      • NO opposing structural break between the two (the leg was not reversed).
+    A break + a retest + some later opposite-side level found "somewhere" is NOT enough — the second break
+    must extend the move beyond the first low/high. If continuation is not proven the sequence is REJECTED
+    (state stays PENDING) with `rejected_reason` + the candidate evidence, never silently marked complete.
+    Entry = the broken swing level; stop = beyond the retest extreme. Everything uses candles ≤ snapshot."""
     want = {"LONG": "bull", "SHORT": "bear"}.get(direction)
     out = {"completed": False, "break": None, "retest": None, "second_break": None,
-           "entry": None, "stop": None, "thesis": None}
+           "continuation": None, "entry": None, "stop": None, "thesis": None, "rejected_reason": None}
     if not want or not b1:
+        out["rejected_reason"] = "no direction / no 1m data"
         return out
     n = len(b1)
+    short = direction == "SHORT"
     ev = MS.detect_market_structure(b1, pivot_strength=2)
     direv = [e for e in ev if e.direction == want]
+    oppdir = [e for e in ev if e.direction != want]
     pivs = MS.detect_pivots(b1, pivot_strength=2)
     if len(direv) < 2:
+        out["rejected_reason"] = f"fewer than 2 in-direction 1m breaks (have {len(direv)})"
         return out
-    short = direction == "SHORT"
-    for i in range(len(direv) - 1, 0, -1):
-        e2 = direv[i]
-        if e2.break_index < n - recency:                 # second break must be RECENT (a live trigger)
-            break
-        for j in range(i - 1, -1, -1):
-            e1 = direv[j]
-            win = [p for p in pivs
-                   if p["kind"] == ("high" if short else "low") and e1.break_index <= p["index"] <= e2.break_index]
-            if not win:
-                continue
-            retest = win[-1]                              # the pullback extreme JUST BEFORE the second break
-            entry = round(e2.level, 2)                    # sell/buy the retest of the broken swing level
-            stop = round(retest["price"] + buffer, 2) if short else round(retest["price"] - buffer, 2)
-            return {"completed": True,
-                    "break": {"kind": e1.kind, "level": round(e1.level, 2), "time": e1.break_time},
-                    "retest": {"level": round(retest["price"], 2), "time": retest.get("time")},
-                    "second_break": {"kind": e2.kind, "level": round(e2.level, 2), "time": e2.break_time},
-                    "entry": entry, "stop": stop,
-                    "thesis": "1m break→retest→second-break (stop beyond the retest lower-high/higher-low)"}
+    recent = [e for e in direv if e.break_index >= n - recency]
+    if not recent:
+        out["rejected_reason"] = f"no in-direction 1m break in the last {recency} bars (not a live trigger)"
+        return out
+    e2 = recent[-1]                                        # continuation-break candidate (most recent)
+    priors = [e for e in direv if e.break_index < e2.break_index]
+    if not priors:
+        out["rejected_reason"] = "no earlier break to form break→retest→continuation"
+        return out
+    e1 = priors[-1]                                        # the break immediately preceding
+    ext = "high" if short else "low"
+    mids = [p for p in pivs if p["kind"] == ext and e1.break_index < p["index"] < e2.break_index]
+    retest = (max(mids, key=lambda p: p["price"]) if short else min(mids, key=lambda p: p["price"])) if mids else None
+    # continuation past the FIRST broken level L1, measured only AFTER the retest (or after e1 if no retest)
+    start = (retest["index"] if retest else e1.break_index) + 1
+    seg = b1[start:e2.break_index + 1]
+    if short:
+        new_ext = min((_l(b) for b in seg), default=None)
+        made_new = new_ext is not None and new_ext < e1.level          # a lower low below the first low
+        closed_beyond = any(_c(b) < e1.level for b in seg)             # a close below the first low
+    else:
+        new_ext = max((_h(b) for b in seg), default=None)
+        made_new = new_ext is not None and new_ext > e1.level
+        closed_beyond = any(_c(b) > e1.level for b in seg)
+    opp_between = any(e1.break_index < e.break_index < e2.break_index for e in oppdir)
+    cont = {"first_level": round(e1.level, 2), "extreme_after_retest": (round(new_ext, 2) if new_ext is not None else None),
+            "made_new_beyond_first": bool(made_new), "closed_beyond_first": bool(closed_beyond),
+            "opposing_break_between": bool(opp_between)}
+    brk = _cev(b1, e1.break_index, e1.level, want)
+    sec = _cev(b1, e2.break_index, e2.level, want)
+    rst = (_cev(b1, retest["index"], retest["price"], "bull" if short else "bear") if retest else None)
+    out.update({"break": dict(brk, kind=e1.kind, time=e1.break_time) if brk else None,
+                "retest": (dict(rst, price=round(retest["price"], 2), time=retest.get("time")) if rst else None),
+                "second_break": dict(sec, kind=e2.kind, time=e2.break_time) if sec else None,
+                "continuation": cont})
+    if retest is None:
+        out["rejected_reason"] = "no retest pivot between the two breaks"
+        return out
+    if opp_between:
+        out["rejected_reason"] = "an opposing structural break occurred between the two breaks (leg reversed)"
+        return out
+    if not (made_new and closed_beyond):
+        out["rejected_reason"] = (f"no continuation past the first {'low' if short else 'high'} "
+                                  f"{round(e1.level, 2)} (extreme after retest "
+                                  f"{cont['extreme_after_retest']}, close beyond={closed_beyond})")
+        return out
+    entry = round(e2.level, 2)
+    stop = round(retest["price"] + buffer, 2) if short else round(retest["price"] - buffer, 2)
+    out.update({"completed": True, "entry": entry, "stop": stop,
+                "thesis": "1m break→retest→second-break, continuation past the first low/high "
+                          "(stop beyond the retest extreme)"})
     return out
 
 
@@ -647,11 +698,12 @@ def _report_lines(verdict, state, reason, sym, price, direction, gr, ctx, loc, e
     # 1m TRIGGER SEQUENCE status (break→retest→second break), not a mere shift
     if triggered and trg:
         seqdesc = (f"COMPLETED via {route} — break {_f(trg['break']['level'])} → retest {_f(trg['retest']['level'])} "
-                   f"→ second break {_f(trg['second_break']['level'])}")
-    elif threshold:
-        seqdesc = f"PENDING — must break {_f(threshold['level'])} (trigger threshold, NOT a target obstacle), then retest + second break"
+                   f"→ second break {_f(trg['second_break']['level'])} (continuation past the first level)")
     else:
-        seqdesc = "PENDING — no in-direction 1m break yet"
+        rej = (trg or {}).get("rejected_reason")
+        base = (f"PENDING — must break {_f(threshold['level'])} first (trigger threshold, NOT a target obstacle)"
+                if threshold else "PENDING — no in-direction 1m break yet")
+        seqdesc = base + (f" · candidate rejected: {rej}" if rej else "")
     lines = [
         verdict,
         f"{sym} @ {_f(price)} · dir {direction or '—'} · grade {g} · (heuristic; verify on chart)",
@@ -668,6 +720,20 @@ def _report_lines(verdict, state, reason, sym, price, direction, gr, ctx, loc, e
         if threshold:
             lines.append(f"Trigger threshold (must break to arm): {_f(threshold['level'])} — {threshold.get('must','')}. "
                          f"This is a TRIGGER level, not the trade's first target obstacle.")
+        # if a candidate sequence was found but REJECTED, show the evidence (no silent skipping)
+        rj = (trg or {}).get("rejected_reason")
+        if rj and (trg or {}).get("break"):
+            b, r, s, c = trg.get("break"), trg.get("retest"), trg.get("second_break"), trg.get("continuation") or {}
+            lines.append(f"Trigger candidate REJECTED → {rj}:")
+            if b:
+                lines.append(f"  break @ {_evt(b['t'])} {b.get('kind','')} of {_f(b['level'])} · O{_f(b['o'])} H{_f(b['h'])} L{_f(b['l'])} C{_f(b['c'])} ({b['broke']})")
+            if r:
+                lines.append(f"  retest @ {_evt(r['t'])} pivot {_f(r.get('price'))} · O{_f(r['o'])} H{_f(r['h'])} L{_f(r['l'])} C{_f(r['c'])}")
+            if s:
+                lines.append(f"  2nd break @ {_evt(s['t'])} {s.get('kind','')} of {_f(s['level'])} · O{_f(s['o'])} H{_f(s['h'])} L{_f(s['l'])} C{_f(s['c'])} ({s['broke']})")
+            lines.append(f"  continuation: extreme after retest {_f(c.get('extreme_after_retest'))} vs first level "
+                         f"{_f(c.get('first_level'))} · closed beyond first={c.get('closed_beyond_first')} · "
+                         f"opposing break between={c.get('opposing_break_between')}")
         lines.append("Plan: DEFERRED — entry, stop, size, first obstacle and R are computed on the completed "
                      "break→retest→second-break, from that actual entry (no provisional levels carried forward).")
         tag = {"READY": "READY", "WATCH": "WATCH", "NO_TRADE": "NO TRADE"}.get(state, state)

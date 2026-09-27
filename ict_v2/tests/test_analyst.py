@@ -69,9 +69,12 @@ def test_grade_none_when_trigger_pending():
     assert g["grade"] is None and g["trigger_completed"] is False
 
 
-def test_grade_A_needs_completed_trigger_and_room():
-    g = AN.grade({"nearest": {"x": 1}, "confluence": 0}, False, True, 2.5)
+def test_grade_A_needs_completed_trigger_room_and_target():
+    # A requires >=2R room AND a >=2R principal target (and clear context + quality location, default True)
+    g = AN.grade({"nearest": {"x": 1}, "confluence": 0}, False, True, 2.5, principal_R=2.5)
     assert g["grade"] == "A" and g["trigger_completed"] is True
+    # same room but principal target < 2R -> not A (a remote TP cannot be assumed)
+    assert AN.grade({"nearest": {"x": 1}, "confluence": 0}, False, True, 2.5, principal_R=1.2)["grade"] == "B"
 
 
 def _b(c, l=None, h=None, t=None):
@@ -158,24 +161,19 @@ def test_frozen_snapshot_trigger_is_rejected_no_continuation():
     import datetime as _dt
     data = _load_frozen()
     out = AN.analyze(data["series"], data["symbol"], now=_dt.datetime.fromisoformat(data["now"]))
-    seq = out["trigger_sequence"]
-    # NOT a completed trigger -> no executable plan carried forward
-    assert out["triggered"] is False and seq["completed"] is False
-    assert out["entry"] is None and out["stop"] is None and out["grade"] is None
-    assert seq["rejected_reason"]
-    # the candidate evidence is preserved for audit: exact broken levels + candle closes
-    assert seq["break"]["level"] == 30889.75 and seq["break"]["broke"] == "close"
-    assert seq["retest"]["price"] == 30921.75
-    assert seq["second_break"]["level"] == 30914.25
-    # the candidate is rejected because an opposing structural break reversed the leg between the two breaks
-    cont = seq["continuation"]
-    assert cont["opposing_break_between"] is True
+    # this snapshot must NOT produce a false executable order, and READY setup is never execution-cleared
+    assert out["state"] != "READY" and out["setup_qualified"] is False and out["execution_cleared"] is False
+    # the SHORT break→retest→'second break' that fooled the old detector is REJECTED (opposing break reversed
+    # the leg) — test the detector DIRECTLY so location selection can't mask the regression
+    b1 = data["series"]["1m"]
+    seq = AN.trigger_sequence(b1, "SHORT", buffer=2.0)
+    assert seq["completed"] is False and seq["rejected_reason"]
+    assert seq["break"]["level"] == 30889.75 and seq["second_break"]["level"] == 30914.25
+    assert seq["continuation"]["opposing_break_between"] is True
     assert "opposing structural break" in seq["rejected_reason"]
-    # fresh snapshot -> pre-trigger WATCH (armed) with a trigger threshold, not an executable plan
-    assert out["state"] == "WATCH" and out["trigger_threshold"] is not None
-    # same snapshot but STALE -> NO TRADE (staleness is a separate, top-line reason)
+    # same snapshot but STALE -> NO TRADE / STALE_DATA (staleness is a separate, top-line reason)
     stale = AN.analyze(data["series"], data["symbol"], now=_dt.datetime.fromisoformat(data["now"]) + _dt.timedelta(days=1))
-    assert stale["state"] == "NO_TRADE" and stale["triggered"] is False
+    assert stale["state"] == "NO_TRADE" and stale["reason_code"] == "STALE_DATA"
 
 
 def _load_fixture(name):
@@ -213,7 +211,11 @@ def test_state_completed_trigger_with_room_is_ready_A():
     assert o["direction"] == "LONG" and o["context"]["bias30"] == "bullish" and o["context_clear"] is True
     assert o["entry"] != 30918.0 and o["stop"] != 30939.75      # rebuilt from the trigger
     assert seq["continuation"]["continued_past_retest"] is True
-    assert o["state"] == "READY" and o["detailed_state"] == "READY_ORDER" and o["grade"] == "A"
+    assert o["state"] == "READY" and o["detailed_state"] == "PLAN_VALIDATED->WAITING_FOR_FILL" and o["grade"] == "A"
+    assert o["setup_qualified"] is True and o["execution_cleared"] is False
+    assert o["stop_thesis_id"] in ("LOCAL_1M_TRIGGER", "FULL_5M_SETUP") and o["stop_invalidates"]
+    assert {"LOCAL_1M_TRIGGER", "FULL_5M_SETUP"} <= set(o["stop_options"])          # both stop theses offered
+    assert {e["method"] for e in o["entry_options"]} == {"confirmed_continuation", "retest_limit"}
     # every MECHANICAL gate passes; the execution-clearance gates stay UNKNOWN (None)
     mech = [g for g in o["gates"] if g["ok"] is not None]
     assert all(g["ok"] is True for g in mech)
@@ -289,6 +291,42 @@ def test_execution_gates_unknown_and_ready_is_not_cleared():
         if "news window" in g["name"] or "account" in g["name"]:
             assert g["ok"] is None                 # UNKNOWN in this environment
     assert o["execution_cleared"] is False and o["reason_code"] == "READY_ORDER"
+
+
+def test_stop_options_offers_both_theses_distinctly():
+    trg = {"stop": 30923.75, "retest": {"price": 30921.75}}
+    nd = {"type": "OB", "dir": "supply", "top": 30930.75, "bottom": 30918.0, "ref": 30924.0}
+    opts = AN.stop_options("SHORT", trg, nd, {"side": "BSL", "price": 30935.25, "mitigated": False}, buffer=2.0)
+    assert {"LOCAL_1M_TRIGGER", "FULL_5M_SETUP"} <= set(opts)
+    assert opts["LOCAL_1M_TRIGGER"]["price"] == 30923.75         # beyond the 1m retest extreme
+    assert opts["FULL_5M_SETUP"]["price"] == 30937.25            # beyond max(OB top, swept BSL) + buffer
+    assert opts["LOCAL_1M_TRIGGER"]["price"] != opts["FULL_5M_SETUP"]["price"]
+    assert "retest" in opts["LOCAL_1M_TRIGGER"]["invalidates"] and "5m" in opts["FULL_5M_SETUP"]["invalidates"]
+
+
+def test_revalidate_at_fill_paths():
+    a = {"direction": "SHORT", "stop": 100.0, "tp1": 80.0, "tp2": 70.0}
+    # eligible fill (R=3) but no account/news -> PLAN_VALIDATED / WAITING_FOR_FILL, NOT execution-cleared
+    r = AN.revalidate_at_fill(a, 95.0)
+    assert r["eligible"] and r["execution_cleared"] is False and r["state"] == "WAITING_FOR_FILL"
+    # with account + news OK -> IN_POSITION
+    r2 = AN.revalidate_at_fill(a, 95.0, account_ok=True, news_ok=True)
+    assert r2["execution_cleared"] is True and r2["state"] == "IN_POSITION"
+    # fill already beyond the stop -> rejected
+    assert AN.revalidate_at_fill(a, 101.0)["reason_code"] == "INVALIDATION_BREACHED"
+    # fill where R deteriorated below 2R -> rejected
+    assert AN.revalidate_at_fill(a, 88.0)["reason_code"] == "INADEQUATE_ROOM"
+
+
+def test_grade_A_plus_and_B_and_risk_ceiling_invariants():
+    # B when context not clear even with room+target (watch-only)
+    assert AN.grade({"nearest": {"x": 1}, "confluence": 0}, False, True, 2.5,
+                    context_clear=False, location_quality_ok=True, principal_R=3.0)["grade"] == "B"
+    # A+ needs conf>=1 and >=2.5R room+target
+    assert AN.grade({"nearest": {"x": 1}, "confluence": 1}, True, True, 3.0, principal_R=3.0)["grade"] == "A+"
+    # sizing is independent of grade: A+ still respects the $150 ceiling and never 3 MNQ
+    r = AN.risk_size(entry=100.0, stop=110.0, targets=[130.0])
+    assert r["risk_per_account"] <= 150.0 and r["contracts"] <= 2
 
 
 def test_trigger_threshold_is_nearest_swing_low_below_for_short():

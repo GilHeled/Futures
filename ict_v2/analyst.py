@@ -67,6 +67,13 @@ CONFIG = {
 }
 
 
+# Full internal state machine (UI may collapse to 🟢/🟡/🔴). IN_POSITION / CLOSED / CANCELLED_OR_EXPIRED
+# require a live execution/fill tracker that this per-snapshot analyzer does not have — they are declared
+# here and produced by revalidate_at_fill()/an execution layer, never faked from a single snapshot.
+STATES = ("WATCH_LOCATION", "WATCH_TRIGGER", "TRIGGER_CONFIRMED", "PLAN_VALIDATED", "WAITING_FOR_FILL",
+          "IN_POSITION", "CANCELLED_OR_EXPIRED", "CLOSED", "NO_TRADE")
+
+
 def cfg(name):
     """Read a provisional heuristic's current value (see CONFIG for rationale/range/default)."""
     return CONFIG[name]["value"]
@@ -127,6 +134,19 @@ def _vol_unit(bars, n=20):
         return None
     rng = sorted(abs(_h(b) - _l(b)) for b in bars[-n:])
     return round(rng[len(rng) // 2], 2)
+
+
+def _has_fvg(bars, idx, is_bull, window=6):
+    """A credible IMBALANCE (3-candle fair-value gap) in the displacement direction near bar `idx` — an
+    ALTERNATIVE to a structure break for OB meaningfulness (spec §6). Bull FVG: low[k+1] > high[k-1];
+    bear FVG: high[k+1] < low[k-1]. Scanned only over completed bars at/after formation (causal)."""
+    n = len(bars)
+    for k in range(max(1, idx), min(n - 1, idx + window)):
+        if is_bull and _l(bars[k + 1]) > _h(bars[k - 1]):
+            return True
+        if (not is_bull) and _h(bars[k + 1]) < _l(bars[k - 1]):
+            return True
+    return False
 
 
 # ── sub-model: higher-timeframe context (30m + 15m) ──────────────────────────
@@ -198,19 +218,25 @@ def location(b5, price):
         mid = (o.top + o.bottom) / 2
         want = "bull" if o.is_bull else "bear"
         broke = any(e.direction == want and o.left_index < e.break_index <= o.left_index + 12 for e in ev5)
+        imbalance = _has_fvg(b5, o.left_index, o.is_bull)   # credible imbalance is an ALTERNATIVE to a break
+        meaningful = bool(broke or imbalance)
         score, reasons = 1, []
         if broke:
             score += 2; reasons.append("displacement broke 5m structure")
-        else:
-            reasons.append("no 5m structure break at formation — candidate only")
+        if imbalance:
+            score += 1; reasons.append("left a credible imbalance (FVG)")
+        if not meaningful:
+            reasons.append("no structure break or imbalance — candidate only")
         dist = abs(mid - price)
         if dist <= 2 * vu:
             score += 1; reasons.append("near current price")
         src = b5[o.left_index] if 0 <= o.left_index < len(b5) else None
         cands.append({"type": "OB", "dir": "demand" if o.is_bull else "supply",
                       "top": round(o.top, 2), "bottom": round(o.bottom, 2), "ref": round(mid, 2),
-                      "status": "active", "valid": True, "meaningful": bool(broke),
-                      "confirmed_by": "higher-high displacement" if o.is_bull else "lower-low displacement",
+                      "status": "active", "valid": True, "meaningful": meaningful,
+                      "broke_structure": bool(broke), "imbalance": bool(imbalance),
+                      "confirmed_by": ("higher-high displacement" if o.is_bull else "lower-low displacement")
+                      + ("" if not imbalance else " + FVG imbalance"),
                       "left_index": o.left_index, "left_time": o.left_time,
                       "src_candle": (None if not src else {"o": float(src["o"]), "h": float(src["h"]),
                                                            "l": float(src["l"]), "c": float(src["c"]), "t": src.get("t")}),
@@ -453,28 +479,32 @@ def risk_size(entry, stop, targets):
 
 
 # ── sub-model: grade ─────────────────────────────────────────────────────────
-def grade(loc, sweep_side_ok, trigger_ok, room_R, context_clear=True, location_quality_ok=True):
-    """Grade the EXECUTABLE setup (spec §7). A/A+/B require a COMPLETED in-direction trigger. A ALSO
-    requires CLEAR HTF context (30m aligned) AND a quality (structure-breaking) 5m location AND >=2R
-    credible room before the first meaningful obstacle. Mixed/unknown/counter-trend context or a mere
-    candidate location cannot be A — it is capped at B (watch-only this phase). `room_R` is R to the FIRST
-    meaningful obstacle, not the far target."""
+def grade(loc, sweep_side_ok, trigger_ok, room_R, context_clear=True, location_quality_ok=True, principal_R=None):
+    """Grade the EXECUTABLE setup (spec §6). A/A+/B require a COMPLETED in-direction trigger. A ALSO
+    requires CLEAR HTF context (aligned) AND a quality (structure-breaking OR imbalance) 5m location AND
+    >=2R credible room before the first meaningful obstacle AND a justified principal target of >=2R.
+    Mixed/unknown/counter-trend context or a candidate-only location caps at B (watch-only this phase).
+    `room_R` = R to the first meaningful obstacle; `principal_R` = R to TP1."""
     if not loc.get("nearest"):
         return {"grade": None, "trigger_completed": False, "why": "no preplanned location"}
     if not trigger_ok:
         return {"grade": None, "trigger_completed": False, "why": "location present, trigger pending (WATCH)"}
     if room_R is not None and room_R < MIN_R_B:
         return {"grade": None, "trigger_completed": True, "why": f"first-obstacle room {room_R}R < {MIN_R_B}"}
-    a_ok = context_clear and location_quality_ok            # A needs clear context + quality location
-    if a_ok and sweep_side_ok and room_R and room_R >= cfg("MIN_R_APLUS") and loc.get("confluence", 0) >= 1:
+    room_2R = room_R is not None and room_R >= MIN_R_A
+    tgt_2R = principal_R is not None and principal_R >= MIN_R_A
+    a_ok = context_clear and location_quality_ok and room_2R and tgt_2R
+    if a_ok and sweep_side_ok and room_R >= cfg("MIN_R_APLUS") and (principal_R or 0) >= cfg("MIN_R_APLUS") and loc.get("confluence", 0) >= 1:
         g = "A+"
-    elif a_ok and room_R and room_R >= MIN_R_A:
+    elif a_ok:
         g = "A"
     elif room_R and room_R >= MIN_R_B:
-        g = "B"                                              # deficiency (context/quality/room) -> watch-only
+        g = "B"                                              # a material deficiency -> watch-only
     else:
         g = None
-    why = "location+trigger+context+quality+room" if a_ok else "capped at B: context not clear or candidate location"
+    why = ("location+trigger+context+quality+room≥2R+target≥2R" if a_ok else
+           "capped at B: " + ", ".join(x for x, ok in (("context", context_clear), ("quality-location", location_quality_ok),
+                                                        ("room≥2R", room_2R), ("target≥2R", tgt_2R)) if not ok))
     return {"grade": g, "trigger_completed": True, "why": why}
 
 
@@ -637,6 +667,85 @@ def _targets(series_by_tf, ctx, direction, entry):
     return ordered
 
 
+def stop_options(direction, trg, nd, sweep, buffer):
+    """BOTH stop theses (spec §3), each naming the exact structure it invalidates, so the plan explicitly
+    chooses one BEFORE sizing:
+      LOCAL_1M_TRIGGER — beyond the 1m retest extreme + buffer.
+      FULL_5M_SETUP    — beyond the 5m OB far-edge / swept liquidity + buffer.
+    A local stop is NOT described as invalidating the whole 5m/30m setup."""
+    opts = {}
+    if trg and trg.get("stop") is not None and trg.get("retest"):
+        opts["LOCAL_1M_TRIGGER"] = {"price": trg["stop"],
+                                    "invalidates": f"beyond the 1m retest extreme {_f(trg['retest']['price'])} + buffer"}
+    if nd is not None and nd.get("top") is not None:
+        s5 = stop_level(direction, nd, sweep, buffer=buffer)
+        if s5 is not None:
+            edge = nd.get("top") if direction == "SHORT" else nd.get("bottom")
+            inv = f"beyond the 5m {nd.get('type')} {nd.get('dir')} far edge {_f(edge)}"
+            if sweep and sweep.get("side") == ("BSL" if direction == "SHORT" else "SSL"):
+                inv += f" / swept liquidity {_f(sweep.get('price'))}"
+            opts["FULL_5M_SETUP"] = {"price": round(s5, 2), "invalidates": inv}
+    return opts
+
+
+def target_candidates(series_by_tf, ctx, direction, entry, stop_pts):
+    """Ordered TARGET candidates (spec §4) — opposing liquidity / HRLR / EQ pools in the trade direction,
+    each with source, price, distance and R from `entry`. Distinct from obstacles. A candidate too close to
+    be a sensible exit (< 1R) is flagged `intermediate` (it is an obstacle to pass, not TP1)."""
+    if entry is None or not direction or not stop_pts:
+        return []
+    short = direction == "SHORT"
+    out, seen = [], set()
+
+    def add(price, source):
+        if price is None or ((price < entry) != short):
+            return
+        p = round(price, 2)
+        if p in seen:
+            return
+        seen.add(p)
+        R = round(abs(entry - p) / stop_pts, 2)
+        out.append({"source": source, "price": p, "dist_pts": round(abs(entry - p), 2), "R": R,
+                    "role": "intermediate (too close for TP1)" if R < 1.0 else "target"})
+    for x in (ctx["external_ssl"] if short else ctx["external_bsl"]):
+        add(x, "30m/15m liquidity pool")
+    for x in (ctx["eql"] if short else ctx["eqh"]):
+        add(x, "EQ level")
+    for tf in ("5m", "1m"):
+        for r in LR.detect_liquidity_runs(series_by_tf.get(tf) or [], tick=0.25):
+            if r.mitigated:
+                continue
+            if short and (not r.is_high) and r.price < entry:
+                add(r.price, f"{tf} {r.kind} pool")
+            elif (not short) and r.is_high and r.price > entry:
+                add(r.price, f"{tf} {r.kind} pool")
+    return sorted(out, key=lambda c: c["dist_pts"])
+
+
+def revalidate_at_fill(analysis, fill_price, *, now=None, account_ok=False, news_ok=False):
+    """Re-check a WAITING_FOR_FILL plan AT an actual fill (spec §2/§5). Recomputes risk/size/R from the
+    real fill and re-tests invalidation + room; returns whether the trade is still eligible. Pure —
+    does not mutate the analysis. `account_ok`/`news_ok` gate execution clearance."""
+    direction = analysis.get("direction")
+    stop = analysis.get("stop")
+    if fill_price is None or stop is None or not direction:
+        return {"eligible": False, "reason_code": "NO_PLAN"}
+    if (direction == "SHORT" and fill_price >= stop) or (direction == "LONG" and fill_price <= stop):
+        return {"eligible": False, "reason_code": "INVALIDATION_BREACHED",
+                "detail": f"fill {fill_price} already beyond stop {stop}"}
+    rs = risk_size(fill_price, stop, [analysis.get("tp1"), analysis.get("tp2")])
+    if not rs.get("available"):
+        return {"eligible": False, "reason_code": "RISK_NOT_PERMITTED", "risk": rs}
+    tp1 = analysis.get("tp1")
+    R = round(abs(tp1 - fill_price) / rs["stop_pts"], 2) if (tp1 and rs.get("stop_pts")) else None
+    if R is not None and R < MIN_R_A:
+        return {"eligible": False, "reason_code": "INADEQUATE_ROOM", "R_at_fill": R, "risk": rs}
+    execution_cleared = bool(account_ok and news_ok)
+    return {"eligible": True, "reason_code": "IN_POSITION" if execution_cleared else "PLAN_VALIDATED",
+            "R_at_fill": R, "risk": rs, "execution_cleared": execution_cleared,
+            "state": "IN_POSITION" if execution_cleared else "WAITING_FOR_FILL"}
+
+
 # ── report assembly ──────────────────────────────────────────────────────────
 def analyze(series_by_tf, symbol, *, price=None, now=None):
     """`now` (tz-aware datetime) overrides the freshness clock — pass the cursor time in a backtest so
@@ -712,29 +821,57 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
     # POST-trigger: build the ENTIRE plan FROM the completed break→retest→second-break, then run the
     # obstacle + A-room test from that ACTUAL entry (never carry a provisional pre-trigger level forward).
     entry = stop = tp1 = tp2 = None
-    stop_thesis = None
+    stop_thesis = stop_thesis_id = stop_invalidates = None
+    stop_opts = {}
+    entry_options = []
+    tcands = []
+    stop_notes = []
     scan = {"rows": [], "first": None}
     fo = None
-    first_obst = obstacle_R = effective_R = best_R = sp = None
+    first_obst = obstacle_R = effective_R = best_R = principal_R = sp = None
     rs = risk_size(None, None, None)
     degenerate_stop = False
     targets_ordered = []
     if triggered and direction:
-        entry = trg["entry"]; stop = trg["stop"]; stop_thesis = trg["thesis"]
-        entry = _tick(entry, "near")
-        # TARGETS from ordered price-dependent liquidity/structure (30m/15m/5m/1m pools + EQ), not only
-        # external 30m/15m BSL/SSL (spec §6). Nearest draw first.
-        targets_ordered = _targets(series_by_tf, ctx, direction, entry)
-        tp1 = targets_ordered[0] if targets_ordered else None
-        tp2 = targets_ordered[1] if len(targets_ordered) > 1 else None
+        entry = _tick(trg["entry"], "near")
+        # BOTH stop theses; choose LOCAL_1M_TRIGGER (this is a 1m-trigger entry) and store what it invalidates.
+        stop_opts = stop_options(direction, trg, nd, sw, buf)
+        stop_thesis_id = "LOCAL_1M_TRIGGER" if "LOCAL_1M_TRIGGER" in stop_opts else ("FULL_5M_SETUP" if stop_opts else None)
+        chosen = stop_opts.get(stop_thesis_id) if stop_thesis_id else None
+        stop = chosen["price"] if chosen else trg["stop"]
+        stop_invalidates = chosen["invalidates"] if chosen else None
+        stop_thesis = stop_thesis_id
+        # TARGET candidates (ordered, with source/dist/R) — separate from obstacles (spec §4). The PRINCIPAL
+        # target is the nearest draw that is a sensible >=2R exit; nearer <2R draws are intermediate, NOT TP1.
+        stop_pts_prelim = abs(entry - stop) or 1.0
+        tcands = target_candidates(series_by_tf, ctx, direction, entry, stop_pts_prelim)
+        real_targets = [c for c in tcands if c["role"] == "target"]
+        principal = next((c for c in real_targets if c["R"] >= MIN_R_A), None) or \
+            (real_targets[-1] if real_targets else (tcands[-1] if tcands else None))
+        tp1 = principal["price"] if principal else None
+        tp2 = next((c["price"] for c in real_targets
+                    if principal and abs(c["price"] - entry) > abs(principal["price"] - entry)), None)
+        targets_ordered = [c["price"] for c in real_targets]
         if direction == "SHORT":
             stop = _tick(stop, "up"); tp1 = _tick(tp1, "up"); tp2 = _tick(tp2, "up")
         else:
             stop = _tick(stop, "down"); tp1 = _tick(tp1, "down"); tp2 = _tick(tp2, "down")
         rs = risk_size(entry, stop, [tp1, tp2])
         best_R = max(rs.get("R_to_targets") or [0]) if rs.get("R_to_targets") else None
+        principal_R = (rs.get("R_to_targets") or [None])[0]             # R to TP1 = principal target
         sp = rs.get("stop_pts")
         degenerate_stop = bool(sp is not None and stop_floor and sp < stop_floor)
+        if degenerate_stop:
+            stop_notes.append(f"PROVISIONAL floor {stop_floor}pt REJECTED the structural stop ({sp}pt) — logged for review")
+        # TWO ENTRY METHODS (spec §2): a confirmed-continuation entry (available now) AND a prospective
+        # retest limit at the broken level (WAITING_FOR_FILL; may never fill).
+        entry_options = [
+            {"method": "confirmed_continuation", "price": _tick(price, "near"),
+             "fill_assumption": "market/next-bar at ~current price; conservative", "state": "fillable_now"},
+            {"method": "retest_limit", "price": entry,
+             "fill_assumption": "limit at the broken 1m level; requires a FURTHER retest — may never fill",
+             "state": "WAITING_FOR_FILL", "ttl_bars": cfg("ORDER_TTL_BARS")},
+        ]
         scan = obstacle_scan(series_by_tf, direction, entry, sp,   # from the ACTUAL post-trigger entry
                              threshold_level=(threshold or {}).get("level"))
         fo = scan["first"]
@@ -747,9 +884,9 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
                                  and sw.get("mitigated"))
              else ("rejection+displacement (structural)" if triggered else None))
 
-    loc_quality_ok = bool(nd and nd.get("meaningful"))       # structure-breaking OB / HRLR / LRLR, not a bare pivot
+    loc_quality_ok = bool(nd and nd.get("meaningful"))       # structure-breaking OR imbalance OB / HRLR / LRLR
     gr = (grade(loc, route == "sweep+reclaim", True, effective_R,
-                context_clear=context_clear, location_quality_ok=loc_quality_ok) if triggered
+                context_clear=context_clear, location_quality_ok=loc_quality_ok, principal_R=principal_R) if triggered
           else {"grade": None, "trigger_completed": False, "why": "pre-trigger — no executable setup yet"})
 
     # data freshness — never issue a live verdict on stale bars
@@ -776,12 +913,18 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
     # in-direction trigger at the location resolves it; otherwise the engine notes if another 5m location exists.
     loc_conf_ok = bool(nd and (conf >= 1 or triggered))
     room_ok = bool(triggered and effective_R is not None and effective_R >= MIN_R_A)
+    target_ok = bool(triggered and principal_R is not None and principal_R >= MIN_R_A)   # principal target >=2R
     sizeable = bool(triggered and rs.get("available"))
     loc_ok = bool(nd and direction)                         # a valid 5m location in the context direction
     # invalidation already breached BEFORE entry: price has traded to/through the proposed stop -> the
     # short/long premise is void (price accepted beyond invalidation). Only meaningful post-trigger.
     inval_breached = bool(triggered and stop is not None and (
         (direction == "SHORT" and price >= stop) or (direction == "LONG" and price <= stop)))
+    account_known = news_known = False                      # not available in this environment (spec §2/§8)
+    if triggered and sizeable:
+        rs["conditional"] = True                            # account/PDLL unknown -> CONDITIONAL maximum size
+        rs["conditional_note"] = ("CONDITIONAL max size — both XFAs' remaining budget/PDLL/copier unknown; "
+                                  "not 'approved'. The weaker account limits the copier; verify before any order.")
 
     # ── GATES — reported SEPARATELY; ok=None means "n/a until the trigger" (never hides a real failure) ──
     thr = f"{_f(threshold['level'])}" if threshold else "—"
@@ -815,6 +958,10 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
          ("deferred — measured from the post-trigger entry" if not triggered else
           (f"only {effective_R}R before {_f(first_obst)} ({fo['kind']} {fo['tf']})" if (fo and not room_ok)
            else (f"{effective_R}R clear to target" if room_ok else "room unverified")))),
+        (f"principal target ≥ {MIN_R_A}R", (None if not triggered else target_ok),
+         ("deferred — set at trigger" if not triggered else
+          (f"TP1 only {principal_R}R (< {MIN_R_A}R) — a remote TP does not compensate" if not target_ok
+           else f"TP1 {principal_R}R"))),
         # EXECUTION-clearance gates: UNKNOWN in this environment -> a READY setup is NOT execution-cleared.
         ("news window verified (Asia/Jerusalem)", None,
          "UNVERIFIED — no live macro calendar in this environment; verify the no-entry window before any order"),
@@ -842,10 +989,11 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
         reason = (f"Armed — awaiting the trigger (sweep+reclaim OR rejection+displacement) at 5m "
                   f"{nd['type']} {nd['dir']} @ {_f(nd['ref'])}; price must break {thr} first. "
                   f"Entry, stop, size and R are computed at the trigger — not now.")
-    elif degenerate_stop or (not sizeable) or inval_breached or (not room_ok):
+    elif degenerate_stop or (not sizeable) or inval_breached or (not room_ok) or (not target_ok):
         verdict, state = "🔴 No Trade", "NO_TRADE"     # trigger completed but a post-trigger gate failed
         reason_code = ("INVALIDATION_BREACHED" if inval_breached else "DEGENERATE_STOP" if degenerate_stop
-                       else "RISK_NOT_PERMITTED" if not sizeable else "INADEQUATE_ROOM")
+                       else "RISK_NOT_PERMITTED" if not sizeable else "INADEQUATE_ROOM" if not room_ok
+                       else "INADEQUATE_TARGET")
         reason = next(f"{name} — {detail}" for name, ok, detail in gates
                       if ok is False and name not in ("stale data", "valid 5m location in context direction"))
     elif gr.get("grade") not in ("A", "A+"):
@@ -855,30 +1003,45 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
                   f"Only A/A+ are eligible; not an order.")
     else:
         verdict, state, reason_code = "🟢 Ready", "READY", "READY_ORDER"
-        reason = (f"Setup READY (route: {route}); grade {gr.get('grade')}. "
+        reason = (f"Setup PLAN_VALIDATED (route: {route}); grade {gr.get('grade')}. "
                   f"EXECUTION NOT CLEARED — verify news window + both accounts' remaining budget first.")
 
-    # detailed state per spec §5 (the UI may keep simpler labels; this exposes the full lifecycle position)
+    # setup_qualified is the TECHNICAL verdict; execution_cleared is the separate account/news verdict.
+    setup_qualified = bool(state == "READY")
+    # FULL internal state machine (spec §1); UI collapses to the 🟢/🟡/🔴 verdict above.
+    #   pre-trigger:  no location -> WATCH_LOCATION; location, trigger pending -> WATCH_TRIGGER
+    #   post-trigger: gate fail -> NO_TRADE; B -> WATCH_B_SETUP(TRIGGER_CONFIRMED); A/A+ -> PLAN_VALIDATED
+    #   an unfilled retest limit is WAITING_FOR_FILL; IN_POSITION/CLOSED/CANCELLED need an execution layer
+    #   (revalidate_at_fill()) — never produced from a single snapshot.
     if state == "NO_TRADE":
-        detailed_state = "NO_TRADE" if reason_code in ("STALE_DATA", "NO_VALID_5M_LOCATION") else "NO_TRADE_POST_TRIGGER"
+        detailed_state = "NO_TRADE" if reason_code in ("STALE_DATA", "NO_VALID_5M_LOCATION") else "TRIGGER_CONFIRMED->NO_TRADE"
     elif state == "WATCH":
-        detailed_state = "WATCH_B_SETUP" if reason_code == "B_WATCH_ONLY" else ("WATCH_TRIGGER" if loc_ok else "WATCH_LOCATION")
+        detailed_state = ("TRIGGER_CONFIRMED" if reason_code == "B_WATCH_ONLY"
+                          else ("WATCH_TRIGGER" if loc_ok else "WATCH_LOCATION"))
     else:
-        detailed_state = "READY_ORDER"
-    # entry-type label: a completion/confirmation entry vs a prospective retest limit (spec §5)
+        # A/A+ setup validated. The default entry method is a prospective retest limit -> WAITING_FOR_FILL.
+        detailed_state = "PLAN_VALIDATED->WAITING_FOR_FILL"
     entry_type = None
     if triggered and entry is not None:
-        entry_type = {"kind": "prospective_limit_retest",
-                      "note": "limit at the broken 1m level; requires a FURTHER retest and may never fill — "
-                              "WAITING_FOR_FILL until filled; cancel on invalidation/too-far/TTL/session/news."}
+        entry_type = {"default": "retest_limit", "options": [e["method"] for e in entry_options],
+                      "note": "retest_limit is WAITING_FOR_FILL (may never fill); confirmed_continuation is fillable now. "
+                              "Revalidate at the actual fill (revalidate_at_fill) — a touch before the order existed is not a fill."}
 
+    extra = {"detailed_state": detailed_state, "setup_qualified": setup_qualified,
+             "execution_cleared": execution_cleared, "stop_thesis_id": stop_thesis_id,
+             "stop_invalidates": stop_invalidates, "stop_options": stop_opts,
+             "entry_options": entry_options, "stop_notes": stop_notes, "principal_R": principal_R}
     lines = _report_lines(verdict, state, reason, symbol, price, direction, gr, ctx, loc, ev, st, tr,
                           entry, stop, rs, tp1, tp2, best_R, effective_R, first_obst, stop_thesis, pending, fo,
-                          gates, scan, threshold, trg, route, triggered, loc_audit)
+                          gates, scan, threshold, trg, route, triggered, loc_audit, extra)
     return {"verdict": verdict, "state": state, "detailed_state": detailed_state, "reason_code": reason_code,
+            "setup_qualified": setup_qualified, "states": list(STATES),
+            "stop_options": stop_opts, "stop_thesis_id": stop_thesis_id, "stop_invalidates": stop_invalidates,
+            "stop_notes": stop_notes, "entry_options": entry_options, "target_candidates": tcands,
+            "principal_R": principal_R, "entry_type": entry_type,
             "reason": reason, "symbol": symbol, "price": round(price, 2), "as_of": last_t,
             "direction": direction, "grade": gr.get("grade"), "context": ctx, "location": loc,
-            "location_audit": loc_audit, "execution_cleared": execution_cleared, "entry_type": entry_type,
+            "location_audit": loc_audit, "execution_cleared": execution_cleared,
             "counter_trend": counter_trend, "context_clear": context_clear,
             "liquidity_event": ev, "structure": st, "trigger": tr, "risk": rs, "conflict": conflict,
             "triggered": triggered, "trigger_sequence": trg, "trigger_threshold": threshold, "route": route,
@@ -911,7 +1074,9 @@ def _evt(t):
 
 def _report_lines(verdict, state, reason, sym, price, direction, gr, ctx, loc, ev, st, tr, entry, stop, rs,
                   tp1, tp2, best_R, effective_R, first_obst, stop_thesis, pending=None, fo=None,
-                  gates=None, scan=None, threshold=None, trg=None, route=None, triggered=False, loc_audit=None):
+                  gates=None, scan=None, threshold=None, trg=None, route=None, triggered=False, loc_audit=None,
+                  extra=None):
+    extra = extra or {}
     g = gr.get("grade") or ("pending" if state == "WATCH" else "—")
     nd = loc.get("nearest")
     conf = loc.get("confluence", 0)
@@ -946,6 +1111,8 @@ def _report_lines(verdict, state, reason, sym, price, direction, gr, ctx, loc, e
         f"5m location: {locdesc} · liquidity event: {swdesc}",
         f"Structure 5m: {m5 or '—'} · 1m: {m1 or '—'}",
         f"1m trigger: {seqdesc}",
+        f"State: {extra.get('detailed_state', state)} · setup_qualified={extra.get('setup_qualified')} · "
+        f"execution_cleared={extra.get('execution_cleared')}",
     ]
     # SELECTED 5m location — auditable evidence (source candle, status, 30m relationship, candidate flag)
     if loc_audit:
@@ -989,11 +1156,22 @@ def _report_lines(verdict, state, reason, sym, price, direction, gr, ctx, loc, e
     plan_label = "PLAN" if state == "READY" else "Plan (post-trigger)"
     if entry is not None:
         contracts = rs.get("contracts", 0)
-        lines.append(f"{plan_label}: entry ~{_f(entry)} (retest of broken 1m level) · stop ~{_f(stop)} "
-                     f"(beyond retest {_f((trg or {}).get('retest',{}).get('level'))}) · {rs.get('stop_pts','—')}pt · "
-                     f"{contracts} MNQ · risk ${rs.get('risk_per_account','—')}/account")
-        if stop_thesis:
-            lines.append(f"Invalidation thesis: {stop_thesis}")
+        cond = " (CONDITIONAL max — account/PDLL unknown)" if rs.get("conditional") else ""
+        lines.append(f"{plan_label}: entry ~{_f(entry)} · stop ~{_f(stop)} · {rs.get('stop_pts','—')}pt · "
+                     f"≤{contracts} MNQ{cond} · risk ${rs.get('risk_per_account','—')}/account · principal {extra.get('principal_R')}R")
+        # entry methods (both offered) + chosen stop thesis with the exact structure it invalidates
+        eo = extra.get("entry_options") or []
+        if eo:
+            lines.append("Entry options: " + " | ".join(
+                f"{e['method']} @ {_f(e['price'])} ({e.get('state')})" for e in eo))
+        if extra.get("stop_thesis_id"):
+            lines.append(f"Stop thesis: {extra['stop_thesis_id']} — {extra.get('stop_invalidates')}")
+        so = extra.get("stop_options") or {}
+        alt = {k: v for k, v in so.items() if k != extra.get("stop_thesis_id")}
+        if alt:
+            lines.append("Alt stop: " + " | ".join(f"{k} @ {_f(v['price'])} ({v['invalidates']})" for k, v in alt.items()))
+        for note in (extra.get("stop_notes") or []):
+            lines.append(f"⚠ {note}")
         # ── ORDERED OBSTACLE TABLE (nearest first) — every candidate, its causal status + evidence ──
         rows = (scan or {}).get("rows") if isinstance(scan, dict) else scan
         if rows:

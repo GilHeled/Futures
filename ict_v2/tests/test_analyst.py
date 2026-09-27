@@ -79,16 +79,18 @@ def _b(c, l=None, h=None, t=None):
 
 
 def test_acceptance_needs_two_consecutive_closes_not_a_wick():
-    # invalidated: >=2 consecutive completed closes below the level
-    assert AN._acceptance([_b(100), _b(98), _b(97), _b(101)], 0, 100.0, below=True)[0] == "invalidated"
-    # weakened: only ONE close below (run resets) — a single close is NOT acceptance
-    assert AN._acceptance([_b(100), _b(98), _b(101), _b(102)], 0, 100.0, below=True)[0] == "weakened"
-    # weakened: a WICK pierced but it held on a close basis
-    assert AN._acceptance([_b(100), _b(101, l=99), _b(102)], 0, 100.0, below=True)[0] == "weakened"
-    # active: price never traded below it
-    assert AN._acceptance([_b(100), _b(102, l=101), _b(103, l=102)], 0, 100.0, below=True)[0] == "active"
-    # resistance side (long path): two consecutive closes ABOVE invalidate
-    assert AN._acceptance([_b(100), _b(102), _b(103), _b(99)], 0, 100.0, below=False)[0] == "invalidated"
+    # CLEARED: >=2 consecutive completed closes below the level
+    assert AN._acceptance([_b(100), _b(98), _b(97), _b(101)], 0, 100.0, below=True)[0] == "CLEARED"
+    # WEAKENED: only ONE close below (run resets) — a single close is NOT acceptance
+    assert AN._acceptance([_b(100), _b(98), _b(101), _b(102)], 0, 100.0, below=True)[0] == "WEAKENED"
+    # WEAKENED: a WICK pierced but it held on a close basis
+    assert AN._acceptance([_b(100), _b(101, l=99), _b(102)], 0, 100.0, below=True)[0] == "WEAKENED"
+    # ACTIVE: price never traded below it
+    assert AN._acceptance([_b(100), _b(102, l=101), _b(103, l=102)], 0, 100.0, below=True)[0] == "ACTIVE"
+    # UNKNOWN: no completed bars after formation -> clearance unverifiable
+    assert AN._acceptance([_b(100)], 0, 100.0, below=True)[0] == "UNKNOWN"
+    # resistance side (long path): two consecutive closes ABOVE -> CLEARED
+    assert AN._acceptance([_b(100), _b(102), _b(103), _b(99)], 0, 100.0, below=False)[0] == "CLEARED"
 
 
 def test_obstacle_scan_shape_and_causality():
@@ -98,9 +100,9 @@ def test_obstacle_scan_shape_and_causality():
     out = AN.obstacle_scan(series, "SHORT", entry=200.0, stop_pts=10.0)   # entry above all -> supports below
     assert set(out) == {"rows", "first"}
     for r in out["rows"]:
-        assert r["price"] < 200.0 and r["status"] in ("active", "weakened", "invalidated") and r["R"] > 0
+        assert r["price"] < 200.0 and r["status"] in ("ACTIVE", "WEAKENED", "CLEARED", "UNKNOWN", "TRIGGER_THRESHOLD") and r["R"] > 0
     if out["first"]:
-        assert out["first"]["status"] != "invalidated"                    # first is never an excluded level
+        assert out["first"]["status"] in ("ACTIVE", "WEAKENED", "UNKNOWN")   # first still obstructs
     # ordering: rows are nearest-first (descending price for a short)
     prices = [r["price"] for r in out["rows"]]
     assert prices == sorted(prices, reverse=True)
@@ -122,7 +124,7 @@ def test_obstacle_scan_does_not_skip_nearer_active_for_better_R():
         return [_b(v, l=v - 1, h=v + 1) for v in seq]
     series = {"15m": [], "5m": series_with_two_supports(), "1m": []}
     out = AN.obstacle_scan(series, "SHORT", entry=210.0, stop_pts=10.0)
-    actives = [r for r in out["rows"] if r["status"] != "invalidated"]
+    actives = [r for r in out["rows"] if r["status"] != "CLEARED" and r["meaningful"]]
     if len(actives) >= 2 and out["first"]:
         # the first active obstacle is the highest-priced active level (nearest to entry)
         assert out["first"]["price"] == max(r["price"] for r in actives)
@@ -165,10 +167,10 @@ def test_frozen_snapshot_trigger_is_rejected_no_continuation():
     assert seq["break"]["level"] == 30889.75 and seq["break"]["broke"] == "close"
     assert seq["retest"]["price"] == 30921.75
     assert seq["second_break"]["level"] == 30914.25
-    # the second 'break' is ABOVE the first low and never closed below it -> not continuation
+    # the candidate is rejected because an opposing structural break reversed the leg between the two breaks
     cont = seq["continuation"]
-    assert cont["closed_beyond_first"] is False and cont["made_new_beyond_first"] is False
-    assert cont["extreme_after_retest"] == 30913.5 and cont["extreme_after_retest"] > cont["first_level"]
+    assert cont["opposing_break_between"] is True
+    assert "opposing structural break" in seq["rejected_reason"]
     # fresh snapshot -> pre-trigger WATCH (armed) with a trigger threshold, not an executable plan
     assert out["state"] == "WATCH" and out["trigger_threshold"] is not None
     # same snapshot but STALE -> NO TRADE (staleness is a separate, top-line reason)
@@ -203,16 +205,19 @@ def test_state_completed_trigger_insufficient_room_is_no_trade():
 
 
 def test_state_completed_trigger_with_room_is_ready_A():
-    """A COMPLETED trigger with valid location, structural stop, permitted risk and >= 2R -> READY / A."""
+    """A COMPLETED trigger with CLEAR (aligned) HTF context, quality location, structural stop, permitted
+    risk and >= 2R before the first meaningful obstacle -> READY / grade A."""
     o = _run_fixture("ready_A")
     seq = o["trigger_sequence"]
-    assert o["triggered"] is True and o["entry"] == 30758.0 and o["effective_R"] == 2.42
-    # entry/stop are rebuilt from the trigger, not the old provisional levels
-    assert o["entry"] != 30918.0 and o["stop"] != 30939.75
-    assert seq["break"]["broke"] == "close" and seq["second_break"]["broke"] == "close"
-    assert seq["continuation"]["closed_beyond_first"] is True
-    assert o["state"] == "READY" and o["grade"] == "A"
-    assert all(g["ok"] is True for g in o["gates"])       # every gate passes
+    assert o["triggered"] is True and o["entry"] == 30867.5 and o["effective_R"] == 4.03
+    assert o["direction"] == "LONG" and o["context"]["bias30"] == "bullish" and o["context_clear"] is True
+    assert o["entry"] != 30918.0 and o["stop"] != 30939.75      # rebuilt from the trigger
+    assert seq["continuation"]["continued_past_retest"] is True
+    assert o["state"] == "READY" and o["detailed_state"] == "READY_ORDER" and o["grade"] == "A"
+    # every MECHANICAL gate passes; the execution-clearance gates stay UNKNOWN (None)
+    mech = [g for g in o["gates"] if g["ok"] is not None]
+    assert all(g["ok"] is True for g in mech)
+    assert o["execution_cleared"] is False       # READY setup is NOT an execution clearance
 
 
 def test_state_invalidation_breached_before_entry_is_no_trade():
@@ -243,7 +248,7 @@ def test_trigger_sequence_completes_only_on_real_continuation():
     vals = [104, 106, 108, 107, 105, 103, 101, 100, 102, 104, 98, 101, 103, 102, 99, 96, 94]
     good = [bar(v, v + 1, v - 1, v) for v in vals]
     tr = AN.trigger_sequence(good, "SHORT", buffer=2.0, recency=20)
-    assert tr["completed"] is True and tr["continuation"]["closed_beyond_first"] is True
+    assert tr["completed"] is True and tr["continuation"]["continued_past_retest"] is True
     assert tr["entry"] is not None and tr["stop"] > tr["entry"]        # short stop sits ABOVE entry
 
 
@@ -255,6 +260,35 @@ def test_trigger_sequence_rejects_when_no_close_below_first_low():
     bad = [bar(v, v + 1, v - 1, v) for v in vals]
     tr = AN.trigger_sequence(bad, "SHORT", buffer=2.0, recency=20)
     assert tr["completed"] is False and tr["rejected_reason"]
+
+
+def test_rule_inventory_three_categories():
+    inv = AN.rule_inventory()
+    assert set(("approved", "provisional", "observed_evidence_classes", "unavailable_in_this_env")) <= set(inv)
+    # provisional heuristics are named with rationale + range (not passed off as approved/derived)
+    for k in ("TRIGGER_RECENCY", "STOP_FLOOR_MULT", "ACCEPT_CLOSES"):
+        assert k in inv["provisional"] and "rationale" in inv["provisional"][k] and "range" in inv["provisional"][k]
+    assert inv["approved"]["min_R_A"] == 2.0 and inv["approved"]["per_trade_risk_usd"] == 150.0
+
+
+def test_targets_from_structure_not_only_external():
+    o = _run_fixture("ready_A")
+    # targets are an ORDERED list of price-dependent draws in the trade direction
+    assert isinstance(o["targets_ordered"], list) and o["tp1"] is not None
+    if o["direction"] == "LONG":
+        assert all(x > o["entry"] for x in o["targets_ordered"])
+    else:
+        assert all(x < o["entry"] for x in o["targets_ordered"])
+
+
+def test_execution_gates_unknown_and_ready_is_not_cleared():
+    o = _run_fixture("ready_A")
+    names = [g["name"] for g in o["gates"]]
+    assert any("news window" in n for n in names) and any("account" in n for n in names)
+    for g in o["gates"]:
+        if "news window" in g["name"] or "account" in g["name"]:
+            assert g["ok"] is None                 # UNKNOWN in this environment
+    assert o["execution_cleared"] is False and o["reason_code"] == "READY_ORDER"
 
 
 def test_trigger_threshold_is_nearest_swing_low_below_for_short():

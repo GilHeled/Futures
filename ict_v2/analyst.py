@@ -28,14 +28,73 @@ from ict_v2 import market_structure as MS
 from ict_v2 import order_blocks as OB
 from ict_v2 import liquidity_runs as LR
 
-# account rules (per account)
-PER_TRADE_RISK = 150.0          # $ ceiling per account
-POINT_VALUE = 2.0               # MNQ $/pt/contract
-TICK = 0.25                     # MNQ tick — every displayed order price must be a multiple of this
-MAX2_STOP_PTS = 37.5            # <= -> up to 2 contracts
-MAX1_STOP_PTS = 75.0           # <= -> 1 contract; beyond -> no trade
-MIN_R_A = 2.0                   # A needs >= 2R room
-MIN_R_APLUS = 2.5              # A+ prefers >= 2.5R
+CONFIG_VERSION = "2026-09-27.spec-v1"
+
+# ── APPROVED account rules (user-mandated; per account) ───────────────────────
+PER_TRADE_RISK = 150.0          # $ ceiling per account (APPROVED)
+POINT_VALUE = 2.0               # MNQ $/pt/contract (APPROVED — instrument fact)
+TICK = 0.25                     # MNQ tick — every displayed order price must be a multiple (APPROVED)
+MAX2_STOP_PTS = 37.5            # <= -> up to 2 contracts at $150 (APPROVED, derived from $150/$2/2)
+MAX1_STOP_PTS = 75.0            # <= -> 1 contract; beyond -> no trade (APPROVED)
+MAX_CONTRACTS = 2               # plan permits ONE or TWO MNQ; three is disallowed (APPROVED)
+MIN_R_A = 2.0                   # A requires >= 2R credible room before the first obstacle (APPROVED)
+MIN_R_B = 1.5                   # B first-objective floor (APPROVED, watch-only this phase)
+DAILY_PDLL = 300.0             # per-account personal daily loss limit, Liquidate & Block (APPROVED)
+DLL = 1000.0                    # per-account daily loss limit (APPROVED)
+
+# ── PROVISIONAL engineering heuristics (NOT user-approved, NOT "derived from data") ───────────────
+# Each: {value, rationale, range, unit}. They are safety checks and must NOT override a valid
+# structural setup; they are configurable and require separate evidence before being treated as truth.
+CONFIG = {
+    "MIN_R_APLUS": {"value": 2.5, "unit": "R", "range": [2.0, 3.5],
+                    "rationale": "A+ clean-path preference; a GRADING CONVENTION to validate, not a mandate"},
+    "TRIGGER_RECENCY": {"value": 8, "unit": "1m bars", "range": [3, 20],
+                        "rationale": "second break must be recent to be a LIVE trigger; provisional window"},
+    "STOP_BUFFER_MULT": {"value": 0.25, "unit": "x median 1m range", "range": [0.0, 1.0],
+                         "rationale": "tick-valid buffer beyond the retest extreme; provisional"},
+    "STOP_FLOOR_MULT": {"value": 0.5, "unit": "x median 1m range", "range": [0.0, 1.0],
+                        "rationale": "reject sub-noise stops; a SAFETY CHECK, not structural invalidation"},
+    "ACCEPT_CLOSES": {"value": 2, "unit": "consecutive closes", "range": [1, 4],
+                      "rationale": "clear a level heuristically; NOT the sole clearance test — evidence also weighed"},
+    "STALE_SECONDS": {"value": 300, "unit": "seconds", "range": [60, 3600],
+                      "rationale": "freshness window; should vary by session/closure (provisional default)"},
+    "FEE_SLIPPAGE_PER_CONTRACT": {"value": 1.5, "unit": "$/contract/side round-trip est.", "range": [0.0, 10.0],
+                                  "rationale": "fee+slippage reserve for daily-budget & backtest; provisional estimate"},
+    "ORDER_TTL_BARS": {"value": 30, "unit": "1m bars", "range": [5, 120],
+                       "rationale": "prospective-limit time-to-live before cancel; provisional"},
+    "BACKTEST_MAX_HOLD_BARS": {"value": 240, "unit": "1m bars", "range": [30, 1440],
+                               "rationale": "backtest timeout only; NOT a trade-management rule"},
+}
+
+
+def cfg(name):
+    """Read a provisional heuristic's current value (see CONFIG for rationale/range/default)."""
+    return CONFIG[name]["value"]
+
+
+def rule_inventory():
+    """The three-category provenance inventory the spec requires: APPROVED rules, PROVISIONAL heuristics
+    (named, with rationale/range), and the OBSERVED evidence classes cited in each decision."""
+    return {
+        "config_version": CONFIG_VERSION,
+        "approved": {
+            "per_trade_risk_usd": PER_TRADE_RISK, "point_value": POINT_VALUE, "tick": TICK,
+            "max2_stop_pts": MAX2_STOP_PTS, "max1_stop_pts": MAX1_STOP_PTS, "max_contracts": MAX_CONTRACTS,
+            "min_R_A": MIN_R_A, "min_R_B": MIN_R_B, "daily_pdll": DAILY_PDLL, "dll": DLL,
+            "timeframe_roles": "30m context · 5m location · 1m trigger; a 1m shift cannot set a 30m/5m thesis",
+            "grade_permission": "A/A+ eligible; B watch-only; C no-trade (initial phase, 1 trade/day)",
+            "two_R_A": "A requires >=2R credible room before the first meaningful obstacle",
+        },
+        "provisional": {k: {kk: vv for kk, vv in v.items()} for k, v in CONFIG.items()},
+        "observed_evidence_classes": [
+            "OHLC + completed timestamps", "indicator events (OB/MSS/BOS/HRLR) + their source candles",
+            "tested/mitigated zone history", "actual fills + account state (when supplied)",
+        ],
+        "unavailable_in_this_env": [
+            "live account balances / copier / bracket / PDLL state",
+            "live macro-news calendar (Asia/Jerusalem window)", "live position management / fills",
+        ],
+    }
 
 
 def _o(b): return float(b["o"])
@@ -75,11 +134,26 @@ def context(b30, b15, price):
     ev30 = MS.detect_market_structure(b30, pivot_strength=3)
     ev15 = MS.detect_market_structure(b15, pivot_strength=3)
     last30 = ev30[-1] if ev30 else None
-    bias = "neutral"
+    # BIAS is a labeled CONTEXT (bullish/bearish/mixed/unknown) with evidence + invalidation — NOT a hard
+    # long-only/short-only permission. A single most-recent BOS/MSS is only tentative; two agreeing events
+    # make a directional bias; two disagreeing = mixed. (spec §3)
     impulse = None
+    bias, bias_conf = "unknown", "none"
     if last30:
-        bias = "long" if last30.direction == "bull" else "short"
-        impulse = "impulse" if last30.kind == "BOS" else "shift(correction→new)"
+        impulse = "extending (BOS)" if last30.kind == "BOS" else "shift MSS (correction→new)"
+        d2 = [e.direction for e in ev30[-2:]]
+        if len(d2) >= 2 and d2[-1] == d2[-2]:
+            bias = "bullish" if d2[-1] == "bull" else "bearish"
+            bias_conf = "two agreeing 30m events"
+        else:
+            bias = "bullish" if last30.direction == "bull" else "bearish"
+            bias_conf = "single 30m event — tentative"
+        # if the two most recent events disagree it is genuinely mixed
+        if len(d2) >= 2 and d2[-1] != d2[-2]:
+            bias, bias_conf = "mixed", "last two 30m events disagree"
+    bias_invalidation = None if not last30 else round(last30.level, 2)
+    bias_evidence = [{"kind": e.kind, "dir": e.direction, "level": round(e.level, 2), "time": e.break_time}
+                     for e in ev30[-3:]]
     # external liquidity from 30m/15m unmitigated swing pools (HRLR sweeps + LRLR EQ levels)
     runs = LR.detect_liquidity_runs(b30, tick=0.25) + LR.detect_liquidity_runs(b15, tick=0.25)
     unmit = [r for r in runs if not r.mitigated]
@@ -92,7 +166,8 @@ def context(b30, b15, price):
     obs30 = [o for o in OB.detect_order_blocks(b30, swing_len=3, max_bars=100) if o.state == "active"]
     htf_ob = [{"dir": "bull" if o.is_bull else "bear", "top": round(o.top, 2), "bottom": round(o.bottom, 2)}
               for o in obs30]
-    return {"bias30": bias, "impulse": impulse, "heuristic": True,
+    return {"bias30": bias, "bias_confidence": bias_conf, "bias_invalidation": bias_invalidation,
+            "bias_evidence": bias_evidence, "impulse": impulse, "heuristic": True,
             "external_bsl": [round(x, 2) for x in bsl[:3]], "external_ssl": [round(x, 2) for x in ssl[:3]],
             "eqh": eqh[:3], "eql": eql[:3], "htf_ob_30m": htf_ob[:4],
             "events30": MS.summary(ev30)["total"], "obstacle15": _obstacle15(ev15, price)}
@@ -106,36 +181,67 @@ def _obstacle15(ev15, price):
     return {"kind": e.kind, "dir": e.direction, "level": round(e.level, 2)}
 
 
-# ── sub-model: actionable 5m location ────────────────────────────────────────
+# ── sub-model: actionable 5m location (QUALITY-scored, not merely nearest) ────
 def location(b5, price):
+    """Select the 5m location by QUALITY + relevance, not geographic nearness (spec §3). A meaningful OB
+    is the final opposing area preceding a displacement that BROKE 5m structure; an HRLR sweep is a strong
+    location; a bare unmitigated pivot / LRLR is weaker. `quality` scores this; the selected location is
+    the highest-quality one (proximity only breaks ties). Being the last opposite candle or any new HH/LL
+    is NOT sufficient — that shows as low quality / candidate. Imbalance(FVG)-only OBs are not scored here
+    (a known limitation, disclosed)."""
     obs = [o for o in OB.detect_order_blocks(b5, swing_len=3, max_bars=100) if o.state == "active"]
     runs = [r for r in LR.detect_liquidity_runs(b5, tick=0.25) if not r.mitigated]
+    ev5 = MS.detect_market_structure(b5, pivot_strength=3)
+    vu = _vol_unit(b5) or 1.0
     cands = []
     for o in obs:
         mid = (o.top + o.bottom) / 2
-        # every detected OB required a HH (bull) / LL (bear) displacement to form, and "active" means it
-        # has NOT been closed through -> a VALID, still-live order block (not a mere last-opposite candle).
+        want = "bull" if o.is_bull else "bear"
+        broke = any(e.direction == want and o.left_index < e.break_index <= o.left_index + 12 for e in ev5)
+        score, reasons = 1, []
+        if broke:
+            score += 2; reasons.append("displacement broke 5m structure")
+        else:
+            reasons.append("no 5m structure break at formation — candidate only")
+        dist = abs(mid - price)
+        if dist <= 2 * vu:
+            score += 1; reasons.append("near current price")
         src = b5[o.left_index] if 0 <= o.left_index < len(b5) else None
         cands.append({"type": "OB", "dir": "demand" if o.is_bull else "supply",
                       "top": round(o.top, 2), "bottom": round(o.bottom, 2), "ref": round(mid, 2),
-                      "status": "active", "valid": True,
+                      "status": "active", "valid": True, "meaningful": bool(broke),
                       "confirmed_by": "higher-high displacement" if o.is_bull else "lower-low displacement",
                       "left_index": o.left_index, "left_time": o.left_time,
                       "src_candle": (None if not src else {"o": float(src["o"]), "h": float(src["h"]),
                                                            "l": float(src["l"]), "c": float(src["c"]), "t": src.get("t")}),
-                      "dist": abs(mid - price)})
+                      "score": score, "quality_reason": "; ".join(reasons), "dist": dist})
     for r in runs:
+        score, reasons = 1, []
+        if r.kind == "HRLR":
+            score += 2; reasons.append("HRLR sweep (strong location)")
+        elif r.kind == "LRLR":
+            score += 1; reasons.append("LRLR equal-level pool")
+        else:
+            reasons.append("plain unmitigated pivot — weak")
+        dist = abs(r.price - price)
+        if dist <= 2 * vu:
+            score += 1; reasons.append("near current price")
         cands.append({"type": r.kind, "dir": "supply" if r.is_high else "demand",
                       "top": round(r.price, 2), "bottom": round(r.price, 2), "ref": round(r.price, 2),
-                      "status": "unmitigated", "valid": True, "confirmed_by": r.kind,
-                      "dist": abs(r.price - price)})
-    cands.sort(key=lambda c: c["dist"])
+                      "status": "unmitigated", "valid": True, "meaningful": r.kind in ("HRLR", "LRLR"),
+                      "confirmed_by": r.kind, "left_index": getattr(r, "pivot_index", None),
+                      "left_time": getattr(r, "pivot_time", None),
+                      "score": score, "quality_reason": "; ".join(reasons) or "weak", "dist": dist})
+    # SELECT by quality first, proximity only as a tie-break (never the primary criterion)
+    cands.sort(key=lambda c: (-c["score"], c["dist"]))
     nearest = cands[0] if cands else None
-    # confluence = how many other locations sit within ~3 pts of the nearest
     conf = 0
     if nearest:
         conf = sum(1 for c in cands if abs(c["ref"] - nearest["ref"]) <= 3.0) - 1
-    return {"nearest": nearest, "confluence": conf, "count": len(cands), "heuristic": True}
+    return {"nearest": nearest, "confluence": conf, "count": len(cands), "heuristic": True,
+            "quality": (nearest["score"] if nearest else None),
+            "quality_reason": (nearest["quality_reason"] if nearest else "no 5m location"),
+            "candidates": [{"type": c["type"], "dir": c["dir"], "ref": c["ref"], "score": c["score"]} for c in cands[:6]]}
 
 
 # ── sub-model: liquidity event (sweep + reclaim) ─────────────────────────────
@@ -198,7 +304,7 @@ def trigger_threshold(b1, direction, price):
             "must": ("close below to break" if direction == "SHORT" else "close above to break")}
 
 
-TRIGGER_RECENCY = 8   # the second break must be within the last N 1m bars to count as a LIVE trigger.
+TRIGGER_RECENCY = cfg("TRIGGER_RECENCY")   # PROVISIONAL (see CONFIG): recency window for a LIVE second break.
 
 
 def _cev(bars, idx, level, want):
@@ -255,21 +361,30 @@ def trigger_sequence(b1, direction, buffer=2.0, recency=TRIGGER_RECENCY):
     ext = "high" if short else "low"
     mids = [p for p in pivs if p["kind"] == ext and e1.break_index < p["index"] < e2.break_index]
     retest = (max(mids, key=lambda p: p["price"]) if short else min(mids, key=lambda p: p["price"])) if mids else None
-    # continuation past the FIRST broken level L1, measured only AFTER the retest (or after e1 if no retest)
-    start = (retest["index"] if retest else e1.break_index) + 1
-    seg = b1[start:e2.break_index + 1]
-    if short:
-        new_ext = min((_l(b) for b in seg), default=None)
-        made_new = new_ext is not None and new_ext < e1.level          # a lower low below the first low
-        closed_beyond = any(_c(b) < e1.level for b in seg)             # a close below the first low
-    else:
-        new_ext = max((_h(b) for b in seg), default=None)
-        made_new = new_ext is not None and new_ext > e1.level
-        closed_beyond = any(_c(b) > e1.level for b in seg)
+    # CONTINUATION (spec §4): "actual continuation in the trade direction" = after the retest the market
+    # extends PAST the pre-retest extreme (a lower low after a short's pullback / higher high after a long's).
+    # This is NOT the over-strict "beat the very first extreme" rule, and NOT a mere ordering coincidence.
+    # We state which swing e2 broke and require: (retest exists) + (no opposing break between) + (a lower
+    # low / higher high after the retest than before it).
     opp_between = any(e1.break_index < e.break_index < e2.break_index for e in oppdir)
-    cont = {"first_level": round(e1.level, 2), "extreme_after_retest": (round(new_ext, 2) if new_ext is not None else None),
-            "made_new_beyond_first": bool(made_new), "closed_beyond_first": bool(closed_beyond),
-            "opposing_break_between": bool(opp_between)}
+    pre_ext = post_ext = continued = None
+    if retest:
+        r_idx = retest["index"]
+        pre_seg = b1[e1.break_index:r_idx + 1]
+        post_seg = b1[r_idx:e2.break_index + 1]
+        if short:
+            pre_ext = min((_l(b) for b in pre_seg), default=None)
+            post_ext = min((_l(b) for b in post_seg), default=None)
+            continued = (pre_ext is not None and post_ext is not None and post_ext < pre_ext)
+        else:
+            pre_ext = max((_h(b) for b in pre_seg), default=None)
+            post_ext = max((_h(b) for b in post_seg), default=None)
+            continued = (pre_ext is not None and post_ext is not None and post_ext > pre_ext)
+    cont = {"first_level": round(e1.level, 2), "second_break_swing_level": round(e2.level, 2),
+            "second_break_from_index": e2.from_index, "retest_index": (retest["index"] if retest else None),
+            "pre_retest_extreme": (round(pre_ext, 2) if pre_ext is not None else None),
+            "post_retest_extreme": (round(post_ext, 2) if post_ext is not None else None),
+            "continued_past_retest": bool(continued), "opposing_break_between": bool(opp_between)}
     brk = _cev(b1, e1.break_index, e1.level, want)
     sec = _cev(b1, e2.break_index, e2.level, want)
     rst = (_cev(b1, retest["index"], retest["price"], "bull" if short else "bear") if retest else None)
@@ -283,15 +398,14 @@ def trigger_sequence(b1, direction, buffer=2.0, recency=TRIGGER_RECENCY):
     if opp_between:
         out["rejected_reason"] = "an opposing structural break occurred between the two breaks (leg reversed)"
         return out
-    if not (made_new and closed_beyond):
-        out["rejected_reason"] = (f"no continuation past the first {'low' if short else 'high'} "
-                                  f"{round(e1.level, 2)} (extreme after retest "
-                                  f"{cont['extreme_after_retest']}, close beyond={closed_beyond})")
+    if not continued:
+        out["rejected_reason"] = (f"no continuation after the retest (post-retest extreme {cont['post_retest_extreme']} "
+                                  f"did not extend past pre-retest {cont['pre_retest_extreme']})")
         return out
     entry = round(e2.level, 2)
     stop = round(retest["price"] + buffer, 2) if short else round(retest["price"] - buffer, 2)
     out.update({"completed": True, "entry": entry, "stop": stop,
-                "thesis": "1m break→retest→second-break, continuation past the first low/high "
+                "thesis": "1m break→retest→second-break of a NEW post-retest swing "
                           "(stop beyond the retest extreme)"})
     return out
 
@@ -339,50 +453,57 @@ def risk_size(entry, stop, targets):
 
 
 # ── sub-model: grade ─────────────────────────────────────────────────────────
-def grade(loc, sweep_side_ok, trigger_ok, room_R):
-    """Grade the EXECUTABLE setup. A/A+/B require a COMPLETED in-direction trigger; without it the
-    location may be valid but the state is WATCH, never a graded entry. `room_R` is R to the FIRST
-    opposing obstacle (not the far target)."""
+def grade(loc, sweep_side_ok, trigger_ok, room_R, context_clear=True, location_quality_ok=True):
+    """Grade the EXECUTABLE setup (spec §7). A/A+/B require a COMPLETED in-direction trigger. A ALSO
+    requires CLEAR HTF context (30m aligned) AND a quality (structure-breaking) 5m location AND >=2R
+    credible room before the first meaningful obstacle. Mixed/unknown/counter-trend context or a mere
+    candidate location cannot be A — it is capped at B (watch-only this phase). `room_R` is R to the FIRST
+    meaningful obstacle, not the far target."""
     if not loc.get("nearest"):
         return {"grade": None, "trigger_completed": False, "why": "no preplanned location"}
     if not trigger_ok:
         return {"grade": None, "trigger_completed": False, "why": "location present, trigger pending (WATCH)"}
-    if room_R is not None and room_R < 1.5:
-        return {"grade": None, "trigger_completed": True, "why": f"first-obstacle room {room_R}R < 1.5"}
-    if sweep_side_ok and room_R and room_R >= MIN_R_APLUS and loc.get("confluence", 0) >= 1:
+    if room_R is not None and room_R < MIN_R_B:
+        return {"grade": None, "trigger_completed": True, "why": f"first-obstacle room {room_R}R < {MIN_R_B}"}
+    a_ok = context_clear and location_quality_ok            # A needs clear context + quality location
+    if a_ok and sweep_side_ok and room_R and room_R >= cfg("MIN_R_APLUS") and loc.get("confluence", 0) >= 1:
         g = "A+"
-    elif room_R and room_R >= MIN_R_A:
+    elif a_ok and room_R and room_R >= MIN_R_A:
         g = "A"
-    elif room_R and room_R >= 1.5:
-        g = "B"
+    elif room_R and room_R >= MIN_R_B:
+        g = "B"                                              # deficiency (context/quality/room) -> watch-only
     else:
         g = None
-    return {"grade": g, "trigger_completed": True, "why": "location+trigger+first-obstacle-room"}
+    why = "location+trigger+context+quality+room" if a_ok else "capped at B: context not clear or candidate location"
+    return {"grade": g, "trigger_completed": True, "why": why}
 
 
 # ── sub-model: obstacle scan on the reward path (defined, causal, no look-ahead) ──
-ACCEPT_CLOSES = 2   # >= this many CONSECUTIVE completed closes beyond a level = ACCEPTANCE.
+ACCEPT_CLOSES = cfg("ACCEPT_CLOSES")   # PROVISIONAL (see CONFIG): consecutive closes to heuristically clear a level.
 
 
 def _acceptance(bars, idx, level, below):
     """CAUSAL status of a level formed at bar `idx`, using ONLY bars idx+1..end (all <= the snapshot —
     never a candle after 'now'). This defines what invalidates an obstacle, per the review:
 
-      invalidated — >= ACCEPT_CLOSES CONSECUTIVE completed candles CLOSED beyond `level` (real body
-                    acceptance through the zone). A single close, a wick, or an indicator 'mitigated'
-                    flag is NOT sufficient on its own.
-      weakened    — a wick pierced the level (low<level for support / high>level for resistance) but it
-                    HELD on a close basis (no acceptance run). Still a live obstacle — not skipped.
-      active      — price never traded beyond it since formation.
+      CLEARED   — >= ACCEPT_CLOSES CONSECUTIVE completed candles CLOSED beyond `level` (real body
+                  acceptance). A single close, a wick, or an indicator 'mitigated' flag is NOT enough.
+                  (ACCEPT_CLOSES is PROVISIONAL — see CONFIG; acceptance is a heuristic, not the sole word.)
+      WEAKENED  — a wick pierced the level but it HELD on a close basis. Still a live obstacle.
+      ACTIVE    — price never traded beyond it since formation.
+      UNKNOWN   — the level formed at the edge of the window with no completed bars after it, so clearance
+                  CANNOT be verified; treated as still-obstructing (room is NOT awarded).
 
-    Returns (status, evidence_text, ev_from_time, ev_to_time). `below=True` for a support (short path),
-    False for a resistance (long path)."""
+    Returns (status, evidence_text, ev_from_time, ev_to_time). `below=True` for a support (short path)."""
+    tail = bars[idx + 1:]
+    if not tail:
+        return ("UNKNOWN", "no completed bars after formation — clearance unverifiable", None, None)
     run = 0
     run_from = None
     accepted = None
     wicked = False
     wick_t = None
-    for b in bars[idx + 1:]:
+    for b in tail:
         c = _c(b)
         pierced = (_l(b) < level) if below else (_h(b) > level)
         closed_beyond = (c < level) if below else (c > level)
@@ -399,11 +520,11 @@ def _acceptance(bars, idx, level, below):
             run = 0
             run_from = None
     if accepted:
-        return ("invalidated", f"accepted through: >= {ACCEPT_CLOSES} consecutive closes beyond {round(level, 2)}",
+        return ("CLEARED", f"accepted through: >= {ACCEPT_CLOSES} consecutive closes beyond {round(level, 2)} (provisional rule)",
                 accepted[0], accepted[1])
     if wicked:
-        return ("weakened", "wick pierced but held on a close basis", wick_t, wick_t)
-    return ("active", "untested since formation", None, None)
+        return ("WEAKENED", "wick pierced but held on a close basis", wick_t, wick_t)
+    return ("ACTIVE", "untested since formation", None, None)
 
 
 def _meaningful_obstacle(kind, tf):
@@ -421,16 +542,16 @@ def _meaningful_obstacle(kind, tf):
     return False
 
 
-def obstacle_scan(series_by_tf, direction, entry, stop_pts):
+def obstacle_scan(series_by_tf, direction, entry, stop_pts, threshold_level=None):
     """Scan the reward path from the proposed entry outward and list EVERY opposing structure in order of
-    encounter (nearest first), across 15m/5m/1m: active bullish/bearish OB boundaries, swing pivots, and
-    LRLR/HRLR liquidity pools. Each row carries price, timeframe, why it opposes, its causal status
-    (active/weakened/invalidated) with completed-candle evidence + timestamp, distance/R, and whether it
-    is a MEANINGFUL hard barrier (vs a minor 1m swing).
+    encounter (nearest first), across 15m/5m/1m: OB boundaries, swing pivots, and LRLR/HRLR pools. Each row
+    carries price, timeframe, why it opposes, a STATUS (ACTIVE/WEAKENED/CLEARED/UNKNOWN, or TRIGGER_THRESHOLD
+    for the level the trigger consumed) with completed-candle evidence + timestamp, distance/R, and whether
+    it is a MEANINGFUL hard barrier (a bare 1m swing is minor).
 
-    The gating `first` is the first non-invalidated MEANINGFUL level — we never skip a nearer meaningful
-    obstacle for a better R, and we never let a minor 1m swing masquerade as the barrier. Only the defined
-    acceptance rule (`_acceptance`) excludes a level, using candles at/before the snapshot only."""
+    The gating `first` is the first still-obstructing MEANINGFUL level (ACTIVE/WEAKENED/UNKNOWN — a CLEARED
+    level is excluded only with timestamped acceptance evidence; a TRIGGER_THRESHOLD is not an obstacle).
+    We never skip a nearer meaningful obstacle for a better R, and never award room over an UNKNOWN level."""
     if entry is None or not direction or not stop_pts:
         return {"rows": [], "first": None}
     short = direction == "SHORT"
@@ -442,9 +563,12 @@ def obstacle_scan(series_by_tf, direction, entry, stop_pts):
         if (not short) and not (price > entry):
             return
         status, ev, evf, evt = _acceptance(series_by_tf.get(tf) or [], idx, accept_level, below=short)
+        is_threshold = threshold_level is not None and abs(round(price, 2) - round(threshold_level, 2)) < TICK
+        if is_threshold:
+            status, ev = "TRIGGER_THRESHOLD", "the level the trigger consumed — not a profit-path obstacle"
         rows.append({"tf": tf, "price": round(price, 2), "zone": zone, "kind": kind, "opposes": opposes,
                      "status": status, "evidence": ev, "ev_from": evf, "ev_to": evt,
-                     "meaningful": _meaningful_obstacle(kind, tf),
+                     "meaningful": _meaningful_obstacle(kind, tf) and not is_threshold,
                      "dist_pts": round(abs(entry - price), 2), "R": round(abs(entry - price) / stop_pts, 2)})
 
     for tf in ("15m", "5m", "1m"):
@@ -469,8 +593,8 @@ def obstacle_scan(series_by_tf, direction, entry, stop_pts):
             elif (not short) and r.is_high:
                 add(tf, r.price, None, f"{r.kind} BSL", "liquidity shelf", r.pivot_index, r.price)
 
-    # dedupe by rounded price; keep the strongest label (prefer NOT-invalidated, prefer OB/zone), merge TFs
-    order = {"active": 0, "weakened": 1, "invalidated": 2}
+    # dedupe by rounded price; keep the strongest label (prefer still-obstructing, prefer OB/zone), merge TFs
+    order = {"ACTIVE": 0, "WEAKENED": 1, "UNKNOWN": 2, "TRIGGER_THRESHOLD": 3, "CLEARED": 4}
     best = {}
     for row in rows:
         k = row["price"]
@@ -483,9 +607,34 @@ def obstacle_scan(series_by_tf, direction, entry, stop_pts):
                 row["tf"] = cur["tf"]
                 best[k] = row
     merged = sorted(best.values(), key=(lambda x: -x["price"]) if short else (lambda x: x["price"]))
-    # gating obstacle = first non-invalidated MEANINGFUL level (minor 1m swings are context, not barriers)
-    first = next((x for x in merged if x["status"] != "invalidated" and x["meaningful"]), None)
+    # gating obstacle = first STILL-OBSTRUCTING meaningful level (ACTIVE/WEAKENED/UNKNOWN). A CLEARED level
+    # (timestamped acceptance) or a TRIGGER_THRESHOLD is not an obstacle; a minor 1m swing is context only.
+    first = next((x for x in merged if x["status"] in ("ACTIVE", "WEAKENED", "UNKNOWN") and x["meaningful"]), None)
     return {"rows": merged, "first": first}
+
+
+def _targets(series_by_tf, ctx, direction, entry):
+    """Ordered price-dependent targets in the trade direction (spec §6): unmitigated liquidity pools from
+    30m/15m/5m/1m plus EQ levels, nearest draw first. External 30m/15m BSL/SSL are included but are not the
+    ONLY targets. Structural draws (opposing OB far edge, range edge) can extend this later."""
+    if entry is None or not direction:
+        return []
+    short = direction == "SHORT"
+    levels = set()
+    for x in (ctx["external_ssl"] if short else ctx["external_bsl"]):
+        levels.add(round(x, 2))
+    for x in (ctx["eql"] if short else ctx["eqh"]):
+        levels.add(round(x, 2))
+    for tf in ("15m", "5m", "1m"):
+        for r in LR.detect_liquidity_runs(series_by_tf.get(tf) or [], tick=0.25):
+            if r.mitigated:
+                continue
+            if short and (not r.is_high) and r.price < entry:
+                levels.add(round(r.price, 2))
+            elif (not short) and r.is_high and r.price > entry:
+                levels.add(round(r.price, 2))
+    ordered = sorted([x for x in levels if (x < entry) == short], reverse=short)
+    return ordered
 
 
 # ── report assembly ──────────────────────────────────────────────────────────
@@ -515,16 +664,18 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
     vol5 = _vol_unit(b5) or 0.0              # median 5m bar range = volatility unit
     vol1 = _vol_unit(b1) or 0.0              # median 1m bar range — the floor for a 1m-entry stop
     # the post-trigger entry is a 1m thesis, so its stop is floored by 1m (not 5m) volatility.
-    stop_floor = round((vol1 or vol5) * 0.5, 2)   # a stop tighter than half a 1m bar is noise
-    buf = max(2.0, round(vol1 * 0.25, 2)) if vol1 else max(2.0, round(vol5 * 0.25, 2))
-    direction = None
+    stop_floor = round((vol1 or vol5) * cfg("STOP_FLOOR_MULT"), 2)   # PROVISIONAL noise floor (see CONFIG)
+    buf = max(2.0, round(vol1 * cfg("STOP_BUFFER_MULT"), 2)) if vol1 else max(2.0, round(vol5 * cfg("STOP_BUFFER_MULT"), 2))
     sw = (ev or {}).get("sweep")
     nd = loc.get("nearest")
-    if nd:
-        if nd["dir"] == "demand" and ctx["bias30"] in ("long", "neutral"):
-            direction = "LONG"
-        elif nd["dir"] == "supply" and ctx["bias30"] in ("short", "neutral"):
-            direction = "SHORT"
+    # DIRECTION comes from the LOCATION side (a valid location may be taken in either direction). The 30m
+    # bias is a QUALITY factor, NOT a hard long/short permission (spec §3): alignment is required for A;
+    # mixed/unknown or counter-trend context caps the grade below A.
+    direction = ("LONG" if nd["dir"] == "demand" else "SHORT") if nd else None
+    bias = ctx["bias30"]
+    aligned = (bias == "bullish" and direction == "LONG") or (bias == "bearish" and direction == "SHORT")
+    counter_trend = (bias == "bullish" and direction == "SHORT") or (bias == "bearish" and direction == "LONG")
+    context_clear = bool(aligned)   # A needs clear HTF context; mixed/unknown/counter-trend does not qualify as A
 
     # ── LOCATION AUDIT — make the SELECTED 5m location fully evidenced (not "9 others exist") ──────
     loc_audit = None
@@ -537,7 +688,6 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
             if h["dir"] == want_htf and h["bottom"] <= nd["ref"] <= h["top"]:
                 htf_rel = f"inside 30m {want_htf} OB [{_f(h['bottom'])}–{_f(h['top'])}]"
                 break
-        aligned = (ctx["bias30"] == "short" and nd["dir"] == "supply") or (ctx["bias30"] == "long" and nd["dir"] == "demand")
         loc_audit = {
             "type": nd["type"], "dir": nd["dir"],
             "zone": f"{_f(nd.get('bottom'))}–{_f(nd.get('top'))}" if nd.get("top") is not None else _f(nd.get("ref")),
@@ -546,7 +696,9 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
             "confluence": conf,
             "confirmed_confluence": conf >= 1,        # conf 0 = CANDIDATE, never counted as confirmed confluence
             "classification": "confirmed confluence" if conf >= 1 else "candidate (conf 0 — not confirmed confluence)",
-            "aligned_with_30m": bool(aligned), "htf_relationship": htf_rel,
+            "aligned_with_30m": bool(aligned), "counter_trend": bool(counter_trend),
+            "context_clear_for_A": context_clear, "htf_relationship": htf_rel,
+            "quality": loc.get("quality"), "quality_reason": loc.get("quality_reason"),
             "alternatives": max(0, (loc.get("count") or 0) - 1),
         }
 
@@ -566,15 +718,15 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
     first_obst = obstacle_R = effective_R = best_R = sp = None
     rs = risk_size(None, None, None)
     degenerate_stop = False
+    targets_ordered = []
     if triggered and direction:
         entry = trg["entry"]; stop = trg["stop"]; stop_thesis = trg["thesis"]
-        if direction == "SHORT":
-            tp1 = ctx["external_ssl"][0] if ctx["external_ssl"] else None
-            tp2 = ctx["external_ssl"][1] if len(ctx["external_ssl"]) > 1 else None
-        else:
-            tp1 = ctx["external_bsl"][0] if ctx["external_bsl"] else None
-            tp2 = ctx["external_bsl"][1] if len(ctx["external_bsl"]) > 1 else None
         entry = _tick(entry, "near")
+        # TARGETS from ordered price-dependent liquidity/structure (30m/15m/5m/1m pools + EQ), not only
+        # external 30m/15m BSL/SSL (spec §6). Nearest draw first.
+        targets_ordered = _targets(series_by_tf, ctx, direction, entry)
+        tp1 = targets_ordered[0] if targets_ordered else None
+        tp2 = targets_ordered[1] if len(targets_ordered) > 1 else None
         if direction == "SHORT":
             stop = _tick(stop, "up"); tp1 = _tick(tp1, "up"); tp2 = _tick(tp2, "up")
         else:
@@ -583,7 +735,8 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
         best_R = max(rs.get("R_to_targets") or [0]) if rs.get("R_to_targets") else None
         sp = rs.get("stop_pts")
         degenerate_stop = bool(sp is not None and stop_floor and sp < stop_floor)
-        scan = obstacle_scan(series_by_tf, direction, entry, sp)   # from the ACTUAL post-trigger entry
+        scan = obstacle_scan(series_by_tf, direction, entry, sp,   # from the ACTUAL post-trigger entry
+                             threshold_level=(threshold or {}).get("level"))
         fo = scan["first"]
         first_obst = fo["price"] if fo else None
         obstacle_R = fo["R"] if fo else None
@@ -594,7 +747,9 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
                                  and sw.get("mitigated"))
              else ("rejection+displacement (structural)" if triggered else None))
 
-    gr = (grade(loc, route == "sweep+reclaim", True, effective_R) if triggered
+    loc_quality_ok = bool(nd and nd.get("meaningful"))       # structure-breaking OB / HRLR / LRLR, not a bare pivot
+    gr = (grade(loc, route == "sweep+reclaim", True, effective_R,
+                context_clear=context_clear, location_quality_ok=loc_quality_ok) if triggered
           else {"grade": None, "trigger_completed": False, "why": "pre-trigger — no executable setup yet"})
 
     # data freshness — never issue a live verdict on stale bars
@@ -608,7 +763,7 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
             ref = now or datetime.now(timezone.utc)
             age = (ref - t).total_seconds()
             age_min = round(age / 60, 1)
-            stale = age > 300
+            stale = age > cfg("STALE_SECONDS")     # PROVISIONAL window (see CONFIG); should vary by session
         except Exception:
             pass
 
@@ -660,45 +815,84 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
          ("deferred — measured from the post-trigger entry" if not triggered else
           (f"only {effective_R}R before {_f(first_obst)} ({fo['kind']} {fo['tf']})" if (fo and not room_ok)
            else (f"{effective_R}R clear to target" if room_ok else "room unverified")))),
+        # EXECUTION-clearance gates: UNKNOWN in this environment -> a READY setup is NOT execution-cleared.
+        ("news window verified (Asia/Jerusalem)", None,
+         "UNVERIFIED — no live macro calendar in this environment; verify the no-entry window before any order"),
+        ("account/copier/PDLL state known (both XFAs)", None,
+         "UNKNOWN — live balances/DLL/PDLL/copier not available here; cannot clear execution or size vs remaining budget"),
     ]
+    # a READY *setup* is never an execution clearance while account + news are unknown (spec §2/§8)
+    execution_cleared = False
 
     # ── STATE MACHINE ─────────────────────────────────────────────────────────
     # WATCH is a PRE-trigger state only. Once the trigger completes the decision is binary: READY or
     # NO TRADE (a specific post-trigger gate failed — room / stop / risk / invalidation). Stale data and
     # a missing location are independent hard NO-TRADE reasons.
     pending = [f"{name}: {detail}" for name, ok, detail in gates if ok is False]
-    if stale or not loc_ok:
-        verdict, state = "🔴 No Trade", "NO_TRADE"
+    reason_code = None
+    if stale:
+        verdict, state, reason_code = "🔴 No Trade", "NO_TRADE", "STALE_DATA"
+        reason = next(f"{name} — {detail}" for name, ok, detail in gates if ok is False)
+    elif not loc_ok:
+        verdict, state, reason_code = "🔴 No Trade", "NO_TRADE", "NO_VALID_5M_LOCATION"
         reason = next(f"{name} — {detail}" for name, ok, detail in gates if ok is False)
     elif not triggered:
         verdict, state = "🟡 Watch", "WATCH"
+        reason_code = "WATCH_TRIGGER"
         reason = (f"Armed — awaiting the trigger (sweep+reclaim OR rejection+displacement) at 5m "
                   f"{nd['type']} {nd['dir']} @ {_f(nd['ref'])}; price must break {thr} first. "
                   f"Entry, stop, size and R are computed at the trigger — not now.")
     elif degenerate_stop or (not sizeable) or inval_breached or (not room_ok):
         verdict, state = "🔴 No Trade", "NO_TRADE"     # trigger completed but a post-trigger gate failed
+        reason_code = ("INVALIDATION_BREACHED" if inval_breached else "DEGENERATE_STOP" if degenerate_stop
+                       else "RISK_NOT_PERMITTED" if not sizeable else "INADEQUATE_ROOM")
         reason = next(f"{name} — {detail}" for name, ok, detail in gates
                       if ok is False and name not in ("stale data", "valid 5m location in context direction"))
+    elif gr.get("grade") not in ("A", "A+"):
+        # all mechanical gates pass, but only A/A+ are eligible this phase — a B setup is WATCH-ONLY
+        verdict, state, reason_code = "🟡 Watch", "WATCH", "B_WATCH_ONLY"
+        reason = (f"Grade {gr.get('grade') or '—'} — watch-only this phase ({gr.get('why')}). "
+                  f"Only A/A+ are eligible; not an order.")
     else:
-        verdict, state, reason = "🟢 Ready", "READY", f"Triggered plan at a valid location (route: {route})"
+        verdict, state, reason_code = "🟢 Ready", "READY", "READY_ORDER"
+        reason = (f"Setup READY (route: {route}); grade {gr.get('grade')}. "
+                  f"EXECUTION NOT CLEARED — verify news window + both accounts' remaining budget first.")
+
+    # detailed state per spec §5 (the UI may keep simpler labels; this exposes the full lifecycle position)
+    if state == "NO_TRADE":
+        detailed_state = "NO_TRADE" if reason_code in ("STALE_DATA", "NO_VALID_5M_LOCATION") else "NO_TRADE_POST_TRIGGER"
+    elif state == "WATCH":
+        detailed_state = "WATCH_B_SETUP" if reason_code == "B_WATCH_ONLY" else ("WATCH_TRIGGER" if loc_ok else "WATCH_LOCATION")
+    else:
+        detailed_state = "READY_ORDER"
+    # entry-type label: a completion/confirmation entry vs a prospective retest limit (spec §5)
+    entry_type = None
+    if triggered and entry is not None:
+        entry_type = {"kind": "prospective_limit_retest",
+                      "note": "limit at the broken 1m level; requires a FURTHER retest and may never fill — "
+                              "WAITING_FOR_FILL until filled; cancel on invalidation/too-far/TTL/session/news."}
 
     lines = _report_lines(verdict, state, reason, symbol, price, direction, gr, ctx, loc, ev, st, tr,
                           entry, stop, rs, tp1, tp2, best_R, effective_R, first_obst, stop_thesis, pending, fo,
                           gates, scan, threshold, trg, route, triggered, loc_audit)
-    return {"verdict": verdict, "state": state, "reason": reason, "symbol": symbol, "price": round(price, 2),
+    return {"verdict": verdict, "state": state, "detailed_state": detailed_state, "reason_code": reason_code,
+            "reason": reason, "symbol": symbol, "price": round(price, 2), "as_of": last_t,
             "direction": direction, "grade": gr.get("grade"), "context": ctx, "location": loc,
-            "location_audit": loc_audit,
+            "location_audit": loc_audit, "execution_cleared": execution_cleared, "entry_type": entry_type,
+            "counter_trend": counter_trend, "context_clear": context_clear,
             "liquidity_event": ev, "structure": st, "trigger": tr, "risk": rs, "conflict": conflict,
             "triggered": triggered, "trigger_sequence": trg, "trigger_threshold": threshold, "route": route,
+            "targets_ordered": targets_ordered,
             "pending": pending, "stop_thesis": stop_thesis, "degenerate_stop": degenerate_stop,
             "stop_floor": stop_floor, "vol_unit": vol5,
             "entry": entry, "stop": stop, "tp1": tp1, "tp2": tp2, "best_R": best_R,
             "first_obstacle": first_obst, "first_obstacle_detail": fo,
             "obstacle_R": obstacle_R, "effective_R": effective_R, "obstacle_scan": scan["rows"],
             "gates": [{"name": n, "ok": ok, "detail": d} for n, ok, d in gates],
-            "stale": stale, "age_min": age_min, "flags": pending,
+            "stale": stale, "age_min": age_min, "flags": pending, "config_version": CONFIG_VERSION,
             "conditional": state != "READY", "lines": lines,
-            "disclaimer": "Decision-support tool only — not advice, not a forecast, not a profit guarantee."}
+            "disclaimer": "Decision-support tool only — not advice, not a forecast, not a profit guarantee. "
+                          "READY = setup-ready; it is NOT an execution clearance (news + account state unverified)."}
 
 
 def _f(x):
@@ -804,13 +998,15 @@ def _report_lines(verdict, state, reason, sym, price, direction, gr, ctx, loc, e
         rows = (scan or {}).get("rows") if isinstance(scan, dict) else scan
         if rows:
             lines.append("Obstacle scan (post-trigger entry → target, nearest first):")
-            mark = {"active": "●", "weakened": "◐", "invalidated": "○"}
+            mark = {"ACTIVE": "●", "WEAKENED": "◐", "UNKNOWN": "◍", "TRIGGER_THRESHOLD": "△", "CLEARED": "○"}
             for r in rows[:8]:
                 m = mark.get(r["status"], "?")
                 z = f" [{r['zone']}]" if r.get("zone") else ""
                 tag = ""
-                if r["status"] == "invalidated":
+                if r["status"] == "CLEARED":
                     tag = "  ← EXCLUDED (accepted through)"
+                elif r["status"] == "TRIGGER_THRESHOLD":
+                    tag = "  ← trigger threshold (not an obstacle)"
                 elif first_obst is not None and r["price"] == first_obst:
                     tag = "  ← FIRST MEANINGFUL OBSTACLE"
                 elif not r.get("meaningful"):
@@ -842,5 +1038,11 @@ def _report_lines(verdict, state, reason, sym, price, direction, gr, ctx, loc, e
     # action per state with the SPECIFIC reason (never a lumped catch-all)
     tag = {"READY": "READY", "WATCH": "WATCH", "NO_TRADE": "NO TRADE"}.get(state, state)
     lines.append(f"Action: {tag} — {reason}.")
+    # EXECUTION + MANAGEMENT notes (spec §2/§8): this app does NOT monitor live positions or clear execution.
+    lines.append("Execution NOT cleared here: verify the news window (Asia/Jerusalem) and BOTH accounts' "
+                 "remaining PDLL budget before any order — those inputs are unavailable to this tool.")
+    lines.append("Management (human plan, not automated): no BE before 1R; BE at 1R only after opposing "
+                 "liquidity is taken or new structure+retest; trail only behind a CONFIRMED swing after 1.5R; "
+                 "never widen a stop, add to a loser, or chase $150.")
     lines.append("Tool only — not advice, not a forecast, not a profit guarantee.")
     return lines

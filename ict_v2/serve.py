@@ -412,6 +412,14 @@ def _make_handler(svc: V2Service):
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 self.wfile.write(body)
+            elif p == "/rules":
+                from ict_v2 import analyst as AN
+                body = json.dumps(AN.rule_inventory(), default=str).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
             elif p == "/symbols":
                 body = json.dumps(svc.symbols(), default=str).encode()
                 self.send_response(200)

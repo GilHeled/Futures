@@ -112,7 +112,7 @@ function renderAnalyst(){
   // context
   const c=a.context||{};
   h+=HH('Context');
-  h+=row('30m bias', (c.bias30||'—')+(c.impulse?(' · '+esc(c.impulse)):''));
+  h+=row('30m bias', (c.bias30||'—')+' <span style="color:var(--dim)">scenario ('+esc(c.impulse||'—')+') — new leg unconfirmed</span>');
   h+=row('15m obst.', ms(c.obstacle15));
   h+=row('BSL ↑', '<span class="num">'+arr(c.external_bsl)+'</span>');
   h+=row('SSL ↓', '<span class="num">'+arr(c.external_ssl)+'</span>');
@@ -120,7 +120,7 @@ function renderAnalyst(){
   // setup
   const loc=a.location||{}, nd=loc.nearest, ev=(a.liquidity_event||{}).sweep, st=a.structure||{}, tr=a.trigger||{};
   h+=HH('Setup · 5m / 1m');
-  h+=row('Location', nd?(nd.type+' '+nd.dir+' @ '+F(nd.ref)+' <span style="color:var(--dim)">(conf '+loc.confluence+')</span>'):'—');
+  h+=row('Location', nd?(nd.type+' '+nd.dir+' @ '+F(nd.ref)+' <span style="color:var(--dim)">('+(nd.valid?(nd.status||'active')+'/valid':'candidate')+', conf '+loc.confluence+(loc.confluence<1?' — no stacked confluence':'')+')</span>'):'—');
   h+=row('Liquidity', ev?(ev.side+' sweep '+F(ev.price)+' <span style="color:var(--dim)">('+(ev.mitigated?'mitigated':'open')+')</span>'):'no recent sweep');
   h+=row('Structure', ms(st.m5)+' <span style="color:var(--dim)">5m</span> · '+ms(st.m1)+' <span style="color:var(--dim)">1m</span>');
   h+=row('1m trig', tr.completed?'<span style="color:var(--green)">completed in direction</span> <span style="color:var(--dim)">— verify retest</span>':'<span style="color:var(--amber)">pending</span> <span style="color:var(--dim)">(1m not shifted our way)</span>');
@@ -134,10 +134,23 @@ function renderAnalyst(){
     h+=row('Stop', '<span class="num">'+F(a.stop)+'</span> <span style="color:var(--dim)">('+(rs.stop_pts!=null?rs.stop_pts+'pt':'—')+')</span>');
     h+=row('Size', (rs.contracts||0)+' MNQ · <span class="num">$'+(rs.risk_per_account!=null?rs.risk_per_account:'—')+'</span>/acct');
     const rl=rs.R_to_targets||[];
+    if(a.first_obstacle!=null){const orr=a.obstacle_R, oc=(orr!=null&&orr<2)?'var(--amber)':'var(--green)';
+      const fd=a.first_obstacle_detail||{};
+      h+=row('1st obst.','<span class="num" style="color:'+oc+'">'+F(a.first_obstacle)+'</span> <span style="color:var(--dim)">'+esc((fd.tf||'')+' '+(fd.kind||'')+(fd.status?' · '+fd.status:''))+'</span>'+(orr!=null?' <span style="color:'+oc+'">('+orr+'R)</span>':'')+((orr!=null&&orr<2)?' <span style="color:var(--amber)">— &lt;2R: not A; needs an accepted break</span>':''));}
+    // ordered obstacle scan (nearest first) with per-level status + why excluded
+    const scan=a.obstacle_scan||[]; const smk={active:'●',weakened:'◐',invalidated:'○'};
+    const scl={active:'var(--green)',weakened:'var(--amber)',invalidated:'var(--dim)'};
+    if(scan.length){h+='<div style="font-size:10px;margin:4px 0 2px;color:var(--muted)">Obstacle scan · entry→target (nearest first)</div>';
+      scan.slice(0,6).forEach(r=>{const isF=(r.price===a.first_obstacle);
+        h+='<div style="font-size:10.5px;line-height:1.55;color:'+(scl[r.status]||'var(--text)')+'">'+(smk[r.status]||'?')+' <span class="num">'+F(r.price)+'</span> · '+esc(r.tf+' '+r.kind)+' · '+esc(r.status)+' · '+r.R+'R'+(isF?' <span style="color:var(--amber)">← first active</span>':(r.status==='invalidated'?' <span style="color:var(--dim)">← excluded (accepted through)</span>':''))+'</div>';});}
     h+=row('TP1','<span class="num">'+F(a.tp1)+'</span>'+(rl[0]!=null?' <span style="color:var(--green)">('+rl[0]+'R)</span>':''));
     h+=row('TP2','<span class="num">'+F(a.tp2)+'</span>'+(rl[1]!=null?' <span style="color:var(--green)">('+rl[1]+'R)</span>':''));
     if(rs.available===false&&rs.reason)h+='<div style="color:var(--amber);font-size:11px;margin-top:3px">⚠ '+esc(rs.reason)+'</div>';
   }else{h+=row('Plan','no valid location in context direction');}
+  // gates — each reported separately (staleness never hides the rest)
+  const gates=a.gates||[];
+  if(gates.length){h+=HH('Gates');
+    gates.forEach(g=>{h+='<div style="font-size:11px;line-height:1.5;color:'+(g.ok?'var(--green)':'var(--red)')+'">'+(g.ok?'✓':'✗')+' <span style="color:var(--text)">'+esc(g.name)+'</span> <span style="color:var(--dim)">'+esc(g.detail)+'</span></div>';});}
   // action + disclaimer
   const act=(a.lines||[]).find(l=>String(l).indexOf('Action:')===0);
   if(act)h+='<div style="margin-top:9px;font-size:12px;font-weight:600;color:'+col+'">'+esc(act)+'</div>';

@@ -123,12 +123,23 @@ function renderAnalyst(){
   h+=row('Location', nd?(nd.type+' '+nd.dir+' @ '+F(nd.ref)+' <span style="color:var(--dim)">('+(nd.valid?(nd.status||'active')+'/valid':'candidate')+', conf '+loc.confluence+(loc.confluence<1?' — no stacked confluence':'')+')</span>'):'—');
   h+=row('Liquidity', ev?(ev.side+' sweep '+F(ev.price)+' <span style="color:var(--dim)">('+(ev.mitigated?'mitigated':'open')+')</span>'):'no recent sweep');
   h+=row('Structure', ms(st.m5)+' <span style="color:var(--dim)">5m</span> · '+ms(st.m1)+' <span style="color:var(--dim)">1m</span>');
-  h+=row('1m trig', tr.completed?'<span style="color:var(--green)">completed in direction</span> <span style="color:var(--dim)">— verify retest</span>':'<span style="color:var(--amber)">pending</span> <span style="color:var(--dim)">(1m not shifted our way)</span>');
+  const seq=a.trigger_sequence||{}, thr=a.trigger_threshold||null, triggered=!!a.triggered;
+  if(triggered){
+    h+=row('1m trigger','<span style="color:var(--green)">COMPLETED</span> <span style="color:var(--dim)">via '+esc(a.route||'')+'</span>');
+    h+=row('sequence','<span class="num">'+F(seq.break&&seq.break.level)+'</span> break → <span class="num">'+F(seq.retest&&seq.retest.level)+'</span> retest → <span class="num">'+F(seq.second_break&&seq.second_break.level)+'</span> 2nd break');
+  }else{
+    h+=row('1m trigger','<span style="color:var(--amber)">PENDING</span>'+(thr?' <span style="color:var(--dim)">— must break </span><span class="num">'+F(thr.level)+'</span> <span style="color:var(--dim)">first (trigger threshold, not a target obstacle)</span>':''));
+  }
   // plan
   const rs=a.risk||{};
   const ready=a.state==='READY';
-  h+=HH(ready?'Plan · READY':'Plan · pending trigger (provisional)');
-  if(!ready)h+='<div style="color:var(--amber);font-size:10.5px;margin:2px 0 4px">not executable yet — finalizes only when the trigger completes</div>';
+  if(!triggered){
+    h+=HH('Plan · pre-trigger (deferred)');
+    h+='<div style="color:var(--amber);font-size:10.5px;margin:2px 0 4px">Armed — entry, stop, size, first obstacle and R are computed on the completed break→retest→second-break, from that actual entry. No provisional levels are carried forward.</div>';
+    if(thr)h+=row('Threshold','<span class="num">'+F(thr.level)+'</span> <span style="color:var(--dim)">('+esc(thr.must||'')+')</span>');
+  } else {
+  h+=HH(ready?'Plan · READY (post-trigger)':'Plan · post-trigger');
+  if(!ready)h+='<div style="color:var(--amber);font-size:10.5px;margin:2px 0 4px">triggered, but a gate below is unmet — not executable</div>';
   if(a.entry!=null){
     h+=row('Entry', '<span class="num">'+F(a.entry)+'</span>');
     h+=row('Stop', '<span class="num">'+F(a.stop)+'</span> <span style="color:var(--dim)">('+(rs.stop_pts!=null?rs.stop_pts+'pt':'—')+')</span>');
@@ -140,17 +151,20 @@ function renderAnalyst(){
     // ordered obstacle scan (nearest first) with per-level status + why excluded
     const scan=a.obstacle_scan||[]; const smk={active:'●',weakened:'◐',invalidated:'○'};
     const scl={active:'var(--green)',weakened:'var(--amber)',invalidated:'var(--dim)'};
-    if(scan.length){h+='<div style="font-size:10px;margin:4px 0 2px;color:var(--muted)">Obstacle scan · entry→target (nearest first)</div>';
+    if(scan.length){h+='<div style="font-size:10px;margin:4px 0 2px;color:var(--muted)">Obstacle scan · post-trigger entry→target (nearest first)</div>';
       scan.slice(0,6).forEach(r=>{const isF=(r.price===a.first_obstacle);
-        h+='<div style="font-size:10.5px;line-height:1.55;color:'+(scl[r.status]||'var(--text)')+'">'+(smk[r.status]||'?')+' <span class="num">'+F(r.price)+'</span> · '+esc(r.tf+' '+r.kind)+' · '+esc(r.status)+' · '+r.R+'R'+(isF?' <span style="color:var(--amber)">← first active</span>':(r.status==='invalidated'?' <span style="color:var(--dim)">← excluded (accepted through)</span>':''))+'</div>';});}
+        const tag=isF?' <span style="color:var(--amber)">← first meaningful</span>':(r.status==='invalidated'?' <span style="color:var(--dim)">← excluded</span>':(r.meaningful===false?' <span style="color:var(--dim)">(minor 1m)</span>':''));
+        h+='<div style="font-size:10.5px;line-height:1.55;color:'+(scl[r.status]||'var(--text)')+'">'+(smk[r.status]||'?')+' <span class="num">'+F(r.price)+'</span> · '+esc(r.tf+' '+r.kind)+' · '+esc(r.status)+' · '+r.R+'R'+tag+'</div>';});}
     h+=row('TP1','<span class="num">'+F(a.tp1)+'</span>'+(rl[0]!=null?' <span style="color:var(--green)">('+rl[0]+'R)</span>':''));
     h+=row('TP2','<span class="num">'+F(a.tp2)+'</span>'+(rl[1]!=null?' <span style="color:var(--green)">('+rl[1]+'R)</span>':''));
     if(rs.available===false&&rs.reason)h+='<div style="color:var(--amber);font-size:11px;margin-top:3px">⚠ '+esc(rs.reason)+'</div>';
-  }else{h+=row('Plan','no valid location in context direction');}
-  // gates — each reported separately (staleness never hides the rest)
+  }else{h+=row('Plan','no executable plan');}
+  }
+  // gates — each reported separately (staleness never hides the rest); ok can be true/false/null(deferred)
   const gates=a.gates||[];
+  const gc=v=>v===true?'var(--green)':(v===false?'var(--red)':'var(--dim)'), gm=v=>v===true?'✓':(v===false?'✗':'◔');
   if(gates.length){h+=HH('Gates');
-    gates.forEach(g=>{h+='<div style="font-size:11px;line-height:1.5;color:'+(g.ok?'var(--green)':'var(--red)')+'">'+(g.ok?'✓':'✗')+' <span style="color:var(--text)">'+esc(g.name)+'</span> <span style="color:var(--dim)">'+esc(g.detail)+'</span></div>';});}
+    gates.forEach(g=>{h+='<div style="font-size:11px;line-height:1.5;color:'+gc(g.ok)+'">'+gm(g.ok)+' <span style="color:var(--text)">'+esc(g.name)+'</span> <span style="color:var(--dim)">'+esc(g.detail)+'</span></div>';});}
   // action + disclaimer
   const act=(a.lines||[]).find(l=>String(l).indexOf('Action:')===0);
   if(act)h+='<div style="margin-top:9px;font-size:12px;font-weight:600;color:'+col+'">'+esc(act)+'</div>';

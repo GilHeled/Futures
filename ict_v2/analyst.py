@@ -173,6 +173,74 @@ def trigger(b1, trade_dir=None):
             "note": "1m must be shifting in the trade direction; retest is discretionary (verify on chart)"}
 
 
+def trigger_threshold(b1, direction, price):
+    """PRE-TRIGGER: the 1m level the trade must BREAK to arm — a trigger threshold, NOT a target obstacle.
+    For a short it is the nearest 1m swing low below price (the low a bearish break must close under); for
+    a long, the nearest swing high above. This is the level the trigger consumes, so it is deliberately
+    kept OUT of the target-obstacle scan until the trigger completes."""
+    if not direction or not b1:
+        return None
+    pivs = MS.detect_pivots(b1, pivot_strength=2)
+    if direction == "SHORT":
+        lows = [p for p in pivs if p["kind"] == "low" and p["price"] < price]
+        p = max(lows, key=lambda x: x["price"]) if lows else None
+    else:
+        highs = [p for p in pivs if p["kind"] == "high" and p["price"] > price]
+        p = min(highs, key=lambda x: x["price"]) if highs else None
+    if not p:
+        return None
+    return {"level": p["price"], "time": p.get("time"),
+            "must": ("close below to break" if direction == "SHORT" else "close above to break")}
+
+
+TRIGGER_RECENCY = 8   # the second break must be within the last N 1m bars to count as a LIVE trigger.
+
+
+def trigger_sequence(b1, direction, buffer=2.0, recency=TRIGGER_RECENCY):
+    """POST-TRIGGER: identify a COMPLETED, RECENT break → retest → second-break on finished 1m candles and
+    build the plan FROM that event (never a pre-trigger provisional level):
+      break         — an in-direction 1m structural break (MSS/BOS)
+      retest        — the pullback pivot just before the second break (the lower-high for a short /
+                      higher-low for a long)
+      second break  — a fresh in-direction break AFTER the retest (continuation confirmation)
+    `completed` requires the second break to be within the last `recency` bars — an old sequence deep in
+    the window is NOT a live trigger (that state is pre-trigger / setup passed). Entry = the broken swing
+    level (a limit on the retest of the broken structure); invalidation = BEYOND the retest extreme
+    (a real structural stop spanning the retest leg). All from completed candles only."""
+    want = {"LONG": "bull", "SHORT": "bear"}.get(direction)
+    out = {"completed": False, "break": None, "retest": None, "second_break": None,
+           "entry": None, "stop": None, "thesis": None}
+    if not want or not b1:
+        return out
+    n = len(b1)
+    ev = MS.detect_market_structure(b1, pivot_strength=2)
+    direv = [e for e in ev if e.direction == want]
+    pivs = MS.detect_pivots(b1, pivot_strength=2)
+    if len(direv) < 2:
+        return out
+    short = direction == "SHORT"
+    for i in range(len(direv) - 1, 0, -1):
+        e2 = direv[i]
+        if e2.break_index < n - recency:                 # second break must be RECENT (a live trigger)
+            break
+        for j in range(i - 1, -1, -1):
+            e1 = direv[j]
+            win = [p for p in pivs
+                   if p["kind"] == ("high" if short else "low") and e1.break_index <= p["index"] <= e2.break_index]
+            if not win:
+                continue
+            retest = win[-1]                              # the pullback extreme JUST BEFORE the second break
+            entry = round(e2.level, 2)                    # sell/buy the retest of the broken swing level
+            stop = round(retest["price"] + buffer, 2) if short else round(retest["price"] - buffer, 2)
+            return {"completed": True,
+                    "break": {"kind": e1.kind, "level": round(e1.level, 2), "time": e1.break_time},
+                    "retest": {"level": round(retest["price"], 2), "time": retest.get("time")},
+                    "second_break": {"kind": e2.kind, "level": round(e2.level, 2), "time": e2.break_time},
+                    "entry": entry, "stop": stop,
+                    "thesis": "1m break→retest→second-break (stop beyond the retest lower-high/higher-low)"}
+    return out
+
+
 # ── invalidation / stop placement ────────────────────────────────────────────
 def stop_level(direction, nd, sweep, buffer=2.0):
     """Stop BEYOND the actual setup structure: the farther of {order-block boundary, swept liquidity}
@@ -283,15 +351,31 @@ def _acceptance(bars, idx, level, below):
     return ("active", "untested since formation", None, None)
 
 
+def _meaningful_obstacle(kind, tf):
+    """Which levels count as a HARD barrier that gates the A-room test. Active order blocks (any TF),
+    liquidity shelves (LRLR/HRLR/BSL/SSL pools) and HTF (5m/15m) swing structure are meaningful. A bare
+    1m swing low/high is MINOR — shown for context but never the gating obstacle (don't treat every tiny
+    1m swing as a target barrier)."""
+    k = kind.lower()
+    if "ob" in k:
+        return True
+    if "ssl" in k or "bsl" in k or "lrlr" in k or "hrlr" in k:
+        return True
+    if "swing" in k and tf in ("5m", "15m"):
+        return True
+    return False
+
+
 def obstacle_scan(series_by_tf, direction, entry, stop_pts):
     """Scan the reward path from the proposed entry outward and list EVERY opposing structure in order of
     encounter (nearest first), across 15m/5m/1m: active bullish/bearish OB boundaries, swing pivots, and
     LRLR/HRLR liquidity pools. Each row carries price, timeframe, why it opposes, its causal status
-    (active/weakened/invalidated) with completed-candle evidence + timestamp, and distance/R from entry.
+    (active/weakened/invalidated) with completed-candle evidence + timestamp, distance/R, and whether it
+    is a MEANINGFUL hard barrier (vs a minor 1m swing).
 
-    The FIRST row that is not `invalidated` is the first active obstacle — we never skip a nearer obstacle
-    to show a more attractive R at a farther one. Only the defined acceptance rule (`_acceptance`) may
-    exclude a level, and only using candles at/before the snapshot."""
+    The gating `first` is the first non-invalidated MEANINGFUL level — we never skip a nearer meaningful
+    obstacle for a better R, and we never let a minor 1m swing masquerade as the barrier. Only the defined
+    acceptance rule (`_acceptance`) excludes a level, using candles at/before the snapshot only."""
     if entry is None or not direction or not stop_pts:
         return {"rows": [], "first": None}
     short = direction == "SHORT"
@@ -305,6 +389,7 @@ def obstacle_scan(series_by_tf, direction, entry, stop_pts):
         status, ev, evf, evt = _acceptance(series_by_tf.get(tf) or [], idx, accept_level, below=short)
         rows.append({"tf": tf, "price": round(price, 2), "zone": zone, "kind": kind, "opposes": opposes,
                      "status": status, "evidence": ev, "ev_from": evf, "ev_to": evt,
+                     "meaningful": _meaningful_obstacle(kind, tf),
                      "dist_pts": round(abs(entry - price), 2), "R": round(abs(entry - price) / stop_pts, 2)})
 
     for tf in ("15m", "5m", "1m"):
@@ -343,7 +428,8 @@ def obstacle_scan(series_by_tf, direction, entry, stop_pts):
                 row["tf"] = cur["tf"]
                 best[k] = row
     merged = sorted(best.values(), key=(lambda x: -x["price"]) if short else (lambda x: x["price"]))
-    first = next((x for x in merged if x["status"] != "invalidated"), None)
+    # gating obstacle = first non-invalidated MEANINGFUL level (minor 1m swings are context, not barriers)
+    first = next((x for x in merged if x["status"] != "invalidated" and x["meaningful"]), None)
     return {"rows": merged, "first": first}
 
 
@@ -370,54 +456,67 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
     ev = liquidity_event(b5, price)
     st = structure(b5, b1)
 
-    # PROVISIONAL entry proposal from the nearest 5m location (never a live fill). Numbers are only
-    # presented as an executable plan in the READY state; in WATCH they are pending estimates.
-    vol5 = _vol_unit(b5) or 0.0              # median 5m bar range = volatility unit + min-stop floor
-    stop_floor = round(vol5 * 0.5, 2)        # a stop tighter than half a 5m bar is noise
-    buf = max(2.0, round(vol5 * 0.25, 2))    # volatility-aware buffer beyond the structure
-    entry = stop = tp1 = tp2 = None
+    # ── DIRECTION from the 5m location + 30m context (NO entry/stop yet — those are set at the trigger) ─
+    vol5 = _vol_unit(b5) or 0.0              # median 5m bar range = volatility unit
+    vol1 = _vol_unit(b1) or 0.0              # median 1m bar range — the floor for a 1m-entry stop
+    # the post-trigger entry is a 1m thesis, so its stop is floored by 1m (not 5m) volatility.
+    stop_floor = round((vol1 or vol5) * 0.5, 2)   # a stop tighter than half a 1m bar is noise
+    buf = max(2.0, round(vol1 * 0.25, 2)) if vol1 else max(2.0, round(vol5 * 0.25, 2))
     direction = None
-    stop_thesis = None
     sw = (ev or {}).get("sweep")
-    if loc["nearest"]:
-        nd = loc["nearest"]
+    nd = loc.get("nearest")
+    if nd:
         if nd["dir"] == "demand" and ctx["bias30"] in ("long", "neutral"):
             direction = "LONG"
-            entry = nd["ref"]; stop = stop_level("LONG", nd, sw, buffer=buf)
-            tp1 = ctx["external_bsl"][0] if ctx["external_bsl"] else None
-            tp2 = ctx["external_bsl"][1] if len(ctx["external_bsl"]) > 1 else None
         elif nd["dir"] == "supply" and ctx["bias30"] in ("short", "neutral"):
             direction = "SHORT"
-            entry = nd["ref"]; stop = stop_level("SHORT", nd, sw, buffer=buf)
+
+    tr = trigger(b1, direction)                          # simple 1m shift (for the structure panel)
+    threshold = trigger_threshold(b1, direction, price)  # PRE-trigger: the level that must break to arm
+    trg = trigger_sequence(b1, direction, buffer=buf)    # POST-trigger: break→retest→second-break plan
+    triggered = bool(trg["completed"])
+
+    # ── TWO-PHASE LIFECYCLE ───────────────────────────────────────────────────
+    # PRE-trigger: describe the setup + the trigger threshold; publish NO executable entry/stop/R.
+    # POST-trigger: build the ENTIRE plan FROM the completed break→retest→second-break, then run the
+    # obstacle + A-room test from that ACTUAL entry (never carry a provisional pre-trigger level forward).
+    entry = stop = tp1 = tp2 = None
+    stop_thesis = None
+    scan = {"rows": [], "first": None}
+    fo = None
+    first_obst = obstacle_R = effective_R = best_R = sp = None
+    rs = risk_size(None, None, None)
+    degenerate_stop = False
+    if triggered and direction:
+        entry = trg["entry"]; stop = trg["stop"]; stop_thesis = trg["thesis"]
+        if direction == "SHORT":
             tp1 = ctx["external_ssl"][0] if ctx["external_ssl"] else None
             tp2 = ctx["external_ssl"][1] if len(ctx["external_ssl"]) > 1 else None
-        if direction:
-            # thesis is the 5m SETUP: invalidation beyond the 5m OB far-edge + swept liquidity
-            stop_thesis = "5m-setup (beyond OB far-edge / swept liquidity)"
-            # TICK-VALIDATE: every order price must be a 0.25 multiple. Stop rounds AWAY from entry so
-            # it stays beyond invalidation; targets round TOWARD entry so R is never overstated.
-            entry = _tick(entry, "near")
-            if direction == "SHORT":
-                stop = _tick(stop, "up"); tp1 = _tick(tp1, "up"); tp2 = _tick(tp2, "up")
-            else:
-                stop = _tick(stop, "down"); tp1 = _tick(tp1, "down"); tp2 = _tick(tp2, "down")
+        else:
+            tp1 = ctx["external_bsl"][0] if ctx["external_bsl"] else None
+            tp2 = ctx["external_bsl"][1] if len(ctx["external_bsl"]) > 1 else None
+        entry = _tick(entry, "near")
+        if direction == "SHORT":
+            stop = _tick(stop, "up"); tp1 = _tick(tp1, "up"); tp2 = _tick(tp2, "up")
+        else:
+            stop = _tick(stop, "down"); tp1 = _tick(tp1, "down"); tp2 = _tick(tp2, "down")
+        rs = risk_size(entry, stop, [tp1, tp2])
+        best_R = max(rs.get("R_to_targets") or [0]) if rs.get("R_to_targets") else None
+        sp = rs.get("stop_pts")
+        degenerate_stop = bool(sp is not None and stop_floor and sp < stop_floor)
+        scan = obstacle_scan(series_by_tf, direction, entry, sp)   # from the ACTUAL post-trigger entry
+        fo = scan["first"]
+        first_obst = fo["price"] if fo else None
+        obstacle_R = fo["R"] if fo else None
+        effective_R = obstacle_R if obstacle_R is not None else best_R
 
-    tr = trigger(b1, direction)                          # direction-aware trigger
-    rs = risk_size(entry, stop, [tp1, tp2])
-    best_R = max(rs.get("R_to_targets") or [0]) if rs.get("R_to_targets") else None
-    sp = rs.get("stop_pts")
-    degenerate_stop = bool(sp is not None and stop_floor and sp < stop_floor)
+    # route that qualified the trigger — either a confirmed sweep+reclaim OR a structural rejection.
+    route = ("sweep+reclaim" if (sw and sw.get("side") == ("BSL" if direction == "SHORT" else "SSL")
+                                 and sw.get("mitigated"))
+             else ("rejection+displacement (structural)" if triggered else None))
 
-    # FIRST ACTIVE obstacle on the reward path (15m/5m/1m), by order of encounter — never skip a nearer
-    # obstacle to show a better R at a farther one. Only the defined causal acceptance rule excludes one.
-    scan = obstacle_scan(series_by_tf, direction, entry, sp)
-    fo = scan["first"]
-    first_obst = fo["price"] if fo else None
-    obstacle_R = fo["R"] if fo else None
-    effective_R = obstacle_R if obstacle_R is not None else best_R
-
-    gr = grade(loc, sw is not None and sw.get("side") == ("BSL" if direction == "SHORT" else "SSL"),
-               tr["completed"], effective_R)
+    gr = (grade(loc, route == "sweep+reclaim", True, effective_R) if triggered
+          else {"grade": None, "trigger_completed": False, "why": "pre-trigger — no executable setup yet"})
 
     # data freshness — never issue a live verdict on stale bars
     last_t = (b1[-1].get("t") if b1 else None) or (b5[-1].get("t") if b5 else None)
@@ -437,58 +536,69 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
     m1 = st.get("m1")
     conflict = bool(direction and m1 and (
         (direction == "LONG" and m1["dir"] == "bear") or (direction == "SHORT" and m1["dir"] == "bull")))
-    sweep_side_ok = bool(sw and sw.get("side") == ("BSL" if direction == "SHORT" else "SSL"))
-    sweep_reclaimed = bool(sweep_side_ok and sw and sw.get("mitigated"))
-    trigger_ok = bool(tr["completed"])
     conf = loc.get("confluence", 0)
+    alt_locs = max(0, (loc.get("count") or 0) - 1)          # other 5m locations available besides this one
     # location confidence: a standalone conf-0 OB is a CANDIDATE, not confirmed 5m confluence. A timely
-    # in-direction 1m trigger AT the location resolves it; otherwise it stays unresolved.
-    loc_conf_ok = bool(loc.get("nearest") and (conf >= 1 or trigger_ok))
-    room_ok = bool(effective_R is not None and effective_R >= MIN_R_A)
-    loc_ok = bool(loc["nearest"] and direction and rs.get("available"))
+    # in-direction trigger at the location resolves it; otherwise the engine notes if another 5m location exists.
+    loc_conf_ok = bool(nd and (conf >= 1 or triggered))
+    room_ok = bool(triggered and effective_R is not None and effective_R >= MIN_R_A)
+    sizeable = bool(triggered and rs.get("available"))
+    loc_ok = bool(nd and direction)                         # a valid 5m location in the context direction
 
-    # ── GATES — each computed and reported SEPARATELY (staleness never hides the others) ──────
+    # ── GATES — reported SEPARATELY; ok=None means "n/a until the trigger" (never hides a real failure) ──
+    thr = f"{_f(threshold['level'])}" if threshold else "—"
     gates = [
         ("stale data", not stale,
          (f"last bar {age_min} min old (run run-live.sh in market hours)" if stale else f"fresh ({age_min} min)")),
-        ("valid location + sizeable stop", loc_ok,
-         "no location in the context direction / stop not sizeable" if not loc_ok else "present"),
-        ("structural stop ≥ volatility floor", not degenerate_stop,
-         (f"stop {sp}pt < 5m floor {stop_floor}pt" if degenerate_stop else "ok")),
-        ("location confidence (confirmed 5m confluence / timely 1m trigger)", loc_conf_ok,
-         (f"standalone OB conf {conf}, no confirming trigger — CANDIDATE, unresolved" if not loc_conf_ok else "resolved")),
-        ("liquidity raid completed (correct side + reclaimed)", sweep_reclaimed,
-         ("no raid on the correct side yet" if not sweep_side_ok else
-          (f"sweep {sw['price']} OPEN — not reclaimed" if sw and not sw.get("mitigated") else "reclaimed"))),
-        ("1m trigger completed in direction", trigger_ok,
-         "break→retest→second-break not completed our way" if not trigger_ok else "completed"),
+        ("valid 5m location in context direction", loc_ok,
+         "no 5m location in the context direction" if not loc_ok else
+         f"present ({nd['type']} {nd['dir']}{'' if alt_locs == 0 else f'; {alt_locs} other 5m location(s)'})"),
+        ("location confidence (5m confluence / timely trigger)", loc_conf_ok,
+         (f"standalone conf {conf} — CANDIDATE" + (f"; {alt_locs} other 5m location(s) exist" if alt_locs else "; no alternative 5m location")
+          if not loc_conf_ok else ("confluence " + str(conf) if conf >= 1 else "resolved by timely trigger"))),
         ("1m not opposing the side", not conflict,
          "1m structure still opposes (developing reversal)" if conflict else "aligned"),
-        (f"≥ {MIN_R_A}R room before first active obstacle", room_ok,
-         (f"only {effective_R}R before {_f(first_obst)} ({fo['kind']} {fo['tf']})" if (fo and not room_ok)
-          else (f"{effective_R}R clear to target" if room_ok else "room unverified — no obstacle/target resolved"))),
+        ("trigger route qualified (sweep+reclaim OR rejection+displacement)", triggered,
+         (f"{route}: break {trg['break']['level']} → retest {trg['retest']['level']} → second break {trg['second_break']['level']}"
+          if triggered else
+          f"PENDING — no completed break→retest→second-break yet; must break {thr} first" +
+          (f" (sweep {sw['price']} OPEN — does not by itself qualify or block)" if (sw and not sw.get('mitigated')) else ""))),
+        ("structural stop ≥ volatility floor", (None if not triggered else (not degenerate_stop)),
+         ("deferred — set at trigger" if not triggered else (f"stop {sp}pt < 5m floor {stop_floor}pt" if degenerate_stop else "ok"))),
+        ("permitted risk / sizeable stop", (None if not triggered else sizeable),
+         ("deferred — set at trigger" if not triggered else (rs.get("reason") if not sizeable else f"{rs.get('contracts')} MNQ, ${rs.get('risk_per_account')}/acct"))),
+        (f"≥ {MIN_R_A}R room before first meaningful obstacle", (None if not triggered else room_ok),
+         ("deferred — measured from the post-trigger entry" if not triggered else
+          (f"only {effective_R}R before {_f(first_obst)} ({fo['kind']} {fo['tf']})" if (fo and not room_ok)
+           else (f"{effective_R}R clear to target" if room_ok else "room unverified")))),
     ]
 
     # ── STATE MACHINE: NO TRADE / WATCH / READY ──────────────────────────────
-    hard = stale or (not loc_ok) or degenerate_stop         # cannot even be a WATCH candidate
-    soft_ok = loc_conf_ok and sweep_reclaimed and trigger_ok and (not conflict) and room_ok
-    pending = [f"{name}: {detail}" for name, ok, detail in gates if not ok]
+    hard = stale or (not loc_ok) or (triggered and (degenerate_stop or not sizeable))
+    ready = bool(triggered and loc_ok and loc_conf_ok and (not conflict) and room_ok and sizeable and not stale)
+    pending = [f"{name}: {detail}" for name, ok, detail in gates if ok is False]
     if hard:
         verdict, state = "🔴 No Trade", "NO_TRADE"
-        reason = next(f"{name} — {detail}" for name, ok, detail in gates if not ok)
-    elif soft_ok:
-        verdict, state, reason = "🟢 Ready", "READY", "All gates pass at a valid location"
+        reason = next(f"{name} — {detail}" for name, ok, detail in gates if ok is False)
+    elif ready:
+        verdict, state, reason = "🟢 Ready", "READY", f"Triggered plan at a valid location (route: {route})"
+    elif not triggered:
+        verdict, state = "🟡 Watch", "WATCH"
+        reason = (f"Armed — awaiting the trigger (sweep+reclaim OR rejection+displacement) at 5m "
+                  f"{nd['type']} {nd['dir']} @ {_f(nd['ref'])}; price must break {thr} first. "
+                  f"Entry, stop, size and R are computed at the trigger — not now.")
     else:
         verdict, state, reason = "🟡 Watch", "WATCH", next(
             f"{name} — {detail}" for name, ok, detail in gates
-            if not ok and name not in ("stale data", "valid location + sizeable stop", "structural stop ≥ volatility floor"))
+            if ok is False and name not in ("stale data", "valid 5m location in context direction"))
 
     lines = _report_lines(verdict, state, reason, symbol, price, direction, gr, ctx, loc, ev, st, tr,
                           entry, stop, rs, tp1, tp2, best_R, effective_R, first_obst, stop_thesis, pending, fo,
-                          gates, scan)
+                          gates, scan, threshold, trg, route, triggered)
     return {"verdict": verdict, "state": state, "reason": reason, "symbol": symbol, "price": round(price, 2),
             "direction": direction, "grade": gr.get("grade"), "context": ctx, "location": loc,
             "liquidity_event": ev, "structure": st, "trigger": tr, "risk": rs, "conflict": conflict,
+            "triggered": triggered, "trigger_sequence": trg, "trigger_threshold": threshold, "route": route,
             "pending": pending, "stop_thesis": stop_thesis, "degenerate_stop": degenerate_stop,
             "stop_floor": stop_floor, "vol_unit": vol5,
             "entry": entry, "stop": stop, "tp1": tp1, "tp2": tp2, "best_R": best_R,
@@ -516,7 +626,7 @@ def _evt(t):
 
 def _report_lines(verdict, state, reason, sym, price, direction, gr, ctx, loc, ev, st, tr, entry, stop, rs,
                   tp1, tp2, best_R, effective_R, first_obst, stop_thesis, pending=None, fo=None,
-                  gates=None, scan=None):
+                  gates=None, scan=None, threshold=None, trg=None, route=None, triggered=False):
     g = gr.get("grade") or ("pending" if state == "WATCH" else "—")
     nd = loc.get("nearest")
     conf = loc.get("confluence", 0)
@@ -534,49 +644,78 @@ def _report_lines(verdict, state, reason, sym, price, direction, gr, ctx, loc, e
     sweep = ev.get("sweep")
     swdesc = "no recent sweep" if not sweep else f"sweep {sweep['side']} @ {_f(sweep['price'])} ({'reclaimed' if sweep['mitigated'] else 'OPEN — pending'})"
     m5 = st.get("m5"); m1 = st.get("m1")
-    trg = "completed in trade direction" if tr.get("completed") else "PENDING (1m not shifted our way)"
+    # 1m TRIGGER SEQUENCE status (break→retest→second break), not a mere shift
+    if triggered and trg:
+        seqdesc = (f"COMPLETED via {route} — break {_f(trg['break']['level'])} → retest {_f(trg['retest']['level'])} "
+                   f"→ second break {_f(trg['second_break']['level'])}")
+    elif threshold:
+        seqdesc = f"PENDING — must break {_f(threshold['level'])} (trigger threshold, NOT a target obstacle), then retest + second break"
+    else:
+        seqdesc = "PENDING — no in-direction 1m break yet"
     lines = [
         verdict,
         f"{sym} @ {_f(price)} · dir {direction or '—'} · grade {g} · (heuristic; verify on chart)",
         f"30m context: {ctx['bias30']} SCENARIO ({ctx.get('impulse') or '—'}; new leg NOT yet confirmed) · 15m obstacle: {ctx.get('obstacle15') or '—'}",
         f"External liquidity: BSL {ctx['external_bsl'] or '—'} · SSL {ctx['external_ssl'] or '—'} · EQH {ctx['eqh'] or '—'} EQL {ctx['eql'] or '—'}",
         f"5m location: {locdesc} · liquidity event: {swdesc}",
-        f"Structure 5m: {m5 or '—'} · 1m: {m1 or '—'} · 1m trigger: {trg}",
+        f"Structure 5m: {m5 or '—'} · 1m: {m1 or '—'}",
+        f"1m trigger: {seqdesc}",
     ]
     if state != "READY" and reason:
         lines.insert(2, "⚠ " + reason)
-    plan_label = "PLAN" if state == "READY" else "Plan (pending trigger — provisional)"
+    if not triggered:
+        # PRE-TRIGGER: no executable plan. Describe the setup + the threshold; defer entry/stop/size/R.
+        if threshold:
+            lines.append(f"Trigger threshold (must break to arm): {_f(threshold['level'])} — {threshold.get('must','')}. "
+                         f"This is a TRIGGER level, not the trade's first target obstacle.")
+        lines.append("Plan: DEFERRED — entry, stop, size, first obstacle and R are computed on the completed "
+                     "break→retest→second-break, from that actual entry (no provisional levels carried forward).")
+        tag = {"READY": "READY", "WATCH": "WATCH", "NO_TRADE": "NO TRADE"}.get(state, state)
+        if gates:
+            lines.append("Gates:")
+            for name, ok, detail in gates:
+                lines.append(f"  {'✓' if ok else ('✗' if ok is False else '◔')} {name}: {detail}")
+        lines.append(f"Action: {tag} — {reason}")
+        lines.append("Tool only — not advice, not a forecast, not a profit guarantee.")
+        return lines
+    plan_label = "PLAN" if state == "READY" else "Plan (post-trigger)"
     if entry is not None:
         contracts = rs.get("contracts", 0)
-        lines.append(f"{plan_label}: entry ~{_f(entry)} · stop ~{_f(stop)} · {rs.get('stop_pts','—')}pt · "
+        lines.append(f"{plan_label}: entry ~{_f(entry)} (retest of broken 1m level) · stop ~{_f(stop)} "
+                     f"(beyond retest {_f((trg or {}).get('retest',{}).get('level'))}) · {rs.get('stop_pts','—')}pt · "
                      f"{contracts} MNQ · risk ${rs.get('risk_per_account','—')}/account")
         if stop_thesis:
             lines.append(f"Invalidation thesis: {stop_thesis}")
         # ── ORDERED OBSTACLE TABLE (nearest first) — every candidate, its causal status + evidence ──
         rows = (scan or {}).get("rows") if isinstance(scan, dict) else scan
         if rows:
-            lines.append("Obstacle scan (entry → target, nearest first):")
+            lines.append("Obstacle scan (post-trigger entry → target, nearest first):")
             mark = {"active": "●", "weakened": "◐", "invalidated": "○"}
             for r in rows[:8]:
                 m = mark.get(r["status"], "?")
                 z = f" [{r['zone']}]" if r.get("zone") else ""
-                excl = "  ← EXCLUDED (accepted through)" if r["status"] == "invalidated" else \
-                       ("  ← FIRST ACTIVE OBSTACLE" if first_obst is not None and r["price"] == first_obst else "")
+                tag = ""
+                if r["status"] == "invalidated":
+                    tag = "  ← EXCLUDED (accepted through)"
+                elif first_obst is not None and r["price"] == first_obst:
+                    tag = "  ← FIRST MEANINGFUL OBSTACLE"
+                elif not r.get("meaningful"):
+                    tag = "  (minor 1m — not a hard barrier)"
                 lines.append(f"  {m} {_f(r['price'])}{z} · {r['tf']} {r['kind']} · {r['status']} "
                              f"({r['evidence']}{'' if not r['ev_from'] else ' @ ' + _evt(r['ev_from'])}) · "
-                             f"{r['R']}R{excl}")
+                             f"{r['R']}R{tag}")
         if fo:
             blocks = effective_R is not None and effective_R < MIN_R_A
             verd = (f"BLOCKS the A-setup — only {effective_R}R before it (< {MIN_R_A}R); B is not executable this phase"
                     if blocks else f"clears the ≥{MIN_R_A}R bar — {effective_R}R before it")
-            lines.append(f"First active obstacle: {_f(first_obst)} ({fo['tf']} {fo['kind']}, {fo['status']}) · {verd}")
+            lines.append(f"First meaningful obstacle: {_f(first_obst)} ({fo['tf']} {fo['kind']}, {fo['status']}) · {verd}")
             if blocks:
                 lines.append("  Advance ONLY on an OBSERVED close-through + acceptance below it, THEN re-assess a "
                              "new entry with fresh stop/size/targets/R. A future break never qualifies this entry.")
         else:
-            lines.append(f"First active obstacle: none before target — {effective_R}R clear room to TP1")
+            lines.append(f"First meaningful obstacle: none before target — {effective_R}R clear room to TP1")
         lines.append(f"TP1 {_f(tp1)} · TP2 {_f(tp2)} · R-to-target {rs.get('R_to_targets') or '—'} "
-                     f"(PROVISIONAL — valid only after an actual 1m trigger; unblocked only past the obstacle)")
+                     f"(unblocked only past the first meaningful obstacle)")
         if not rs.get("available"):
             lines.append(f"⚠ {rs.get('reason','')}")
     else:
@@ -585,7 +724,7 @@ def _report_lines(verdict, state, reason, sym, price, direction, gr, ctx, loc, e
     if gates:
         lines.append("Gates:")
         for name, ok, detail in gates:
-            lines.append(f"  {'✓' if ok else '✗'} {name}: {detail}")
+            lines.append(f"  {'✓' if ok else ('✗' if ok is False else '◔')} {name}: {detail}")
     # action per state with the SPECIFIC reason (never a lumped catch-all)
     tag = {"READY": "READY", "WATCH": "WATCH", "NO_TRADE": "NO TRADE"}.get(state, state)
     lines.append(f"Action: {tag} — {reason}.")

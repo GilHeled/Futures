@@ -139,31 +139,61 @@ def test_location_marks_ob_valid_and_confirmed_by():
         assert nd["valid"] is True and nd["status"] == "active" and "displacement" in nd["confirmed_by"]
 
 
-def test_frozen_snapshot_obstacle_is_reproducible():
-    """ACCEPTANCE TEST — replay the exact frozen MNQZ2026 snapshot (future candles unavailable) and pin
-    the ordered obstacle scan + first active obstacle + grade, so a later revision cannot silently move
-    the obstacle down again without new evidence (i.e. without updating this fixture on purpose)."""
-    import json, os, datetime as _dt
+def _load_frozen():
+    import json, os
     fx = os.path.join(os.path.dirname(__file__), "fixtures", "frozen_snapshot.json")
     if not os.path.exists(fx):
         import pytest
         pytest.skip("frozen fixture not generated")
-    data = json.load(open(fx))
-    now = _dt.datetime.fromisoformat(data["now"])
-    out = AN.analyze(data["series"], data["symbol"], now=now)
+    return json.load(open(fx))
+
+
+def test_frozen_snapshot_two_phase_lifecycle_is_reproducible():
+    """ACCEPTANCE TEST — replay the exact frozen MNQZ2026 snapshot (future candles unavailable). The trigger
+    completes here, so the plan is REBUILT from the break→retest→second-break (not the pre-trigger 5m OB
+    midpoint), obstacles are scanned from the ACTUAL entry, and the outcome is pinned so a later revision
+    cannot silently change entry/obstacle/grade without updating this fixture on purpose."""
+    import datetime as _dt
+    data = _load_frozen()
+    out = AN.analyze(data["series"], data["symbol"], now=_dt.datetime.fromisoformat(data["now"]))
+    seq = out["trigger_sequence"]
+    # the plan is REBUILT from the trigger (entry = broken 1m level; stop beyond the retest), NEVER the
+    # old provisional 30,918 / 30,939.75 pre-trigger levels
+    assert out["triggered"] is True and out["route"] == "rejection+displacement (structural)"
+    assert out["entry"] == seq["second_break"]["level"] == 30914.25 and out["stop"] == 30923.75
+    assert out["stop"] != 30939.75 and out["entry"] != 30918.0
+    assert out["degenerate_stop"] is False and out["risk"]["stop_pts"] == 9.5   # a real structural stop
+    # obstacle scan is measured from the ACTUAL entry; rows ordered nearest-first
     rows = out["obstacle_scan"]
-    # rows are ordered nearest-first (short -> descending price)
     assert [r["price"] for r in rows] == sorted((r["price"] for r in rows), reverse=True)
-    # the first active obstacle is the first NON-invalidated row (never a farther, better-R level)
-    first_active = next((r for r in rows if r["status"] != "invalidated"), None)
-    assert first_active is not None and out["first_obstacle"] == first_active["price"]
-    # every excluded level carries acceptance evidence + a timestamp (no silent skipping)
+    # the gating obstacle is the first non-invalidated MEANINGFUL level, never a minor bare 1m swing
+    fa = next((r for r in rows if r["status"] != "invalidated" and r["meaningful"]), None)
+    assert fa is not None and out["first_obstacle"] == fa["price"] == 30903.75 and out["effective_R"] == 1.11
+    assert out["first_obstacle_detail"]["meaningful"] is True
+    # excluded levels carry acceptance evidence + timestamp
     for r in rows:
         if r["status"] == "invalidated":
             assert "consecutive closes" in r["evidence"] and r["ev_from"]
-    # the pinned outcome for THIS snapshot: 0.17R room, no A/B grade, WATCH
-    assert out["first_obstacle"] == 30914.25 and out["effective_R"] == 0.17
+    # outcome: triggered but only 1.11R room before the first meaningful obstacle -> WATCH, no A/B grade
     assert out["grade"] is None and out["state"] == "WATCH"
+
+
+def test_frozen_snapshot_trigger_sequence_levels():
+    """Pin the break→retest→second-break the engine identifies on the frozen 1m (deterministic)."""
+    import datetime as _dt
+    data = _load_frozen()
+    out = AN.analyze(data["series"], data["symbol"], now=_dt.datetime.fromisoformat(data["now"]))
+    seq = out["trigger_sequence"]
+    assert seq["break"]["level"] == 30889.75 and seq["second_break"]["level"] == 30914.25
+    assert seq["retest"]["level"] == 30921.75
+
+
+def test_trigger_threshold_is_nearest_swing_low_below_for_short():
+    lows = [110, 108, 106, 104, 102, 100, 102, 104, 106, 108, 110]   # strict pivot low at idx5 = 100
+    b1 = [_b(v + 1, l=v, h=v + 2) for v in lows]
+    th = AN.trigger_threshold(b1, "SHORT", price=109.0)
+    assert th and th["level"] < 109.0 and "close below" in th["must"]
+    assert AN.trigger_threshold([], "SHORT", 100.0) is None
 
 
 def test_analyze_shape_and_verdict_is_valid():

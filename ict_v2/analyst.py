@@ -115,10 +115,14 @@ def location(b5, price):
         mid = (o.top + o.bottom) / 2
         # every detected OB required a HH (bull) / LL (bear) displacement to form, and "active" means it
         # has NOT been closed through -> a VALID, still-live order block (not a mere last-opposite candle).
+        src = b5[o.left_index] if 0 <= o.left_index < len(b5) else None
         cands.append({"type": "OB", "dir": "demand" if o.is_bull else "supply",
                       "top": round(o.top, 2), "bottom": round(o.bottom, 2), "ref": round(mid, 2),
                       "status": "active", "valid": True,
                       "confirmed_by": "higher-high displacement" if o.is_bull else "lower-low displacement",
+                      "left_index": o.left_index, "left_time": o.left_time,
+                      "src_candle": (None if not src else {"o": float(src["o"]), "h": float(src["h"]),
+                                                           "l": float(src["l"]), "c": float(src["c"]), "t": src.get("t")}),
                       "dist": abs(mid - price)})
     for r in runs:
         cands.append({"type": r.kind, "dir": "supply" if r.is_high else "demand",
@@ -522,6 +526,30 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
         elif nd["dir"] == "supply" and ctx["bias30"] in ("short", "neutral"):
             direction = "SHORT"
 
+    # ── LOCATION AUDIT — make the SELECTED 5m location fully evidenced (not "9 others exist") ──────
+    loc_audit = None
+    if nd:
+        conf = loc.get("confluence", 0)
+        # relationship to the 30m bearish/bullish context: does the 5m OB sit inside a 30m OB of the same side?
+        htf_rel = "no 30m OB overlap"
+        want_htf = "bear" if nd["dir"] == "supply" else "bull"
+        for h in (ctx.get("htf_ob_30m") or []):
+            if h["dir"] == want_htf and h["bottom"] <= nd["ref"] <= h["top"]:
+                htf_rel = f"inside 30m {want_htf} OB [{_f(h['bottom'])}–{_f(h['top'])}]"
+                break
+        aligned = (ctx["bias30"] == "short" and nd["dir"] == "supply") or (ctx["bias30"] == "long" and nd["dir"] == "demand")
+        loc_audit = {
+            "type": nd["type"], "dir": nd["dir"],
+            "zone": f"{_f(nd.get('bottom'))}–{_f(nd.get('top'))}" if nd.get("top") is not None else _f(nd.get("ref")),
+            "ref": nd.get("ref"), "status": nd.get("status"), "valid": nd.get("valid"),
+            "confirmed_by": nd.get("confirmed_by"), "src_candle": nd.get("src_candle"), "left_time": nd.get("left_time"),
+            "confluence": conf,
+            "confirmed_confluence": conf >= 1,        # conf 0 = CANDIDATE, never counted as confirmed confluence
+            "classification": "confirmed confluence" if conf >= 1 else "candidate (conf 0 — not confirmed confluence)",
+            "aligned_with_30m": bool(aligned), "htf_relationship": htf_rel,
+            "alternatives": max(0, (loc.get("count") or 0) - 1),
+        }
+
     tr = trigger(b1, direction)                          # simple 1m shift (for the structure panel)
     threshold = trigger_threshold(b1, direction, price)  # PRE-trigger: the level that must break to arm
     trg = trigger_sequence(b1, direction, buffer=buf)    # POST-trigger: break→retest→second-break plan
@@ -595,27 +623,37 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
     room_ok = bool(triggered and effective_R is not None and effective_R >= MIN_R_A)
     sizeable = bool(triggered and rs.get("available"))
     loc_ok = bool(nd and direction)                         # a valid 5m location in the context direction
+    # invalidation already breached BEFORE entry: price has traded to/through the proposed stop -> the
+    # short/long premise is void (price accepted beyond invalidation). Only meaningful post-trigger.
+    inval_breached = bool(triggered and stop is not None and (
+        (direction == "SHORT" and price >= stop) or (direction == "LONG" and price <= stop)))
 
     # ── GATES — reported SEPARATELY; ok=None means "n/a until the trigger" (never hides a real failure) ──
     thr = f"{_f(threshold['level'])}" if threshold else "—"
+    la = loc_audit or {}
     gates = [
         ("stale data", not stale,
          (f"last bar {age_min} min old (run run-live.sh in market hours)" if stale else f"fresh ({age_min} min)")),
         ("valid 5m location in context direction", loc_ok,
          "no 5m location in the context direction" if not loc_ok else
-         f"present ({nd['type']} {nd['dir']}{'' if alt_locs == 0 else f'; {alt_locs} other 5m location(s)'})"),
-        ("location confidence (5m confluence / timely trigger)", loc_conf_ok,
-         (f"standalone conf {conf} — CANDIDATE" + (f"; {alt_locs} other 5m location(s) exist" if alt_locs else "; no alternative 5m location")
-          if not loc_conf_ok else ("confluence " + str(conf) if conf >= 1 else "resolved by timely trigger"))),
+         (f"{la.get('type')} {la.get('dir')} zone {la.get('zone')} · {la.get('classification')} · "
+          f"{la.get('htf_relationship')}" + (f"; {alt_locs} other 5m location(s)" if alt_locs else ""))),
+        ("location confidence (confirmed 5m confluence / timely trigger)", loc_conf_ok,
+         (f"standalone conf {conf} — CANDIDATE, not confirmed confluence" + (f"; {alt_locs} other 5m location(s) exist" if alt_locs else "; no alternative 5m location")
+          if not loc_conf_ok else ("confirmed confluence " + str(conf) if conf >= 1 else "resolved by timely in-direction trigger (OB stays a candidate)"))),
         ("1m not opposing the side", not conflict,
          "1m structure still opposes (developing reversal)" if conflict else "aligned"),
         ("trigger route qualified (sweep+reclaim OR rejection+displacement)", triggered,
          (f"{route}: break {trg['break']['level']} → retest {trg['retest']['level']} → second break {trg['second_break']['level']}"
           if triggered else
           f"PENDING — no completed break→retest→second-break yet; must break {thr} first" +
+          (f"; candidate rejected: {trg.get('rejected_reason')}" if trg.get("rejected_reason") else "") +
           (f" (sweep {sw['price']} OPEN — does not by itself qualify or block)" if (sw and not sw.get('mitigated')) else ""))),
+        ("invalidation not already breached", (None if not triggered else (not inval_breached)),
+         ("deferred — set at trigger" if not triggered else
+          (f"price {_f(price)} already beyond stop {_f(stop)} — premise void" if inval_breached else "intact"))),
         ("structural stop ≥ volatility floor", (None if not triggered else (not degenerate_stop)),
-         ("deferred — set at trigger" if not triggered else (f"stop {sp}pt < 5m floor {stop_floor}pt" if degenerate_stop else "ok"))),
+         ("deferred — set at trigger" if not triggered else (f"stop {sp}pt < 1m floor {stop_floor}pt" if degenerate_stop else f"{sp}pt ≥ {stop_floor}pt floor"))),
         ("permitted risk / sizeable stop", (None if not triggered else sizeable),
          ("deferred — set at trigger" if not triggered else (rs.get("reason") if not sizeable else f"{rs.get('contracts')} MNQ, ${rs.get('risk_per_account')}/acct"))),
         (f"≥ {MIN_R_A}R room before first meaningful obstacle", (None if not triggered else room_ok),
@@ -624,30 +662,32 @@ def analyze(series_by_tf, symbol, *, price=None, now=None):
            else (f"{effective_R}R clear to target" if room_ok else "room unverified")))),
     ]
 
-    # ── STATE MACHINE: NO TRADE / WATCH / READY ──────────────────────────────
-    hard = stale or (not loc_ok) or (triggered and (degenerate_stop or not sizeable))
-    ready = bool(triggered and loc_ok and loc_conf_ok and (not conflict) and room_ok and sizeable and not stale)
+    # ── STATE MACHINE ─────────────────────────────────────────────────────────
+    # WATCH is a PRE-trigger state only. Once the trigger completes the decision is binary: READY or
+    # NO TRADE (a specific post-trigger gate failed — room / stop / risk / invalidation). Stale data and
+    # a missing location are independent hard NO-TRADE reasons.
     pending = [f"{name}: {detail}" for name, ok, detail in gates if ok is False]
-    if hard:
+    if stale or not loc_ok:
         verdict, state = "🔴 No Trade", "NO_TRADE"
         reason = next(f"{name} — {detail}" for name, ok, detail in gates if ok is False)
-    elif ready:
-        verdict, state, reason = "🟢 Ready", "READY", f"Triggered plan at a valid location (route: {route})"
     elif not triggered:
         verdict, state = "🟡 Watch", "WATCH"
         reason = (f"Armed — awaiting the trigger (sweep+reclaim OR rejection+displacement) at 5m "
                   f"{nd['type']} {nd['dir']} @ {_f(nd['ref'])}; price must break {thr} first. "
                   f"Entry, stop, size and R are computed at the trigger — not now.")
+    elif degenerate_stop or (not sizeable) or inval_breached or (not room_ok):
+        verdict, state = "🔴 No Trade", "NO_TRADE"     # trigger completed but a post-trigger gate failed
+        reason = next(f"{name} — {detail}" for name, ok, detail in gates
+                      if ok is False and name not in ("stale data", "valid 5m location in context direction"))
     else:
-        verdict, state, reason = "🟡 Watch", "WATCH", next(
-            f"{name} — {detail}" for name, ok, detail in gates
-            if ok is False and name not in ("stale data", "valid 5m location in context direction"))
+        verdict, state, reason = "🟢 Ready", "READY", f"Triggered plan at a valid location (route: {route})"
 
     lines = _report_lines(verdict, state, reason, symbol, price, direction, gr, ctx, loc, ev, st, tr,
                           entry, stop, rs, tp1, tp2, best_R, effective_R, first_obst, stop_thesis, pending, fo,
-                          gates, scan, threshold, trg, route, triggered)
+                          gates, scan, threshold, trg, route, triggered, loc_audit)
     return {"verdict": verdict, "state": state, "reason": reason, "symbol": symbol, "price": round(price, 2),
             "direction": direction, "grade": gr.get("grade"), "context": ctx, "location": loc,
+            "location_audit": loc_audit,
             "liquidity_event": ev, "structure": st, "trigger": tr, "risk": rs, "conflict": conflict,
             "triggered": triggered, "trigger_sequence": trg, "trigger_threshold": threshold, "route": route,
             "pending": pending, "stop_thesis": stop_thesis, "degenerate_stop": degenerate_stop,
@@ -677,7 +717,7 @@ def _evt(t):
 
 def _report_lines(verdict, state, reason, sym, price, direction, gr, ctx, loc, ev, st, tr, entry, stop, rs,
                   tp1, tp2, best_R, effective_R, first_obst, stop_thesis, pending=None, fo=None,
-                  gates=None, scan=None, threshold=None, trg=None, route=None, triggered=False):
+                  gates=None, scan=None, threshold=None, trg=None, route=None, triggered=False, loc_audit=None):
     g = gr.get("grade") or ("pending" if state == "WATCH" else "—")
     nd = loc.get("nearest")
     conf = loc.get("confluence", 0)
@@ -713,6 +753,14 @@ def _report_lines(verdict, state, reason, sym, price, direction, gr, ctx, loc, e
         f"Structure 5m: {m5 or '—'} · 1m: {m1 or '—'}",
         f"1m trigger: {seqdesc}",
     ]
+    # SELECTED 5m location — auditable evidence (source candle, status, 30m relationship, candidate flag)
+    if loc_audit:
+        la = loc_audit
+        sc = la.get("src_candle")
+        srcstr = "" if not sc else f" · source candle {_evt(sc.get('t'))} O{_f(sc['o'])} H{_f(sc['h'])} L{_f(sc['l'])} C{_f(sc['c'])}"
+        lines.append(f"Selected 5m location: {la['type']} {la['dir']} zone {la['zone']} · {la['classification']}"
+                     f" · {'aligned' if la['aligned_with_30m'] else 'NOT aligned'} with 30m {ctx['bias30']} · {la['htf_relationship']}"
+                     f"{srcstr}")
     if state != "READY" and reason:
         lines.insert(2, "⚠ " + reason)
     if not triggered:

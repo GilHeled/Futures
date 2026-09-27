@@ -176,6 +176,66 @@ def test_frozen_snapshot_trigger_is_rejected_no_continuation():
     assert stale["state"] == "NO_TRADE" and stale["triggered"] is False
 
 
+def _load_fixture(name):
+    import json, os
+    fx = os.path.join(os.path.dirname(__file__), "fixtures", name + ".json")
+    if not os.path.exists(fx):
+        import pytest
+        pytest.skip(f"fixture {name} not generated")
+    return json.load(open(fx))
+
+
+def _run_fixture(name):
+    import datetime as _dt
+    d = _load_fixture(name)
+    return AN.analyze(d["series"], d["symbol"], now=_dt.datetime.fromisoformat(d["now"]))
+
+
+def test_state_completed_trigger_insufficient_room_is_no_trade():
+    """A COMPLETED, evidenced 1m trigger with < 2R to the first meaningful obstacle -> NO TRADE."""
+    o = _run_fixture("insuff_room")
+    assert o["triggered"] is True and o["trigger_sequence"]["completed"] is True
+    assert o["entry"] == 29922.0 and o["effective_R"] == 0.07
+    assert o["state"] == "NO_TRADE" and o["grade"] is None
+    room = next(g for g in o["gates"] if g["name"].startswith("≥"))
+    assert room["ok"] is False                           # room is the failing gate
+    assert next(g for g in o["gates"] if g["name"].startswith("trigger route"))["ok"] is True
+
+
+def test_state_completed_trigger_with_room_is_ready_A():
+    """A COMPLETED trigger with valid location, structural stop, permitted risk and >= 2R -> READY / A."""
+    o = _run_fixture("ready_A")
+    seq = o["trigger_sequence"]
+    assert o["triggered"] is True and o["entry"] == 30758.0 and o["effective_R"] == 2.42
+    # entry/stop are rebuilt from the trigger, not the old provisional levels
+    assert o["entry"] != 30918.0 and o["stop"] != 30939.75
+    assert seq["break"]["broke"] == "close" and seq["second_break"]["broke"] == "close"
+    assert seq["continuation"]["closed_beyond_first"] is True
+    assert o["state"] == "READY" and o["grade"] == "A"
+    assert all(g["ok"] is True for g in o["gates"])       # every gate passes
+
+
+def test_state_invalidation_breached_before_entry_is_no_trade():
+    """A COMPLETED trigger whose stop is already breached by current price -> NO TRADE (premise void)."""
+    o = _run_fixture("inval_breached")
+    assert o["triggered"] is True
+    inval = next(g for g in o["gates"] if g["name"].startswith("invalidation"))
+    assert inval["ok"] is False and "beyond stop" in inval["detail"]
+    assert o["state"] == "NO_TRADE" and o["grade"] is None
+
+
+def test_location_audit_reports_selected_zone_and_candidate_status():
+    """The SELECTED 5m location is auditable: zone, candidate-vs-confirmed, and 30m relationship."""
+    o = _run_fixture("ready_A")
+    la = o["location_audit"]
+    assert la is not None and la["zone"] and la["dir"] in ("supply", "demand")
+    assert "confirmed_confluence" in la and isinstance(la["aligned_with_30m"], bool)
+    # a conf-0 location is classified a CANDIDATE, never confirmed confluence
+    frozen = _run_fixture("insuff_room")["location_audit"]
+    if frozen and frozen["confluence"] == 0:
+        assert frozen["confirmed_confluence"] is False and "candidate" in frozen["classification"]
+
+
 def test_trigger_sequence_completes_only_on_real_continuation():
     def bar(o, h, l, c):
         return {"o": o, "h": h, "l": l, "c": c, "t": None}

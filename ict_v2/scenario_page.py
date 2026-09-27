@@ -120,7 +120,12 @@ function renderAnalyst(){
   // setup
   const loc=a.location||{}, nd=loc.nearest, ev=(a.liquidity_event||{}).sweep, st=a.structure||{}, tr=a.trigger||{};
   h+=HH('Setup · 5m / 1m');
-  h+=row('Location', nd?(nd.type+' '+nd.dir+' @ '+F(nd.ref)+' <span style="color:var(--dim)">('+(nd.valid?(nd.status||'active')+'/valid':'candidate')+', conf '+loc.confluence+(loc.confluence<1?' — no stacked confluence':'')+')</span>'):'—');
+  const la=a.location_audit;
+  if(la){
+    h+=row('Location', la.type+' '+la.dir+' <span class="num">'+esc(la.zone)+'</span>');
+    h+=row('', '<span style="color:var(--dim)">'+esc(la.classification)+' · '+(la.aligned_with_30m?'aligned':'NOT aligned')+' with 30m · '+esc(la.htf_relationship)+'</span>');
+    if(la.src_candle)h+=row('', '<span style="color:var(--dim)">source candle O'+F(la.src_candle.o)+' H'+F(la.src_candle.h)+' L'+F(la.src_candle.l)+' C'+F(la.src_candle.c)+'</span>');
+  } else h+=row('Location', nd?(nd.type+' '+nd.dir+' @ '+F(nd.ref)):'—');
   h+=row('Liquidity', ev?(ev.side+' sweep '+F(ev.price)+' <span style="color:var(--dim)">('+(ev.mitigated?'mitigated':'open')+')</span>'):'no recent sweep');
   h+=row('Structure', ms(st.m5)+' <span style="color:var(--dim)">5m</span> · '+ms(st.m1)+' <span style="color:var(--dim)">1m</span>');
   const seq=a.trigger_sequence||{}, thr=a.trigger_threshold||null, triggered=!!a.triggered;
